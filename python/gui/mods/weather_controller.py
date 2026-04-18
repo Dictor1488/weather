@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Weather controller.
-v1.7.0 — бойовий порядок застосування через player + Weather
+v1.8.0 — стабільний мінімум через player + BigWorld timeOfDay
 """
 import json
 import os
@@ -248,7 +248,7 @@ def _dump_focus_diagnostics():
     logger.info('====== FOCUS DIAGNOSTICS END ======')
 
 
-# kept only for preload path; battle path is player + Weather
+# kept only for preload path; battle path is player + BigWorld timeOfDay
 
 def apply_preset_to_space(space_name, preset_id):
     guid = PRESET_GUIDS.get(preset_id)
@@ -332,57 +332,7 @@ def _apply_time_text(player, preset_id):
 
 
 def _apply_weather_object(guid):
-    try:
-        import Weather
-    except Exception:
-        logger.error('Weather import failed\n%s', _fmt_exc())
-        return
-
-    targets = []
-    obj = getattr(Weather, 's_weather', None)
-    if obj is not None:
-        targets.append(('Weather.s_weather', obj))
-    if hasattr(Weather, 'weather'):
-        try:
-            obj2 = Weather.weather()
-            if obj2 is not None and obj2 is not obj:
-                targets.append(('Weather.weather()', obj2))
-            elif obj2 is not None and obj is None:
-                targets.append(('Weather.weather()', obj2))
-        except Exception:
-            _log_fail('Weather.weather() resolve')
-
-    for label, target in targets:
-        try:
-            is_random = getattr(target, 'isWeatherRandom', None)
-            if callable(is_random):
-                _log_ok(label + '.isWeatherRandom(before)', _safe_repr(is_random()))
-        except Exception:
-            _log_fail(label + '.isWeatherRandom(before)')
-
-        toggle = getattr(target, 'toggleRandomWeather', None)
-        if callable(toggle):
-            try:
-                res = toggle(guid or '')
-                _log_ok(label + '.toggleRandomWeather', '%s -> %s' % (guid or '', _safe_repr(res)))
-            except Exception:
-                _log_fail(label + '.toggleRandomWeather(%s)' % (guid or ''))
-
-        for method_name in ('_randomWeather', 'nextWeatherSystem'):
-            fn = getattr(target, method_name, None)
-            if callable(fn):
-                try:
-                    res = fn(guid or '')
-                    _log_ok(label + '.' + method_name, '%s -> %s' % (guid or '', _safe_repr(res)))
-                except Exception:
-                    _log_fail(label + '.' + method_name + '(%s)' % (guid or ''))
-
-        try:
-            is_random = getattr(target, 'isWeatherRandom', None)
-            if callable(is_random):
-                _log_ok(label + '.isWeatherRandom(after)', _safe_repr(is_random()))
-        except Exception:
-            _log_fail(label + '.isWeatherRandom(after)')
+    logger.info('weather object sync skipped (disabled for stability), guid=%s', guid)
 
 
 def apply_preset_in_battle(preset_id):
@@ -419,20 +369,14 @@ def apply_preset_in_battle(preset_id):
     except Exception:
         _log_fail('STEP 2 time sync')
 
-    # 3) apply Weather object state, which visibly toggles random weather in logs
-    try:
-        _apply_weather_object(guid)
-    except Exception:
-        _log_fail('STEP 3 weather object sync')
-
-    # 4) final player re-apply after Weather mutations
+    # 3) final player re-apply after time sync
     try:
         apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
         if callable(apply_fn):
             apply_fn(period)
-            _log_ok('STEP 4 final player.apply(period)', _safe_repr(period))
+            _log_ok('STEP 3 final player.apply(period)', _safe_repr(period))
     except Exception:
-        _log_fail('STEP 4 final player.apply(period=%s)' % period)
+        _log_fail('STEP 3 final player.apply(period=%s)' % period)
 
     logger.info('FINAL STATE: player.weatherPresetID=%s player._PlayerAvatar__blArenaPeriod=%s',
                 _safe_repr(getattr(player, 'weatherPresetID', None)),
