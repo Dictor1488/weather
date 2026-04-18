@@ -89,12 +89,9 @@ def _log():
 # ============================================================================
 def _install_battle_space_hook():
     """
-    У логу ми бачимо:
-        [gui.app_loader.loader] Space is changed: WaitingSpace() -> BattleLoadingSpace()
-        [gui.app_loader.loader] Space is changed: BattleLoadingSpace() -> BattleSpace()
-
-    Це поля в класі IGlobalSpace, що мають методи enter/exit/update.
-    Хукаємо enter() у BattleSpace — спрацює на початку бою.
+    Хукаємо Avatar.PlayerAvatar.onSpaceLoaded — надійний момент після завантаження
+    простору коли player.spaceID вже доступний.
+    Лог: [Avatar] [INIT_STEPS] Avatar.onSpaceLoaded
     """
     if not IN_GAME or _BATTLE_SPACE_HOOKS:
         return
@@ -102,36 +99,47 @@ def _install_battle_space_hook():
     log = _log()
 
     try:
-        from gui.app_loader import spaces
+        import Avatar
 
-        targets = []
-        # BattleSpace — основний клас гри в бою
-        if hasattr(spaces, 'BattleSpace'):
-            targets.append(('BattleSpace', spaces.BattleSpace))
-        # BattleLoadingSpace — момент завантаження карти
-        if hasattr(spaces, 'BattleLoadingSpace'):
-            targets.append(('BattleLoadingSpace', spaces.BattleLoadingSpace))
+        if not hasattr(Avatar, 'PlayerAvatar'):
+            log.warning('Avatar.PlayerAvatar not found')
+            return
 
-        for target_name, cls in targets:
-            # Хукаємо метод enter(), що викликається при переході в цей space
-            if hasattr(cls, 'enter'):
-                original = cls.enter
+        cls = Avatar.PlayerAvatar
 
-                def make_wrapper(orig, tname):
-                    def wrapped(self, *args, **kwargs):
-                        try:
-                            g_controller.on_battle_space_entered(tname)
-                        except Exception:
-                            log.exception('battle space hook failed: %s', tname)
-                        return orig(self, *args, **kwargs)
-                    return wrapped
+        if not hasattr(cls, 'onSpaceLoaded'):
+            log.warning('PlayerAvatar.onSpaceLoaded not found')
+            return
 
-                cls.enter = make_wrapper(original, target_name)
-                _BATTLE_SPACE_HOOKS.append((cls, 'enter', original))
-                log.info('Installed hook: gui.app_loader.spaces.%s.enter', target_name)
+        original_space = cls.onSpaceLoaded
 
-        if not _BATTLE_SPACE_HOOKS:
-            log.warning('No BattleSpace classes found in gui.app_loader.spaces')
+        def make_space_wrapper(orig):
+            def wrapped(self, *args, **kwargs):
+                try:
+                    arena = getattr(self, 'arena', None)
+                    arena_type = getattr(arena, 'arenaType', None) if arena else None
+                    space_name = None
+                    if arena_type:
+                        for attr in ('geometryName', 'geometry', 'name'):
+                            v = getattr(arena_type, attr, None)
+                            if v:
+                                from weather_controller import normalize_space_name, is_battle_map_space
+                                norm = normalize_space_name(v)
+                                if is_battle_map_space(norm):
+                                    space_name = norm
+                                    break
+                    if space_name:
+                        log.info('onSpaceLoaded hook: space=%s', space_name)
+                        g_controller.on_space_about_to_load(space_name)
+                except Exception:
+                    log.exception('onSpaceLoaded hook failed')
+                return orig(self, *args, **kwargs)
+            return wrapped
+
+        cls.onSpaceLoaded = make_space_wrapper(original_space)
+        _BATTLE_SPACE_HOOKS.append((cls, 'onSpaceLoaded', original_space))
+        log.info('Installed hook: Avatar.PlayerAvatar.onSpaceLoaded')
+
     except Exception:
         log.exception('Failed to install battle space hook')
 
