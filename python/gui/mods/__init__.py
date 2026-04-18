@@ -1,3 +1,11 @@
 # -*- coding: utf-8 -*-
-# Порожній __init__ — WoT використовує gui.mods як Python-пакет,
-# тож цей маркер обов'язковий, хоч і має бути порожнім.
+# Маркер пакета gui.mods + заглушки init/fini,
+# яких очікує WoT mod loader.
+
+
+def init():
+    pass
+
+
+def fini():
+    pass
