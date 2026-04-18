@@ -119,6 +119,31 @@ def pick_preset(weights):
     return "standard"
 
 
+
+
+def normalize_space_name(space_name):
+    if not space_name:
+        return ''
+    if not isinstance(space_name, basestring):
+        space_name = str(space_name)
+    space_name = space_name.replace('\\', '/').strip()
+    if space_name.startswith('spaces/'):
+        space_name = space_name[len('spaces/'): ]
+    if space_name.endswith('/space.settings'):
+        space_name = space_name[:-len('/space.settings')]
+    return space_name.strip('/')
+
+
+def is_battle_map_space(space_name):
+    name = normalize_space_name(space_name)
+    if not name:
+        return False
+    lowered = name.lower()
+    blocked_prefixes = ('hangar', 'garage', 'login', 'waiting', 'intro', 'bootcamp', 'story', 'fun_random_hangar')
+    if lowered.startswith(blocked_prefixes):
+        return False
+    return '_' in name
+
 def apply_preset_to_space(space_name, preset_id):
     """Патчимо space.settings перед завантаженням карти."""
     guid = PRESET_GUIDS.get(preset_id)
@@ -229,11 +254,16 @@ class WeatherController(object):
     # ---------- Завантаження карти ----------
 
     def on_space_about_to_load(self, space_name):
-        self._current_space = space_name
-        weights = self.config.get_weights_for_map(space_name)
+        normalized = normalize_space_name(space_name)
+        logger.info("Space about to load: raw=%s normalized=%s", space_name, normalized)
+        if not is_battle_map_space(normalized):
+            logger.info("Skipping non-battle space: %s", normalized or space_name)
+            return None
+        self._current_space = normalized
+        weights = self.config.get_weights_for_map(normalized)
         preset = pick_preset(weights)
         self._current_preset = preset
-        apply_preset_to_space(space_name, preset)
+        apply_preset_to_space(normalized, preset)
         return preset
 
     # ---------- Хоткей у бою ----------
