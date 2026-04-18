@@ -45,11 +45,11 @@ PRESET_PERIOD_IDS = {
     "midnight": 4,
 }
 
-# BigWorld.spaceTimeOfDay(spaceID, timeOfDay) — arg1 is unicode "HH:MM"
+# BigWorld.timeOfDay(spaceTimeOfDay) takes unicode like '10:00'
 PRESET_TIME_TEXT = {
     "standard": u"12:00",
-    "midday":   u"12:00",
-    "sunset":   u"18:30",
+    "midday": u"12:00",
+    "sunset": u"18:30",
     "overcast": u"13:00",
     "midnight": u"00:12",
 }
@@ -312,23 +312,78 @@ def _apply_player_weather(player, preset_id, guid):
 
 
 def _apply_time_text(player, preset_id):
-    tod = PRESET_TIME_TEXT.get(preset_id, u"12:00")
+    tod = PRESET_TIME_TEXT.get(preset_id, u'12:00')
+    fn = getattr(BigWorld, 'timeOfDay', None)
+    if callable(fn):
+        try:
+            res = fn(tod)
+            _log_ok('BigWorld.timeOfDay', '%s -> %s' % (tod, _safe_repr(res)))
+        except Exception:
+            _log_fail('BigWorld.timeOfDay(%s)' % tod)
 
-    # BigWorld.timeOfDay() does NOT affect the current battle space in WoT 2.x — skip.
-
-    # BigWorld.spaceTimeOfDay(spaceID, timeOfDay) — timeOfDay MUST be unicode "HH:MM"
     fn = getattr(BigWorld, 'spaceTimeOfDay', None)
     space_id = getattr(player, 'spaceID', None)
     if callable(fn) and space_id is not None:
         try:
-            res = fn(space_id, unicode(tod))
+            res = fn(space_id, tod)
             _log_ok('BigWorld.spaceTimeOfDay', 'spaceID=%s tod=%s -> %s' % (space_id, tod, _safe_repr(res)))
         except Exception:
             _log_fail('BigWorld.spaceTimeOfDay(%s, %s)' % (space_id, tod))
 
 
 def _apply_weather_object(guid):
-    logger.info('weather object sync skipped (disabled for stability), guid=%s', guid)
+    """
+    Оновлює візуальний рендер environment через Weather C++ об'єкт.
+    Це ключовий крок який реально змінює skybox/освітлення на екрані.
+    """
+    if not IN_GAME:
+        return
+    try:
+        import Weather
+        w = getattr(Weather, 's_weather', None)
+        if w is None and hasattr(Weather, 'weather'):
+            w = Weather.weather()
+        if w is None:
+            logger.warning('Weather object not available')
+            return
+
+        # Спробуємо різні методи — назви різняться між версіями WoT
+        applied = False
+
+        # Метод 1: setPreset(guid) — найпоширеніший в WoT 2.x
+        if hasattr(w, 'setPreset') and guid:
+            try:
+                w.setPreset(guid)
+                _log_ok('Weather.setPreset', guid)
+                applied = True
+            except Exception:
+                _log_fail('Weather.setPreset(%s)' % guid)
+
+        # Метод 2: setEnvironmentPreset(guid)
+        if not applied and hasattr(w, 'setEnvironmentPreset') and guid:
+            try:
+                w.setEnvironmentPreset(guid)
+                _log_ok('Weather.setEnvironmentPreset', guid)
+                applied = True
+            except Exception:
+                _log_fail('Weather.setEnvironmentPreset(%s)' % guid)
+
+        # Метод 3: forceUpdate() або update() після зміни стану
+        for method_name in ('forceUpdate', 'update', 'refresh', 'apply'):
+            m = getattr(w, method_name, None)
+            if callable(m):
+                try:
+                    m()
+                    _log_ok('Weather.%s()' % method_name)
+                    break
+                except Exception:
+                    pass
+
+        if not applied:
+            logger.info('Weather object methods: %s', [x for x in dir(w) if not x.startswith("__")])
+
+    except Exception:
+        _log_fail('_apply_weather_object(guid=%s)' % guid)
 
 
 def apply_preset_in_battle(preset_id):
@@ -365,14 +420,20 @@ def apply_preset_in_battle(preset_id):
     except Exception:
         _log_fail('STEP 2 time sync')
 
-    # 3) final player re-apply after time sync
+    # 3) Weather object — реальна зміна рендеру (skybox/освітлення)
+    try:
+        _apply_weather_object(guid)
+    except Exception:
+        _log_fail('STEP 3 Weather object')
+
+    # 4) final player re-apply after visual update
     try:
         apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
         if callable(apply_fn):
             apply_fn(period)
-            _log_ok('STEP 3 final player.apply(period)', _safe_repr(period))
+            _log_ok('STEP 4 final player.apply(period)', _safe_repr(period))
     except Exception:
-        _log_fail('STEP 3 final player.apply(period=%s)' % period)
+        _log_fail('STEP 4 final player.apply(period=%s)' % period)
 
     logger.info('FINAL STATE: player.weatherPresetID=%s player._PlayerAvatar__blArenaPeriod=%s',
                 _safe_repr(getattr(player, 'weatherPresetID', None)),
