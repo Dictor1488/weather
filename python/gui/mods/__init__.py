@@ -87,11 +87,33 @@ def _log():
 # ============================================================================
 # Hook на BattleSpace / BattleLoadingSpace з gui.app_loader.loader
 # ============================================================================
+def _get_space_name_from_avatar(avatar):
+    """Витягує назву карти з Avatar через arena.arenaType."""
+    try:
+        arena = getattr(avatar, 'arena', None)
+        arena_type = getattr(arena, 'arenaType', None) if arena else None
+        if not arena_type:
+            return None
+        from weather_controller import normalize_space_name, is_battle_map_space
+        for attr in ('geometryName', 'geometry', 'name'):
+            v = getattr(arena_type, attr, None)
+            if v:
+                norm = normalize_space_name(v)
+                if is_battle_map_space(norm):
+                    return norm
+    except Exception:
+        pass
+    return None
+
+
 def _install_battle_space_hook():
     """
-    Хукаємо Avatar.PlayerAvatar.onSpaceLoaded — надійний момент після завантаження
-    простору коли player.spaceID вже доступний.
-    Лог: [Avatar] [INIT_STEPS] Avatar.onSpaceLoaded
+    Хукаємо Avatar.PlayerAvatar.onEnterWorld — це до завантаження геометрії.
+
+    Хронологія з логу:
+      22:31:34.768 [SPACE] Loading space: spaces/31_airfield  <- space.settings читається
+      22:31:34.796 Avatar.onEnterWorld                        <- НАШ ХУК (до/під час)
+      22:31:38.990 Avatar.onSpaceLoaded                       <- пізно, вже завантажено
     """
     if not IN_GAME or _BATTLE_SPACE_HOOKS:
         return
@@ -107,42 +129,32 @@ def _install_battle_space_hook():
 
         cls = Avatar.PlayerAvatar
 
-        if not hasattr(cls, 'onSpaceLoaded'):
-            log.warning('PlayerAvatar.onSpaceLoaded not found')
+        if not hasattr(cls, 'onEnterWorld'):
+            log.warning('PlayerAvatar.onEnterWorld not found')
             return
 
-        original_space = cls.onSpaceLoaded
+        original = cls.onEnterWorld
 
-        def make_space_wrapper(orig):
+        def make_wrapper(orig):
             def wrapped(self, *args, **kwargs):
+                # Спочатку оригінал — щоб arena.arenaType був доступний
+                result = orig(self, *args, **kwargs)
                 try:
-                    arena = getattr(self, 'arena', None)
-                    arena_type = getattr(arena, 'arenaType', None) if arena else None
-                    space_name = None
-                    if arena_type:
-                        for attr in ('geometryName', 'geometry', 'name'):
-                            v = getattr(arena_type, attr, None)
-                            if v:
-                                from weather_controller import normalize_space_name, is_battle_map_space
-                                norm = normalize_space_name(v)
-                                if is_battle_map_space(norm):
-                                    space_name = norm
-                                    break
+                    space_name = _get_space_name_from_avatar(self)
                     if space_name:
-                        log.info('onSpaceLoaded hook: space=%s', space_name)
+                        log.info('onEnterWorld hook: space=%s', space_name)
                         g_controller.on_space_about_to_load(space_name)
                 except Exception:
-                    log.exception('onSpaceLoaded hook failed')
-                return orig(self, *args, **kwargs)
+                    log.exception('onEnterWorld hook failed')
+                return result
             return wrapped
 
-        cls.onSpaceLoaded = make_space_wrapper(original_space)
-        _BATTLE_SPACE_HOOKS.append((cls, 'onSpaceLoaded', original_space))
-        log.info('Installed hook: Avatar.PlayerAvatar.onSpaceLoaded')
+        cls.onEnterWorld = make_wrapper(original)
+        _BATTLE_SPACE_HOOKS.append((cls, 'onEnterWorld', original))
+        log.info('Installed hook: Avatar.PlayerAvatar.onEnterWorld')
 
     except Exception:
         log.exception('Failed to install battle space hook')
-
 
 def _remove_battle_space_hook():
     while _BATTLE_SPACE_HOOKS:
