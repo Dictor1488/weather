@@ -233,14 +233,25 @@ g_controller = WeatherController()
 
 
 # ============================================================================
-# WoT Mod Loader stubs
+# WoT Mod Loader API — повний набір заглушок.
+# WoT перебирає усі .py у gui/mods/ і викликає у кожному ці функції.
+# Без цих stub-ів клієнт падає з AttributeError ще на старті.
 # ============================================================================
-# WoT перебирає всі модулі у gui/mods/ і викликає у кожного init() / fini().
-# У цього модуля немає власної ініціалізації (весь init у mod_weather.py),
-# але заглушки потрібні, інакше WoT падає з AttributeError.
 def init():
     pass
 
 
 def fini():
+    pass
+
+
+def sendEvent(*args, **kwargs):
+    pass
+
+
+def onHangarSpaceCreate(*args, **kwargs):
+    pass
+
+
+def onHangarSpaceDestroy(*args, **kwargs):
     pass
