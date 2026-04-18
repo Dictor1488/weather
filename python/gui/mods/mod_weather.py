@@ -185,9 +185,10 @@ def _install_key_hook():
 
 
 # ============================================================================
-# Init
+# WoT Mod Loader API — init() / fini() викликаються WoT'ом
 # ============================================================================
 def init():
+    """Викликається WoT при завантаженні клієнта."""
     if not IN_GAME:
         logger.info("[weather] dev-mode: skipping in-game hooks")
         return
@@ -210,4 +211,10 @@ def init():
     _install_key_hook()
 
 
-init()
+def fini():
+    """Викликається WoT при виході з клієнта — збережемо конфіг на всякий випадок."""
+    if IN_GAME:
+        try:
+            g_controller.config.save()
+        except Exception:
+            pass
