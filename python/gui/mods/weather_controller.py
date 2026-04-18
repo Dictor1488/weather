@@ -45,17 +45,14 @@ PRESET_PERIOD_IDS = {
     "midnight": 4,
 }
 
-# BigWorld.spaceTimeOfDay(spaceID, hour) — hour is a FLOAT (e.g. 18.5 = 18:30)
-# NOT a string like "18:30" — that silently fails
-PRESET_TIME_HOURS = {
-    "standard": 12.0,
-    "midday":   12.0,
-    "sunset":   18.5,
-    "overcast": 13.0,
-    "midnight":  0.2,   # 00:12
+# BigWorld.spaceTimeOfDay(spaceID, timeOfDay) — arg1 is unicode "HH:MM"
+PRESET_TIME_TEXT = {
+    "standard": u"12:00",
+    "midday":   u"12:00",
+    "sunset":   u"18:30",
+    "overcast": u"13:00",
+    "midnight": u"00:12",
 }
-# keep old name as alias so existing references don't break
-PRESET_TIME_TEXT = PRESET_TIME_HOURS
 
 PRESET_LABELS = {
     "standard": u"Стандарт",
@@ -315,20 +312,19 @@ def _apply_player_weather(player, preset_id, guid):
 
 
 def _apply_time_text(player, preset_id):
-    hour = PRESET_TIME_HOURS.get(preset_id, 12.0)
+    tod = PRESET_TIME_TEXT.get(preset_id, u"12:00")
 
-    # BigWorld.timeOfDay() is deprecated in WoT 2.x and does NOT affect
-    # the current battle space — skip it entirely.
+    # BigWorld.timeOfDay() does NOT affect the current battle space in WoT 2.x — skip.
 
-    # BigWorld.spaceTimeOfDay(spaceID, hour) — hour MUST be a float
+    # BigWorld.spaceTimeOfDay(spaceID, timeOfDay) — timeOfDay MUST be unicode "HH:MM"
     fn = getattr(BigWorld, 'spaceTimeOfDay', None)
     space_id = getattr(player, 'spaceID', None)
     if callable(fn) and space_id is not None:
         try:
-            res = fn(space_id, float(hour))
-            _log_ok('BigWorld.spaceTimeOfDay', 'spaceID=%s hour=%s -> %s' % (space_id, hour, _safe_repr(res)))
+            res = fn(space_id, unicode(tod))
+            _log_ok('BigWorld.spaceTimeOfDay', 'spaceID=%s tod=%s -> %s' % (space_id, tod, _safe_repr(res)))
         except Exception:
-            _log_fail('BigWorld.spaceTimeOfDay(%s, %s)' % (space_id, hour))
+            _log_fail('BigWorld.spaceTimeOfDay(%s, %s)' % (space_id, tod))
 
 
 def _apply_weather_object(guid):
