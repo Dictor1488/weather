@@ -1,17 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Точка входу мода.
-
-Сумісний lifecycle для нових клієнтів WoT:
-- init()
-- fini()
-- sendEvent(...)
-- додаткові no-op hooks з гнучкими сигнатурами
-
-Важливо:
-- init() не викликається автоматично при імпорті;
-- всі публічні hooks безпечні при повторних викликах;
-- сигнатури зроблені через *args/**kwargs, щоб не падати при змінах API клієнта.
+v1.2.0 — повний список карт (48 штук)
 """
 
 try:
@@ -28,6 +18,69 @@ from weather_controller import g_controller
 _SPACE_HOOKS = []
 _KEY_HOOK_INSTALLED = False
 _INIT_DONE = False
+
+
+# ============================================================================
+# Повний список карт (id, локалізована назва)
+# ============================================================================
+# Використовується і в dropdown панелі налаштувань, і для per-map ваг.
+# MAP_IDS — список id у тому ж порядку, що й пункти dropdown.
+# MAP_LABELS — відображувані назви.
+# Перший елемент — порожній плейсхолдер "Оберіть карту".
+ALL_MAPS = [
+    ('',                       u'— Оберіть карту —'),
+    ('01_karelia',             u'Карелія'),
+    ('02_malinovka',           u'Малинівка'),
+    ('03_campania_big',        u'Кампанія'),
+    ('04_himmelsdorf',         u'Хіммельсдорф'),
+    ('05_prohorovka',          u'Прохорівка'),
+    ('06_ensk',                u'Енськ'),
+    ('07_lakeville',           u'Лейквіль'),
+    ('08_ruinberg',            u'Руїнберг'),
+    ('10_hills',               u'Рудники'),
+    ('11_murovanka',           u'Мурованка'),
+    ('13_erlenberg',           u'Ерленберг'),
+    ('14_siegfried_line',      u'Лінія Зігфріда'),
+    ('17_munchen',             u'Мюнхен'),
+    ('18_cliff',               u'Круча'),
+    ('19_monastery',           u'Монастир'),
+    ('23_westfeld',            u'Вестфілд'),
+    ('28_desert',              u'Піщана ріка'),
+    ('29_el_hallouf',          u'Ель-Халлуф'),
+    ('31_airfield',            u'Летовище'),
+    ('33_fjord',               u'Фіорди'),
+    ('34_redshire',            u'Редшир'),
+    ('35_steppes',             u'Степи'),
+    ('36_fishing_bay',         u'Рибальська бухта'),
+    ('37_caucasus',            u'Кавказ'),
+    ('38_mannerheim_line',     u'Лінія Маннергейма'),
+    ('44_north_america',       u'Лайв Окс'),
+    ('45_north_america',       u'Хайвей'),
+    ('47_canada_a',            u'Перлинна річка'),
+    ('59_asia_great_wall',     u'Велика стіна'),
+    ('60_asia_miao',           u'Тихий берег'),
+    ('63_tundra',              u'Тундра'),
+    ('90_minsk',               u'Мінськ'),
+    ('95_lost_city_ctf',       u'Загублене місто'),
+    ('99_poland',              u'Студзянки'),
+    ('101_dday',               u'Нормандія (D-Day)'),
+    ('105_germany',            u'Берлін'),
+    ('112_eiffel_tower_ctf',   u'Париж'),
+    ('114_czech',              u'Промзона'),
+    ('115_sweden',             u'Кордон імперії'),
+    ('121_lost_paradise_v',    u'Перевал'),
+    ('127_japort',             u'Стара гавань'),
+    ('128_last_frontier_v',    u'Фата-моргана'),
+    ('208_bf_epic_normandy',   u'Оверлорд'),
+    ('209_wg_epic_suburbia',   u'Крафтверк'),
+    ('210_bf_epic_desert',     u'Застава'),
+    ('212_epic_random_valley', u'Долина'),
+    ('217_er_alaska',          u'Устрична затока'),
+    ('222_er_clime',           u'Вайдпарк'),
+]
+
+MAP_IDS    = [m[0] for m in ALL_MAPS]
+MAP_LABELS = [m[1] for m in ALL_MAPS]
 
 
 def _log():
@@ -107,6 +160,11 @@ def _remove_space_hook():
             _log().exception('Failed to remove space hook: %s.%s', getattr(module, '__name__', module), attr_name)
 
 
+# ============================================================================
+# Хоткей: обробка КЛАВІАТУРИ у БОЮ
+# ============================================================================
+# У бою InputHandler.g_instance.onKeyDown може не працювати.
+# Тому слухаємо ще й через BigWorld.player() events, якщо вдасться.
 def _on_key_event(event):
     if not IN_GAME:
         return
@@ -115,6 +173,7 @@ def _on_key_event(event):
 
     codes = g_controller.config.hotkey_codes
     if not codes:
+        # Дефолт ALT+F12
         if event.key == Keys.KEY_F12 and BigWorld.isKeyDown(Keys.KEY_LALT):
             g_controller.cycle_preset_in_battle()
         return
@@ -137,6 +196,7 @@ def _install_key_hook():
         if getattr(InputHandler, 'g_instance', None) is not None:
             InputHandler.g_instance.onKeyDown += _on_key_event
             _KEY_HOOK_INSTALLED = True
+            _log().info('Key hook installed (InputHandler.g_instance.onKeyDown)')
     except Exception:
         _log().exception('Failed to install key hook')
 
@@ -154,21 +214,13 @@ def _remove_key_hook():
 
 
 def open_weather_window():
-    if not IN_GAME:
-        return
-    try:
-        from gui.app_loader import g_appLoader
-        from weather_window import WeatherWindowMeta
-        app = g_appLoader.getDefLobbyApp()
-        if app and hasattr(app, 'containerManager'):
-            app.containerManager.load(WeatherWindowMeta())
-    except Exception:
-        _log().exception('Failed to open weather window')
+    """Викликається з кнопки "..." у modsSettingsApi. Для MVP — нічого."""
+    pass
 
 
-MAP_IDS = ['', '02_malinovka', '04_himmelsdorf', '05_prohorovka', '06_ensk']
-
-
+# ============================================================================
+# modsSettingsApi callback
+# ============================================================================
 def _on_settings_changed(linkage, newSettings):
     log = _log()
     log.debug('settings changed: %s', newSettings)
@@ -236,46 +288,65 @@ def init(*args, **kwargs):
 
         current_codes = g_controller.config.hotkey_codes or [K.KEY_LALT, K.KEY_F12]
 
+        # Слайдери для глобальних налаштувань
+        def make_preset_sliders(prefix, values_from_config):
+            return [
+                t.createSlider(varName=prefix + 'standard', text=u'Стандарт',
+                               value=values_from_config.get('standard', 0),
+                               min=0, max=20, interval=1),
+                t.createSlider(varName=prefix + 'midnight', text=u'Ніч',
+                               value=values_from_config.get('midnight', 0),
+                               min=0, max=20, interval=1),
+                t.createSlider(varName=prefix + 'overcast', text=u'Пасмурно',
+                               value=values_from_config.get('overcast', 0),
+                               min=0, max=20, interval=1),
+                t.createSlider(varName=prefix + 'sunset', text=u'Закат',
+                               value=values_from_config.get('sunset', 0),
+                               min=0, max=20, interval=1),
+                t.createSlider(varName=prefix + 'midday', text=u'Полдень',
+                               value=values_from_config.get('midday', 0),
+                               min=0, max=20, interval=1),
+            ]
+
+        column1 = [
+            t.createLabel(text=u'Загальні налаштування для всіх карт'),
+            t.createEmpty(),
+        ]
+        column1.extend(make_preset_sliders('global_', g_controller.config.global_weights))
+        column1.append(t.createEmpty())
+        column1.append(t.createHotkey(varName='hotkey', text=u'Смена погоды в бою',
+                                      value=current_codes))
+
+        column2 = [
+            t.createLabel(text=u'Налаштування по картах'),
+            t.createEmpty(),
+            t.createDropdown(
+                varName='active_map',
+                text=u'Карта',
+                options=MAP_LABELS,
+                value=0,
+            ),
+        ]
+        column2.extend(make_preset_sliders('map_', {pid: 0 for pid in
+                                                     ['standard', 'midnight', 'overcast', 'sunset', 'midday']}))
+        # Робимо слайдери карт з префіксом [карта] у лейблі
+        for slider in column2[-5:]:
+            if 'text' in slider and slider['text'].startswith(u'Стандарт'):
+                slider['text'] = u'[карта] Стандарт'
+            elif 'text' in slider and slider['text'].startswith(u'Ніч'):
+                slider['text'] = u'[карта] Ніч'
+            elif 'text' in slider and slider['text'].startswith(u'Пасмурно'):
+                slider['text'] = u'[карта] Пасмурно'
+            elif 'text' in slider and slider['text'].startswith(u'Закат'):
+                slider['text'] = u'[карта] Закат'
+            elif 'text' in slider and slider['text'].startswith(u'Полдень'):
+                slider['text'] = u'[карта] Полдень'
+
         template = {
             'modDisplayName': u'Погода на картах',
             'enabled': True,
-            'column1': [
-                t.createLabel(text=u'Загальні налаштування для всіх карт'),
-                t.createEmpty(),
-                t.createSlider(varName='global_standard', text=u'Стандарт',
-                               value=g_controller.config.global_weights.get('standard', 20),
-                               min=0, max=20, interval=1),
-                t.createSlider(varName='global_midnight', text=u'Ніч',
-                               value=g_controller.config.global_weights.get('midnight', 0),
-                               min=0, max=20, interval=1),
-                t.createSlider(varName='global_overcast', text=u'Пасмурно',
-                               value=g_controller.config.global_weights.get('overcast', 0),
-                               min=0, max=20, interval=1),
-                t.createSlider(varName='global_sunset', text=u'Закат',
-                               value=g_controller.config.global_weights.get('sunset', 0),
-                               min=0, max=20, interval=1),
-                t.createSlider(varName='global_midday', text=u'Полдень',
-                               value=g_controller.config.global_weights.get('midday', 0),
-                               min=0, max=20, interval=1),
-                t.createEmpty(),
-                t.createHotkey(varName='hotkey', text=u'Смена погоды в бою',
-                               value=current_codes),
-            ],
-            'column2': [
-                t.createLabel(text=u'Налаштування по картах'),
-                t.createEmpty(),
-                t.createDropdown(
-                    varName='active_map',
-                    text=u'Карта',
-                    options=[u'— Оберіть карту —', u'Малинівка', u'Хіммельсдорф', u'Прохорівка', u'Енськ'],
-                    value=0,
-                ),
-                t.createSlider(varName='map_standard', text=u'[карта] Стандарт', value=0, min=0, max=20, interval=1),
-                t.createSlider(varName='map_midnight', text=u'[карта] Ніч', value=0, min=0, max=20, interval=1),
-                t.createSlider(varName='map_overcast', text=u'[карта] Пасмурно', value=0, min=0, max=20, interval=1),
-                t.createSlider(varName='map_sunset', text=u'[карта] Закат', value=0, min=0, max=20, interval=1),
-                t.createSlider(varName='map_midday', text=u'[карта] Полдень', value=0, min=0, max=20, interval=1),
-            ],
+            'column1': column1,
+            'column2': column2,
         }
 
         saved = g_modsSettingsApi.setModTemplate(
