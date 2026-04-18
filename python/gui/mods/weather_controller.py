@@ -1,30 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 Weather Mods Controller — керування погодними пресетами в World of Tanks.
-
-АРХІТЕКТУРА:
-    1. Користувач відкриває панель в ангарі (шестерня → "Погода на картах").
-    2. Python надсилає поточний стан (ваги, карти, хоткей) у Flash через DAAPI.
-    3. Користувач крутить слайдери — Flash кидає py_onWeightChanged → ми
-       оновлюємо словник у пам'яті та зберігаємо на диск (JSON).
-    4. Перед завантаженням бою перехоплюємо подію "space about to load" і
-       переписуємо <spaceName>/space.settings так, щоб <environment>
-       вказував на потрібний GUID (з ремода або оригінал).
-    5. Під час бою по хоткею (ALT+F12) перемикаємо пресет "на льоту"
-       через BigWorld.setWatcher().
-
-Мод працює разом із твоїми 6 .wotmod файлами — він не *створює* пресети,
-лише *вибирає між* наявними GUID'ами.
 """
 
 import json
 import os
 import random
 import logging
-from functools import partial
 
-# WoT імпорти — ці модулі доступні лише у грі.
-# У режимі розробки/тестів вони підміняються заглушками нижче.
 try:
     import BigWorld
     import ResMgr
@@ -39,11 +22,8 @@ logger.setLevel(logging.INFO)
 
 
 # ============================================================================
-# КОНСТАНТИ: GUID'и пресетів з .wotmod файлів
+# GUID'и пресетів із .wotmod файлів
 # ============================================================================
-# Ці значення ми витягнули з розпакованих .wotmod архівів
-# (імена папок усередині res/spaces/<map>/environments/).
-# standard = None → не підміняти, використати оригінальний environment гри.
 PRESET_GUIDS = {
     "standard": None,
     "midday":   "BF040BCB-4BE1D04F-7D484589-135E881B",
@@ -60,37 +40,22 @@ PRESET_LABELS = {
     "midday":   u"Полдень",
 }
 
-# Порядок, в якому пресети мають з'являтися у UI (як на скріні)
 PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
 
 MAX_WEIGHT = 20
 
-# Шлях, куди зберігаємо вибір користувача
 CONFIG_PATH = os.path.join("mods", "configs", "weather_mod.json")
 
 
 # ============================================================================
-# MODEL: WeatherConfig — зберігає та завантажує налаштування користувача
+# MODEL
 # ============================================================================
 class WeatherConfig(object):
-    """
-    Структура:
-        {
-            "global": {"standard": 20, "midnight": 0, "overcast": 0, "sunset": 0, "midday": 0},
-            "maps": {
-                "02_malinovka": {
-                    "useGlobal": False,
-                    "weights": {"standard": 10, "midnight": 0, "overcast": 0, "sunset": 10, "midday": 0}
-                }
-            },
-            "hotkey": ["KEY_LALT", "KEY_F12"]
-        }
-    """
 
     def __init__(self):
         self.global_weights = {pid: MAX_WEIGHT if pid == "standard" else 0
                                for pid in PRESET_ORDER}
-        self.map_overrides = {}   # mapId -> {"useGlobal": bool, "weights": {pid: int}}
+        self.map_overrides = {}
         self.hotkey = ["KEY_LALT", "KEY_F12"]
         self.load()
 
@@ -137,7 +102,6 @@ class WeatherConfig(object):
         self.save()
 
     def get_weights_for_map(self, map_id):
-        """Повертає активний набір ваг для конкретної карти (з fallback на global)."""
         override = self.map_overrides.get(map_id)
         if override and not override.get("useGlobal", True):
             return override["weights"]
@@ -145,14 +109,9 @@ class WeatherConfig(object):
 
 
 # ============================================================================
-# RANDOMIZER: зважений вибір пресета за "рулеткою"
+# RANDOMIZER
 # ============================================================================
 def pick_preset(weights):
-    """
-    weights: {"standard": 10, "midnight": 0, ...}
-    Повертає preset_id за ймовірностями (roulette wheel).
-    Якщо всі ваги 0 — повертає 'standard'.
-    """
     total = sum(weights.values())
     if total <= 0:
         return "standard"
@@ -166,21 +125,9 @@ def pick_preset(weights):
 
 
 # ============================================================================
-# ENVIRONMENT PATCHER: переписуємо space.settings перед завантаженням карти
+# ENVIRONMENT PATCHER
 # ============================================================================
 def apply_preset_to_space(space_name, preset_id):
-    """
-    WoT-специфіка: клієнт читає <space>/space.settings, там є секція,
-    що визначає environment. Нам треба перед завантаженням карти
-    підкласти нашу версію space.settings, яка прив'яже гру до потрібного GUID.
-
-    У реальному моді це робиться через перехоплення
-    BWPersonality.onSpaceLoaded або через ResMgr hook.
-
-    Нижче — спрощена логіка: ми формуємо патч у вигляді XML-дочірнього
-    елемента і запихаємо його в ResMgr. В продакшені замість прямого
-    запису файлу на диск використовують ResMgr.DataSection.writeString().
-    """
     guid = PRESET_GUIDS.get(preset_id)
     if guid is None:
         logger.info("[%s] Standard preset — no override", space_name)
@@ -196,9 +143,6 @@ def apply_preset_to_space(space_name, preset_id):
         if section is None:
             logger.warning("space.settings not found for %s", space_name)
             return
-        # У реальності тут прописується шлях до папки environments/<guid>/
-        # у секції <environment> або <timeOfDay>. Точні теги залежать від
-        # версії клієнта; цей код — demonstration scaffolding.
         section.writeString("environment/override", guid)
         section.save()
         logger.info("[%s] Applied preset %s (guid=%s)", space_name, preset_id, guid)
@@ -207,7 +151,7 @@ def apply_preset_to_space(space_name, preset_id):
 
 
 # ============================================================================
-# CONTROLLER: єдиний інстанс, до якого звертаються і AS3, і хоткеї
+# CONTROLLER
 # ============================================================================
 class WeatherController(object):
 
@@ -216,13 +160,7 @@ class WeatherController(object):
         self._current_space = None
         self._current_preset = None
 
-    # ---------- API, яке викликає AS3 через DAAPI ----------
-
     def on_weight_changed(self, map_id, preset_id, value):
-        """
-        Викликається з Flash, коли користувач рухає слайдер.
-        map_id=None → глобальна вага; інакше — для конкретної карти.
-        """
         logger.info("weight_changed: map=%s preset=%s value=%s", map_id, preset_id, value)
         if map_id is None:
             self.config.set_global_weight(preset_id, value)
@@ -236,15 +174,7 @@ class WeatherController(object):
         logger.info("user closed weather panel")
         self.config.save()
 
-    # ---------- API для AS3: що показати при відкритті вікна ----------
-
     def build_payload(self, available_maps):
-        """
-        available_maps: список (map_id, label, thumb_src) — у реальному моді
-        він витягається з ResMgr.openSection("spaces/").ls().
-
-        Повертає dict, який летить у AS3 через as_setData().
-        """
         def presets_for(weights, previews=None):
             previews = previews or {}
             return [{
@@ -273,13 +203,7 @@ class WeatherController(object):
             "hotkey": "+".join(k.replace("KEY_", "").replace("L", "") for k in self.config.hotkey),
         }
 
-    # ---------- Life-cycle: коли гра завантажує карту ----------
-
     def on_space_about_to_load(self, space_name):
-        """
-        Хук з BWPersonality / ArenaInfoHolder. Тут ми вирішуємо,
-        який пресет застосувати до карти, що вантажиться.
-        """
         self._current_space = space_name
         weights = self.config.get_weights_for_map(space_name)
         preset = pick_preset(weights)
@@ -287,10 +211,7 @@ class WeatherController(object):
         apply_preset_to_space(space_name, preset)
         return preset
 
-    # ---------- Hotkey: перемикання в бою ----------
-
     def cycle_preset_in_battle(self):
-        """Викликається з keyboard-хендлера. Міняє пресет на наступний."""
         if not self._current_space:
             return
         try:
@@ -307,5 +228,19 @@ class WeatherController(object):
             )
 
 
-# Синглтон контролера — використовується з усіх точок входу
+# Синглтон
 g_controller = WeatherController()
+
+
+# ============================================================================
+# WoT Mod Loader stubs
+# ============================================================================
+# WoT перебирає всі модулі у gui/mods/ і викликає у кожного init() / fini().
+# У цього модуля немає власної ініціалізації (весь init у mod_weather.py),
+# але заглушки потрібні, інакше WoT падає з AttributeError.
+def init():
+    pass
+
+
+def fini():
+    pass
