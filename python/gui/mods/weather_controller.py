@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+"""
+Weather controller.
+v1.2.0 — кілька fallback-стратегій для перемикання погоди в бою
+"""
 import json
 import os
 import random
@@ -24,11 +28,11 @@ PRESET_GUIDS = {
 }
 
 PRESET_LABELS = {
-    "standard": u"\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442",
-    "midnight": u"\u041d\u0456\u0447",
-    "overcast": u"\u041f\u0430\u0441\u043c\u0443\u0440\u043d\u043e",
-    "sunset":   u"\u0417\u0430\u043a\u0430\u0442",
-    "midday":   u"\u041f\u043e\u043b\u0434\u0435\u043d\u044c",
+    "standard": u"Стандарт",
+    "midnight": u"Ніч",
+    "overcast": u"Пасмурно",
+    "sunset":   u"Закат",
+    "midday":   u"Полдень",
 }
 
 PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
@@ -46,10 +50,8 @@ class WeatherConfig(object):
     def __init__(self):
         self.global_weights = {pid: MAX_WEIGHT if pid == "standard" else 0 for pid in PRESET_ORDER}
         self.map_overrides = {}
-        # FIX 1: hotkey зберігається як список int-кодів BigWorld Keys
-        # за замовчуванням — ALT+F12
-        self.hotkey_codes = []  # заповнюється після load(), бо Keys може не бути поза грою
-        self.hotkey_str = "ALT+F12"  # для відображення в UI
+        self.hotkey_codes = []
+        self.hotkey_str = "ALT+F12"
         self.load()
 
     def load(self):
@@ -59,7 +61,6 @@ class WeatherConfig(object):
                     data = json.load(f)
                 self.global_weights.update(data.get('global', {}))
                 self.map_overrides = data.get('maps', {})
-                # hotkey зберігається як список BigWorld Key-кодів (int)
                 saved_codes = data.get('hotkey_codes', [])
                 if saved_codes:
                     self.hotkey_codes = [int(c) for c in saved_codes]
@@ -119,8 +120,6 @@ def pick_preset(weights):
     return "standard"
 
 
-
-
 def normalize_space_name(space_name):
     if not space_name:
         return ''
@@ -128,7 +127,7 @@ def normalize_space_name(space_name):
         space_name = str(space_name)
     space_name = space_name.replace('\\', '/').strip()
     if space_name.startswith('spaces/'):
-        space_name = space_name[len('spaces/'): ]
+        space_name = space_name[len('spaces/'):]
     if space_name.endswith('/space.settings'):
         space_name = space_name[:-len('/space.settings')]
     return space_name.strip('/')
@@ -144,14 +143,14 @@ def is_battle_map_space(space_name):
         return False
     return '_' in name
 
+
 def apply_preset_to_space(space_name, preset_id):
-    """Патчимо space.settings перед завантаженням карти."""
+    """Патчимо space.settings перед завантаженням карти (працює для нових карт)."""
     guid = PRESET_GUIDS.get(preset_id)
     if guid is None:
         logger.info("[%s] Standard preset — no override", space_name)
         return
     if not IN_GAME:
-        logger.info("[DEV] Would apply %s to %s", preset_id, space_name)
         return
     try:
         path = "spaces/%s/space.settings" % space_name
@@ -166,25 +165,79 @@ def apply_preset_to_space(space_name, preset_id):
         logger.exception("Failed to patch space.settings")
 
 
+# ============================================================================
+# ПЕРЕМИКАННЯ ПОГОДИ В БОЮ — fallback-стратегії
+# ============================================================================
+# WoT 2.2 не має публічного API для зміни environment у бою.
+# Пробуємо кілька відомих механізмів по черзі, беремо той, який спрацює.
 def apply_preset_in_battle(preset_id):
     """
-    FIX 2: Зміна погоди під час бою — через BigWorld.setWatcher,
-    який змінює environment на льоту без перезавантаження карти.
+    Пробуємо по черзі кілька способів змінити погоду в бою.
+    Повертає True якщо хоча б один спрацював.
     """
-    guid = PRESET_GUIDS.get(preset_id)
     if not IN_GAME:
-        logger.info("[DEV] Would switch battle preset to %s", preset_id)
-        return
+        return False
+
+    guid = PRESET_GUIDS.get(preset_id, "")
+    if guid is None:
+        guid = ""
+
+    # --- Спроба 1: Watcher "Client Settings/environmentOverride" ---
     try:
-        if guid is not None:
-            # Шлях watcher'а для override середовища — актуальний для WoT 2.x
-            BigWorld.setWatcher("Client Settings/environmentOverride", guid)
-        else:
-            # Скидаємо override (стандарт)
-            BigWorld.setWatcher("Client Settings/environmentOverride", "")
-        logger.info("Battle preset switched to %s (guid=%s)", preset_id, guid)
+        BigWorld.setWatcher("Client Settings/environmentOverride", guid)
+        logger.info("apply_preset_in_battle: used Watcher 'Client Settings/environmentOverride'")
+        return True
+    except Exception as e:
+        logger.debug("Watcher 'Client Settings/environmentOverride' failed: %s", e)
+
+    # --- Спроба 2: Watcher "Render/environmentOverride" ---
+    try:
+        BigWorld.setWatcher("Render/environmentOverride", guid)
+        logger.info("apply_preset_in_battle: used Watcher 'Render/environmentOverride'")
+        return True
+    except Exception as e:
+        logger.debug("Watcher 'Render/environmentOverride' failed: %s", e)
+
+    # --- Спроба 3: BWPersonality.reloadEnvironment (якщо існує) ---
+    try:
+        import BWPersonality
+        if hasattr(BWPersonality, 'reloadEnvironment'):
+            BWPersonality.reloadEnvironment(guid)
+            logger.info("apply_preset_in_battle: used BWPersonality.reloadEnvironment")
+            return True
+    except Exception as e:
+        logger.debug("BWPersonality.reloadEnvironment failed: %s", e)
+
+    # --- Спроба 4: Arena.environmentType ---
+    try:
+        if hasattr(BigWorld, 'player'):
+            player = BigWorld.player()
+            arena = getattr(player, 'arena', None)
+            if arena and hasattr(arena, 'setEnvironmentOverride'):
+                arena.setEnvironmentOverride(guid)
+                logger.info("apply_preset_in_battle: used arena.setEnvironmentOverride")
+                return True
+    except Exception as e:
+        logger.debug("arena.setEnvironmentOverride failed: %s", e)
+
+    # --- Якщо нічого не спрацювало — дампаємо доступні watcher'и для дебагу ---
+    try:
+        logger.warning("apply_preset_in_battle: NO method worked for preset=%s", preset_id)
+        # Показуємо в логах що є доступне
+        try:
+            watchers = BigWorld.getWatcher("Render/")
+            logger.info("Available Render/ watchers: %s", watchers)
+        except Exception:
+            pass
+        try:
+            watchers = BigWorld.getWatcher("Client Settings/")
+            logger.info("Available Client Settings/ watchers: %s", watchers)
+        except Exception:
+            pass
     except Exception:
-        logger.exception("Failed to switch battle preset")
+        pass
+
+    return False
 
 
 class WeatherController(object):
@@ -194,10 +247,7 @@ class WeatherController(object):
         self._current_space = None
         self._current_preset = None
 
-    # ---------- API для AS3 через DAAPI ----------
-
     def on_weight_changed(self, map_id, preset_id, value):
-        logger.info("weight_changed: map=%s preset=%s value=%s", map_id, preset_id, value)
         if not map_id:
             self.config.set_global_weight(preset_id, value)
         else:
@@ -207,51 +257,13 @@ class WeatherController(object):
         logger.info("map_selected: %s", map_id)
 
     def on_close_requested(self):
-        logger.info("user closed weather panel")
         self.config.save()
 
     def on_hotkey_changed(self, key_codes, hotkey_str):
-        """
-        FIX 1: Зберігаємо новий хоткей з UI.
-        key_codes — список int (BigWorld Key codes)
-        hotkey_str — рядок для відображення ("ALT+F12")
-        """
         self.config.hotkey_codes = [int(c) for c in key_codes]
         self.config.hotkey_str = hotkey_str
         self.config.save()
         logger.info("Hotkey updated: %s codes=%s", hotkey_str, key_codes)
-
-    def build_payload(self, available_maps):
-        def presets_for(weights):
-            return [{
-                "id": pid,
-                "label": PRESET_LABELS[pid],
-                "guid": PRESET_GUIDS[pid] or "",
-                "weight": weights.get(pid, 0),
-                "previewSrc": "",
-            } for pid in PRESET_ORDER]
-
-        maps_payload = []
-        for map_id, label, thumb in available_maps:
-            override = self.config.map_overrides.get(map_id, {})
-            weights = override.get("weights", {pid: 0 for pid in PRESET_ORDER})
-            maps_payload.append({
-                "id": map_id,
-                "label": label,
-                "thumbSrc": thumb,
-                "useGlobal": override.get("useGlobal", True),
-                "presets": presets_for(weights),
-            })
-
-        return {
-            "presets": presets_for(self.config.global_weights),
-            "maps": maps_payload,
-            "hotkey": self.config.hotkey_str,
-            # передаємо коди щоб AS3 міг показати правильні клавіші
-            "hotkeyKeys": self.config.hotkey_codes,
-        }
-
-    # ---------- Завантаження карти ----------
 
     def on_space_about_to_load(self, space_name):
         normalized = normalize_space_name(space_name)
@@ -266,28 +278,36 @@ class WeatherController(object):
         apply_preset_to_space(normalized, preset)
         return preset
 
-    # ---------- Хоткей у бою ----------
-
     def cycle_preset_in_battle(self):
-        """FIX 2: перемикаємо пресет через BigWorld.setWatcher, не через space.settings."""
+        """
+        ALT+F12 у бою — перемикаємо пресет.
+        Якщо ми НЕ в бою (_current_space порожній), просто нічого не робимо.
+        """
         if not self._current_space:
+            logger.info("cycle_preset: not in battle, ignoring")
             return
+
         try:
             idx = PRESET_ORDER.index(self._current_preset or "standard")
         except ValueError:
             idx = 0
         next_preset = PRESET_ORDER[(idx + 1) % len(PRESET_ORDER)]
         self._current_preset = next_preset
-        apply_preset_in_battle(next_preset)
+
+        ok = apply_preset_in_battle(next_preset)
+
         if IN_GAME:
             try:
+                msg = u"Погода: %s" % PRESET_LABELS[next_preset]
+                if not ok:
+                    msg += u" (не вдалося застосувати — дивись python.log)"
                 SystemMessages.pushI18nMessage(
-                    u"Погода: %s" % PRESET_LABELS[next_preset],
+                    msg,
                     type=SystemMessages.SM_TYPE.Information,
                 )
             except Exception:
                 pass
-        logger.info("Cycled to preset: %s", next_preset)
+        logger.info("Cycled to preset: %s (applied=%s)", next_preset, ok)
 
 
 g_controller = WeatherController()
