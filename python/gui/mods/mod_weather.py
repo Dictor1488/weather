@@ -11,8 +11,8 @@
     5. Контролер зберігає стан і патчить space.settings перед боєм.
 
 ЗАЛЕЖНОСТІ:
-    - izeberg.modssettingsapi >= 1.7.0  (обов'язково встановлений)
-    - environments_*.wotmod              (погодні пресети)
+    - izeberg.modssettingsapi >= 1.7.0
+    - environments_*.wotmod
 """
 import logging
 
@@ -30,7 +30,6 @@ from weather_controller import g_controller, PRESET_ORDER, PRESET_LABELS, MAX_WE
 
 logger = logging.getLogger("weather_mod")
 
-# Унікальний linkage (ID мода в modsSettingsApi)
 MOD_LINKAGE = "com.example.weather"
 MOD_VERSION = "1.0.0"
 
@@ -39,11 +38,6 @@ MOD_VERSION = "1.0.0"
 # Побудова шаблону налаштувань
 # ============================================================================
 def build_settings_template():
-    """
-    Повертає dict у форматі modsSettingsApi.
-    Базується на публічному API templates.py: createSlider, createHotkey,
-    createLabel, createDropdown, createEmpty.
-    """
     if not IN_GAME:
         return {}
 
@@ -62,7 +56,7 @@ def build_settings_template():
             snapInterval=1,
         ))
 
-    # === Хоткей "Смена погоды в бою" ===
+    # === Хоткей ===
     global_controls.append(t.createEmpty())
     global_controls.append(t.createHotkey(
         varName="hotkey",
@@ -86,7 +80,6 @@ def build_settings_template():
 
 
 def _build_maps_column():
-    """Друга колонка — дропдаун карт + слайдери для вибраної карти."""
     controls = [
         t.createLabel(text=u"Налаштування по картах"),
         t.createEmpty(),
@@ -99,7 +92,6 @@ def _build_maps_column():
                 {"label": u"Хіммельсдорф", "value": "04_himmelsdorf"},
                 {"label": u"Прохорівка",   "value": "05_prohorovka"},
                 {"label": u"Енськ",        "value": "06_ensk"},
-                # TODO: підтягнути список через ResMgr.openSection("spaces/").keys()
             ],
             value="",
         ),
@@ -117,7 +109,7 @@ def _build_maps_column():
 
 
 # ============================================================================
-# Callback від API — сюди летять усі зміни налаштувань
+# Callback від API
 # ============================================================================
 def on_settings_changed(linkage, newSettings):
     logger.info("[weather] settings changed: %s", newSettings)
@@ -185,7 +177,7 @@ def _install_key_hook():
 
 
 # ============================================================================
-# WoT Mod Loader API — init() / fini() викликаються WoT'ом
+# WoT Mod Loader API — повний набір методів, які викликає personality.py
 # ============================================================================
 def init():
     """Викликається WoT при завантаженні клієнта."""
@@ -212,9 +204,28 @@ def init():
 
 
 def fini():
-    """Викликається WoT при виході з клієнта — збережемо конфіг на всякий випадок."""
+    """Викликається WoT при виході з клієнта."""
     if IN_GAME:
         try:
             g_controller.config.save()
         except Exception:
             pass
+
+
+def sendEvent(*args, **kwargs):
+    """
+    Стандартний точка WoT mod API: певні event-и від клієнта проходять
+    через усі зареєстровані mod_*.py модулі.
+    Нам нічого тут оброблювати не потрібно.
+    """
+    pass
+
+
+def onHangarSpaceCreate(*args, **kwargs):
+    """Ангар створено."""
+    pass
+
+
+def onHangarSpaceDestroy(*args, **kwargs):
+    """Ангар знищено."""
+    pass
