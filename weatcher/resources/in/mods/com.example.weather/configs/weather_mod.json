@@ -1,0 +1,11 @@
+{
+    "global": {
+        "standard": 20,
+        "midnight": 0,
+        "overcast": 0,
+        "sunset":   0,
+        "midday":   0
+    },
+    "maps": {},
+    "hotkey": ["KEY_LALT", "KEY_F12"]
+}
