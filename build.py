@@ -92,7 +92,7 @@ def build_wotmod(staging_dir, version):
     out_path = os.path.join(DIST, out_name)
 
     log("Packing .wotmod -> {}".format(out_path))
-    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_STORED) as zf:
         for dirpath, _, filenames in os.walk(staging_dir):
             for fn in filenames:
                 abs_path = os.path.join(dirpath, fn)
