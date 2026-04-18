@@ -261,11 +261,9 @@ def apply_preset_to_space(space_name, preset_id):
             logger.warning('space.settings not found for %s', space_name)
             return
         section.writeString('environment/override', guid)
-        try:
-            section.save()
-            logger.info('space.settings save ok for %s', space_name)
-        except Exception:
-            logger.error('space.settings save failed for %s\n%s', space_name, _fmt_exc())
+        # NOTE: section.save() intentionally removed — WoT VFS is read-only at runtime.
+        # The writeString patches the in-memory section which is read during space load.
+        logger.info('space.settings patched in-memory for %s (guid=%s)', space_name, guid)
     except Exception:
         logger.error('apply_preset_to_space failed for %s\n%s', space_name, _fmt_exc())
 
@@ -333,8 +331,10 @@ def _apply_time_text(player, preset_id):
 
 def _apply_weather_object(guid):
     """
-    Оновлює візуальний рендер environment через Weather C++ об'єкт.
-    Це ключовий крок який реально змінює skybox/освітлення на екрані.
+    Змінює візуальний environment через Weather.override або localOverride.
+    Список методів з логу:
+    localOverride, override, overridenWeather, summon, system,
+    weatherController, newSystemByName, nextWeatherSystem, onChangeSpace
     """
     if not IN_GAME:
         return
@@ -347,40 +347,37 @@ def _apply_weather_object(guid):
             logger.warning('Weather object not available')
             return
 
-        # Спробуємо різні методи — назви різняться між версіями WoT
         applied = False
 
-        # Метод 1: setPreset(guid) — найпоширеніший в WoT 2.x
-        if hasattr(w, 'setPreset') and guid:
+        # Метод 1: localOverride(guid) — локальне перевизначення для клієнта
+        if hasattr(w, 'localOverride') and guid:
             try:
-                w.setPreset(guid)
-                _log_ok('Weather.setPreset', guid)
+                w.localOverride(guid)
+                _log_ok('Weather.localOverride', guid)
                 applied = True
             except Exception:
-                _log_fail('Weather.setPreset(%s)' % guid)
+                _log_fail('Weather.localOverride(%s)' % guid)
 
-        # Метод 2: setEnvironmentPreset(guid)
-        if not applied and hasattr(w, 'setEnvironmentPreset') and guid:
+        # Метод 2: override(guid) — глобальне перевизначення
+        if not applied and hasattr(w, 'override') and guid:
             try:
-                w.setEnvironmentPreset(guid)
-                _log_ok('Weather.setEnvironmentPreset', guid)
+                w.override(guid)
+                _log_ok('Weather.override', guid)
                 applied = True
             except Exception:
-                _log_fail('Weather.setEnvironmentPreset(%s)' % guid)
+                _log_fail('Weather.override(%s)' % guid)
 
-        # Метод 3: forceUpdate() або update() після зміни стану
-        for method_name in ('forceUpdate', 'update', 'refresh', 'apply'):
-            m = getattr(w, method_name, None)
-            if callable(m):
-                try:
-                    m()
-                    _log_ok('Weather.%s()' % method_name)
-                    break
-                except Exception:
-                    pass
+        # Метод 3: summon(guid) — виклик weather system за назвою/guid
+        if not applied and hasattr(w, 'summon') and guid:
+            try:
+                w.summon(guid)
+                _log_ok('Weather.summon', guid)
+                applied = True
+            except Exception:
+                _log_fail('Weather.summon(%s)' % guid)
 
         if not applied:
-            logger.info('Weather object methods: %s', [x for x in dir(w) if not x.startswith("__")])
+            logger.warning('Weather: no applicable method found for guid=%s', guid)
 
     except Exception:
         _log_fail('_apply_weather_object(guid=%s)' % guid)
@@ -420,20 +417,14 @@ def apply_preset_in_battle(preset_id):
     except Exception:
         _log_fail('STEP 2 time sync')
 
-    # 3) Weather object — реальна зміна рендеру (skybox/освітлення)
-    try:
-        _apply_weather_object(guid)
-    except Exception:
-        _log_fail('STEP 3 Weather object')
-
-    # 4) final player re-apply after visual update
+    # 3) final player re-apply after time sync
     try:
         apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
         if callable(apply_fn):
             apply_fn(period)
-            _log_ok('STEP 4 final player.apply(period)', _safe_repr(period))
+            _log_ok('STEP 3 final player.apply(period)', _safe_repr(period))
     except Exception:
-        _log_fail('STEP 4 final player.apply(period=%s)' % period)
+        _log_fail('STEP 3 final player.apply(period=%s)' % period)
 
     logger.info('FINAL STATE: player.weatherPresetID=%s player._PlayerAvatar__blArenaPeriod=%s',
                 _safe_repr(getattr(player, 'weatherPresetID', None)),
