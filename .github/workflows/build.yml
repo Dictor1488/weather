@@ -57,43 +57,21 @@ jobs:
         shell: pwsh
         run: |
           choco install python2 -y --no-progress --params "'/InstallDir:C:\Python27'"
-          refreshenv
 
-      - name: Locate Python 2.7
+      - name: Verify Python 2.7
         shell: pwsh
         run: |
-          $candidates = @(
-            "C:\Python27\python.exe",
-            "C:\Python27\python27.exe",
-            "C:\tools\python2\python.exe",
-            "C:\ProgramData\Chocolatey\bin\python.exe",
-            "C:\ProgramData\Chocolatey\bin\python2.exe",
-            "C:\ProgramData\Chocolatey\bin\python2.7.exe"
-          )
+          $py2 = "C:\Python27\python.exe"
 
-          try {
-            $cmdPython2 = (Get-Command python2 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
-            if ($cmdPython2) { $candidates += $cmdPython2 }
-          } catch {}
-
-          try {
-            $cmdPython = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
-            if ($cmdPython) { $candidates += $cmdPython }
-          } catch {}
-
-          $resolved = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
-
-          if (-not $resolved -or $resolved.Count -eq 0) {
-            Write-Host "Known candidate paths:"
-            $candidates | ForEach-Object { Write-Host $_ }
-            Write-Error "Python 2.7 not found"
+          if (-not (Test-Path $py2)) {
+            Write-Error "Python 2.7 not found at $py2"
             exit 1
           }
 
-          $py2 = $resolved[0]
           Write-Host "Using Python 2.7 at: $py2"
-          echo "PYTHON2_EXE=$py2" >> $env:GITHUB_ENV
-          & $py2 --version
+          "PYTHON2_EXE=$py2" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          & "$py2" --version
 
       - name: Install Java (required for Flex SDK)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_swf == true)
@@ -118,7 +96,9 @@ jobs:
             "https://archive.apache.org/dist/flex/${{ env.FLEX_VERSION }}/binaries/apache-flex-sdk-${{ env.FLEX_VERSION }}-bin.zip",
             "https://dlcdn.apache.org/flex/${{ env.FLEX_VERSION }}/binaries/apache-flex-sdk-${{ env.FLEX_VERSION }}-bin.zip"
           )
+
           $downloaded = $false
+
           foreach ($url in $flexUrls) {
             try {
               Invoke-WebRequest -Uri $url -OutFile "flex-sdk.zip" -UseBasicParsing -TimeoutSec 300
@@ -128,6 +108,7 @@ jobs:
               Write-Host "Failed: $_"
             }
           }
+
           if (-not $downloaded) {
             Write-Error "Could not download Flex SDK"
             exit 1
@@ -192,11 +173,11 @@ jobs:
             $gameVersion = "1.0.0.0"
           }
 
-          echo "PROJECT_VERSION=$version" >> $env:GITHUB_ENV
-          echo "MOD_ID=$modId" >> $env:GITHUB_ENV
-          echo "MOD_NAME=$modName" >> $env:GITHUB_ENV
-          echo "MOD_DESCRIPTION=$modDescription" >> $env:GITHUB_ENV
-          echo "GAME_VERSION=$gameVersion" >> $env:GITHUB_ENV
+          "PROJECT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "MOD_ID=$modId" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "MOD_NAME=$modName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "MOD_DESCRIPTION=$modDescription" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GAME_VERSION=$gameVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build SWF files
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_swf == true)
@@ -204,6 +185,7 @@ jobs:
         run: |
           $env:Path = "C:\flex-sdk\bin;$env:Path"
           $mxmlcPath = "C:\flex-sdk\bin\mxmlc.bat"
+
           if (-not (Test-Path $mxmlcPath)) {
             Write-Error "mxmlc not found"
             exit 1
@@ -222,16 +204,21 @@ jobs:
           }
 
           $projects = Get-ChildItem -Path "as3/src_flash" -Filter "*.as3proj" -Recurse -ErrorAction SilentlyContinue
+
           foreach ($proj in $projects) {
             $projDir = $proj.DirectoryName
             [xml]$projXml = Get-Content $proj.FullName
 
             $swfName = ($projXml.project.o.movie | Where-Object { $_.path -and $_.path -ne "" } | Select-Object -First 1).path
-            if (-not $swfName) { $swfName = "output.swf" }
+            if (-not $swfName) {
+              $swfName = "output.swf"
+            }
 
             $mainClassPath = $null
             $projXml.project.compileTargets.compile | ForEach-Object {
-              if ($_.path) { $mainClassPath = Join-Path $projDir $_.path }
+              if ($_.path) {
+                $mainClassPath = Join-Path $projDir $_.path
+              }
             }
 
             if (-not $mainClassPath -or -not (Test-Path $mainClassPath)) {
@@ -243,7 +230,9 @@ jobs:
             $mxmlcArgs = @()
 
             $srcDir = Join-Path $projDir "src"
-            if (Test-Path $srcDir) { $mxmlcArgs += "-source-path+=$srcDir" }
+            if (Test-Path $srcDir) {
+              $mxmlcArgs += "-source-path+=$srcDir"
+            }
 
             $mxmlcArgs += $libArgs
             $mxmlcArgs += @(
@@ -275,18 +264,18 @@ jobs:
             version = 5
             software = @{
               animate = ""
-              python  = "${{ env.PYTHON2_EXE }}"
+              python = "C:\Python27\python.exe"
             }
             game = @{
-              force   = $false
-              folder  = "World_of_Tanks_EU"
+              force = $false
+              folder = "World_of_Tanks_EU"
               version = "${{ env.GAME_VERSION }}"
             }
             info = @{
-              id          = "${{ env.MOD_ID }}"
-              name        = "${{ env.MOD_NAME }}"
+              id = "${{ env.MOD_ID }}"
+              name = "${{ env.MOD_NAME }}"
               description = "${{ env.MOD_DESCRIPTION }}"
-              version     = "${{ env.PROJECT_VERSION }}"
+              version = "${{ env.PROJECT_VERSION }}"
             }
           } | ConvertTo-Json -Depth 4 | Out-File -FilePath build.json -Encoding UTF8
 
@@ -294,8 +283,8 @@ jobs:
         shell: pwsh
         run: |
           Get-Content build.json
-          if (-not (Test-Path "${{ env.PYTHON2_EXE }}")) {
-            Write-Error "Resolved Python 2 executable does not exist: ${{ env.PYTHON2_EXE }}"
+          if (-not (Test-Path "C:\Python27\python.exe")) {
+            Write-Error "Resolved Python 2 executable does not exist: C:\Python27\python.exe"
             exit 1
           }
 
