@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Weather controller.
-v1.2.0 — кілька fallback-стратегій для перемикання погоди в бою
+v1.3.0 — battle detection + verbose debug
 """
 import json
 import os
@@ -144,11 +144,83 @@ def is_battle_map_space(space_name):
     return '_' in name
 
 
+def detect_current_battle_space():
+    """
+    Пробуємо ВСІ відомі способи визначити карту, логуємо ВСІ.
+    """
+    if not IN_GAME:
+        return None
+
+    log = logger
+
+    # Спроба 1: BigWorld.player().arena.arenaType.geometryName
+    try:
+        player = BigWorld.player()
+        if player is None:
+            log.info("detect: BigWorld.player() = None")
+        else:
+            log.info("detect: BigWorld.player() = %s (class %s)", player, type(player).__name__)
+            arena = getattr(player, 'arena', None)
+            if arena is None:
+                log.info("detect: player.arena = None")
+            else:
+                log.info("detect: player.arena = %s (class %s)", arena, type(arena).__name__)
+                arenaType = getattr(arena, 'arenaType', None)
+                if arenaType is None:
+                    log.info("detect: arena.arenaType = None")
+                else:
+                    log.info("detect: arenaType = %s (class %s)", arenaType, type(arenaType).__name__)
+                    for attr in ('geometryName', 'geometry', 'name', 'mapName'):
+                        value = getattr(arenaType, attr, None)
+                        if value:
+                            log.info("detect: arenaType.%s = %s", attr, value)
+                            norm = normalize_space_name(value)
+                            if is_battle_map_space(norm):
+                                log.info("detect: RESULT from arenaType.%s = %s", attr, norm)
+                                return norm
+    except Exception:
+        log.exception("detect via player.arena failed")
+
+    # Спроба 2: BigWorld.spaceName
+    if hasattr(BigWorld, 'spaceName'):
+        try:
+            name = BigWorld.spaceName()
+            log.info("detect: BigWorld.spaceName() = %s", name)
+            norm = normalize_space_name(name)
+            if is_battle_map_space(norm):
+                log.info("detect: RESULT from BigWorld.spaceName = %s", norm)
+                return norm
+        except Exception as e:
+            log.info("detect: BigWorld.spaceName() failed: %s", e)
+
+    # Спроба 3: BigWorld.camera().spaceID
+    try:
+        camera = BigWorld.camera()
+        log.info("detect: BigWorld.camera() = %s", camera)
+    except Exception as e:
+        log.info("detect: BigWorld.camera() failed: %s", e)
+
+    # Спроба 4: через BattleReplay
+    try:
+        from helpers import dependency
+        from skeletons.gui.battle_session import IBattleSessionProvider
+        bsp = dependency.instance(IBattleSessionProvider)
+        arenaDP = bsp.getArenaDP() if bsp else None
+        log.info("detect: BattleSessionProvider arenaDP = %s", arenaDP)
+        if arenaDP:
+            for attr in dir(arenaDP):
+                if 'arena' in attr.lower() or 'space' in attr.lower() or 'map' in attr.lower():
+                    log.info("detect: arenaDP.%s = %s", attr, getattr(arenaDP, attr, None))
+    except Exception as e:
+        log.info("detect: BattleSessionProvider failed: %s", e)
+
+    log.warning("detect: NO method found current battle space")
+    return None
+
+
 def apply_preset_to_space(space_name, preset_id):
-    """Патчимо space.settings перед завантаженням карти (працює для нових карт)."""
     guid = PRESET_GUIDS.get(preset_id)
     if guid is None:
-        logger.info("[%s] Standard preset — no override", space_name)
         return
     if not IN_GAME:
         return
@@ -165,15 +237,9 @@ def apply_preset_to_space(space_name, preset_id):
         logger.exception("Failed to patch space.settings")
 
 
-# ============================================================================
-# ПЕРЕМИКАННЯ ПОГОДИ В БОЮ — fallback-стратегії
-# ============================================================================
-# WoT 2.2 не має публічного API для зміни environment у бою.
-# Пробуємо кілька відомих механізмів по черзі, беремо той, який спрацює.
 def apply_preset_in_battle(preset_id):
     """
-    Пробуємо по черзі кілька способів змінити погоду в бою.
-    Повертає True якщо хоча б один спрацював.
+    Пробуємо всі способи + дамп watcher'ів якщо нічого не вийшло.
     """
     if not IN_GAME:
         return False
@@ -182,62 +248,79 @@ def apply_preset_in_battle(preset_id):
     if guid is None:
         guid = ""
 
-    # --- Спроба 1: Watcher "Client Settings/environmentOverride" ---
-    try:
-        BigWorld.setWatcher("Client Settings/environmentOverride", guid)
-        logger.info("apply_preset_in_battle: used Watcher 'Client Settings/environmentOverride'")
-        return True
-    except Exception as e:
-        logger.debug("Watcher 'Client Settings/environmentOverride' failed: %s", e)
+    methods_worked = []
 
-    # --- Спроба 2: Watcher "Render/environmentOverride" ---
-    try:
-        BigWorld.setWatcher("Render/environmentOverride", guid)
-        logger.info("apply_preset_in_battle: used Watcher 'Render/environmentOverride'")
-        return True
-    except Exception as e:
-        logger.debug("Watcher 'Render/environmentOverride' failed: %s", e)
+    # Метод 1-4: watcher'и
+    for watcher_path in ("Client Settings/environmentOverride",
+                          "Render/environmentOverride",
+                          "Space/environmentOverride",
+                          "Environment/override"):
+        try:
+            BigWorld.setWatcher(watcher_path, guid)
+            methods_worked.append("watcher '%s'" % watcher_path)
+            logger.info("watcher '%s' = %s", watcher_path, guid)
+        except Exception as e:
+            logger.debug("watcher '%s' failed: %s", watcher_path, e)
 
-    # --- Спроба 3: BWPersonality.reloadEnvironment (якщо існує) ---
+    # Метод 5-7: BWPersonality
     try:
         import BWPersonality
-        if hasattr(BWPersonality, 'reloadEnvironment'):
-            BWPersonality.reloadEnvironment(guid)
-            logger.info("apply_preset_in_battle: used BWPersonality.reloadEnvironment")
-            return True
-    except Exception as e:
-        logger.debug("BWPersonality.reloadEnvironment failed: %s", e)
+        for attr in ('reloadEnvironment', 'setEnvironment', 'setEnvironmentOverride'):
+            if hasattr(BWPersonality, attr):
+                try:
+                    getattr(BWPersonality, attr)(guid)
+                    methods_worked.append("BWPersonality.%s" % attr)
+                except Exception as e:
+                    logger.debug("BWPersonality.%s failed: %s", attr, e)
+    except ImportError:
+        pass
 
-    # --- Спроба 4: Arena.environmentType ---
+    # Метод 8-10: arena methods
     try:
-        if hasattr(BigWorld, 'player'):
-            player = BigWorld.player()
-            arena = getattr(player, 'arena', None)
-            if arena and hasattr(arena, 'setEnvironmentOverride'):
-                arena.setEnvironmentOverride(guid)
-                logger.info("apply_preset_in_battle: used arena.setEnvironmentOverride")
-                return True
-    except Exception as e:
-        logger.debug("arena.setEnvironmentOverride failed: %s", e)
-
-    # --- Якщо нічого не спрацювало — дампаємо доступні watcher'и для дебагу ---
-    try:
-        logger.warning("apply_preset_in_battle: NO method worked for preset=%s", preset_id)
-        # Показуємо в логах що є доступне
-        try:
-            watchers = BigWorld.getWatcher("Render/")
-            logger.info("Available Render/ watchers: %s", watchers)
-        except Exception:
-            pass
-        try:
-            watchers = BigWorld.getWatcher("Client Settings/")
-            logger.info("Available Client Settings/ watchers: %s", watchers)
-        except Exception:
-            pass
+        player = BigWorld.player()
+        arena = getattr(player, 'arena', None) if player else None
+        if arena:
+            for attr in ('setEnvironmentOverride', 'setWeather', 'setEnvironment'):
+                if hasattr(arena, attr):
+                    try:
+                        getattr(arena, attr)(guid)
+                        methods_worked.append("arena.%s" % attr)
+                    except Exception as e:
+                        logger.debug("arena.%s failed: %s", attr, e)
     except Exception:
         pass
 
-    return False
+    # Метод 11: повторний space.settings patch
+    try:
+        space = detect_current_battle_space()
+        if space:
+            apply_preset_to_space(space, preset_id)
+            methods_worked.append("re-patched space.settings(%s)" % space)
+    except Exception:
+        pass
+
+    if methods_worked:
+        logger.info("apply_preset_in_battle: worked methods = %s", methods_worked)
+        return True
+    else:
+        logger.warning("apply_preset_in_battle: NO method worked, dumping watchers")
+        _dump_watchers()
+        return False
+
+
+def _dump_watchers():
+    """Дамп watcher-tree щоб побачити реальні шляхи."""
+    if not IN_GAME:
+        return
+    try:
+        for root in ("", "Client Settings", "Render", "Space", "Environment", "Visual", "chunks"):
+            try:
+                result = BigWorld.getWatcher(root + "/" if root else "")
+                logger.info("WATCHER [%s/]: %s", root, repr(result)[:500])
+            except Exception as e:
+                logger.debug("watcher root '%s' failed: %s", root, e)
+    except Exception:
+        logger.exception("dump_watchers failed")
 
 
 class WeatherController(object):
@@ -246,6 +329,7 @@ class WeatherController(object):
         self.config = WeatherConfig()
         self._current_space = None
         self._current_preset = None
+        self._in_battle = False
 
     def on_weight_changed(self, map_id, preset_id, value):
         if not map_id:
@@ -254,7 +338,7 @@ class WeatherController(object):
             self.config.set_map_weight(map_id, preset_id, value)
 
     def on_map_selected(self, map_id):
-        logger.info("map_selected: %s", map_id)
+        pass
 
     def on_close_requested(self):
         self.config.save()
@@ -265,11 +349,17 @@ class WeatherController(object):
         self.config.save()
         logger.info("Hotkey updated: %s codes=%s", hotkey_str, key_codes)
 
+    # ---- Викликається з hook на BattleSpace.enter() / BattleLoadingSpace.enter() ----
+    def on_battle_space_entered(self, space_class_name):
+        """Входимо в BattleLoadingSpace або BattleSpace."""
+        logger.info("on_battle_space_entered: %s", space_class_name)
+        self._in_battle = True
+        # Тут ще немає arena, тому _current_space визначимо пізніше
+
     def on_space_about_to_load(self, space_name):
+        """Старий hook (legacy), залишено про всяк."""
         normalized = normalize_space_name(space_name)
-        logger.info("Space about to load: raw=%s normalized=%s", space_name, normalized)
         if not is_battle_map_space(normalized):
-            logger.info("Skipping non-battle space: %s", normalized or space_name)
             return None
         self._current_space = normalized
         weights = self.config.get_weights_for_map(normalized)
@@ -280,12 +370,19 @@ class WeatherController(object):
 
     def cycle_preset_in_battle(self):
         """
-        ALT+F12 у бою — перемикаємо пресет.
-        Якщо ми НЕ в бою (_current_space порожній), просто нічого не робимо.
+        Натиснуто хоткей. Спочатку детектимо карту.
         """
-        if not self._current_space:
-            logger.info("cycle_preset: not in battle, ignoring")
+        # Визначаємо карту зараз
+        detected = detect_current_battle_space()
+
+        if not detected and not self._in_battle:
+            logger.info("cycle_preset: not in battle (no space detected, _in_battle=False)")
+            # Все одно покажемо дебаг-дамп — хочемо бачити, що у нас є
+            _dump_watchers()
             return
+
+        if detected:
+            self._current_space = detected
 
         try:
             idx = PRESET_ORDER.index(self._current_preset or "standard")
@@ -294,20 +391,22 @@ class WeatherController(object):
         next_preset = PRESET_ORDER[(idx + 1) % len(PRESET_ORDER)]
         self._current_preset = next_preset
 
+        logger.info("cycle_preset: switching to %s (space=%s, in_battle=%s)",
+                    next_preset, self._current_space, self._in_battle)
+
         ok = apply_preset_in_battle(next_preset)
 
         if IN_GAME:
             try:
                 msg = u"Погода: %s" % PRESET_LABELS[next_preset]
                 if not ok:
-                    msg += u" (не вдалося застосувати — дивись python.log)"
+                    msg += u" (не вдалося)"
                 SystemMessages.pushI18nMessage(
                     msg,
                     type=SystemMessages.SM_TYPE.Information,
                 )
             except Exception:
                 pass
-        logger.info("Cycled to preset: %s (applied=%s)", next_preset, ok)
 
 
 g_controller = WeatherController()
