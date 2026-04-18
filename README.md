@@ -1,85 +1,112 @@
-# Weather Panel — WoT Mod (v2)
+# Weather Mods Panel — AS3 + Python для World of Tanks
 
-Панель керування погодними пресетами для World of Tanks. Працює поверх `environments_*.wotmod` модів (midday / sunset / overcast / midnight).
+Панель керування погодними пресетами на картах. Інтегрується з уже встановленими `environments_*.wotmod` модами (midday / sunset / overcast / midnight).
 
-## 🎯 Що змінилось у v2
+## Що робить
 
-Спочатку план був робити власний AS3 UI через Scaleform + DAAPI. Після розпакування прикладів (`izeberg.modssettingsapi`, `tv.protanki.stuff`) зрозуміли, що існує готовий фреймворк **modsSettingsApi**, який сам малює UI налаштувань з dict-шаблону.
-
-**Результат:** AS3 не потрібен. Компілюється тільки Python. GitHub Actions зберуть все за ~30 секунд без жодних додаткових файлів.
+- Вкладка **"Загальні налаштування"** — зважений рандомайзер пресетів для всіх карт одразу
+- Вкладка **"Налаштування по картах"** — сітка 4×N, клік по карті → індивідуальні ваги
+- Хоткей **ALT+F12** — перемикання пресета прямо в бою
+- Зберігає вибір у `mods/configs/weather_mod.json`
 
 ## Структура
 
 ```
-.
-├── .github/workflows/build.yml      # Auto-build на тег vX.Y.Z
-├── python/gui/mods/                 # Python 2.7 сирці
-│   ├── __init__.py                  # Маркер пакета
-│   ├── mod_weather.py               # Entry: реєстрація в modsSettingsApi
-│   └── weather_controller.py        # Ядро: конфіг + рандомайзер + патч карт
-├── resources/in/mods/com.example.weather/
-│   ├── meta.xml                     # Метадані моду
-│   └── configs/weather_mod.json     # Дефолтний конфіг
-├── build.py                         # Локальна збірка
-├── .gitignore
-└── README.md
+weather_mod/
+├── as3/                          # Flash/Scaleform UI
+│   ├── data/
+│   │   ├── PresetVO.as           # Value object пресета (id, weight, guid, preview)
+│   │   └── MapVO.as              # Value object карти (id, label, thumb, presets)
+│   ├── events/
+│   │   └── WeatherEvent.as       # Типізовані кастомні події
+│   ├── components/
+│   │   ├── PresetRow.as          # Рядок "Лейбл | Слайдер | вес: N | preview"
+│   │   └── MapTile.as            # Плитка карти в сітці
+│   ├── views/
+│   │   ├── WeatherView.as        # Корінь: tabs + close + content holder
+│   │   ├── GlobalSettingsPanel.as  # Вкладка "Загальні" (5 слайдерів + hotkey)
+│   │   ├── MapGridPanel.as       # Вкладка "По картах" (сітка 4×N)
+│   │   └── MapDetailPanel.as     # Деталі однієї карти (5 слайдерів)
+│   └── WeatherMediator.as        # DAAPI-міст Flash ⇄ Python
+│
+└── python/
+    ├── weather_controller.py     # Core: конфіг, рандомайзер, патч space.settings
+    ├── weather_window.py         # DAAPI view з py_* колбеками
+    └── __init__.py               # Хуки на завантаження карти та хоткей
 ```
 
-## Як це працює
+## Архітектура (dataflow)
 
-1. При старті гри `mod_weather.py` викликає `g_modsSettingsApi.setModTemplate(...)` із dict-шаблоном: слайдери пресетів + дропдаун карт + хоткей
-2. modsSettingsApi сам малює панель у своєму вікні (те саме, що відкривається шестернею в ангарі)
-3. Користувач крутить слайдери — API викликає наш callback → контролер зберігає зміни в `weather_mod.json`
-4. Перед завантаженням карти `BWPersonality.onSpaceLoaded` хук запитує у контролера "який пресет на цю карту?" — рандомайзер обирає за вагами, потім `apply_preset_to_space()` підкладає GUID у `space.settings`
-5. У бою ALT+F12 циклічно перемикає пресет через `cycle_preset_in_battle()`
+```
+┌─────────────────┐       as_setData()        ┌──────────────────┐
+│ weather_window  │──────────────────────────>│  WeatherView.as  │
+│     (Python)    │                            │                  │
+│                 │<──  py_onWeightChanged ────│  PresetRow.as    │
+└────────┬────────┘                            └──────────────────┘
+         │ on_weight_changed()
+         ▼
+┌─────────────────┐
+│ WeatherConfig   │  ──── зберігає у weather_mod.json
+└────────┬────────┘
+         │ get_weights_for_map()
+         ▼
+┌─────────────────┐       pick_preset()        ┌──────────────────┐
+│ on_space_about  │──────────────────────────>│ apply_preset_to  │
+│   _to_load()    │                            │   _space()       │
+└─────────────────┘                            └──────┬───────────┘
+                                                      ▼
+                                           патч space.settings
+                                           → гра вантажить потрібний GUID
+```
 
-## Залежності (клієнт гравця мусить мати)
+## Ключові моменти реалізації
 
-- **`izeberg.modssettingsapi`** (>= 1.7.0) — інакше наш виклик `g_modsSettingsApi.setModTemplate(...)` кине `ImportError` і панель не з'явиться.
-- **`environments_*.wotmod`** — саме погодні пресети (`midday_1_9`, `sunset_1_9`, `overcast_1_9`, `midnight_1_9`, `common_1_7`, `spaces_wg_1_6`). Без них GUID'и порожні.
+### 1. GUID пресетів
+У `weather_controller.py` захардкоджено GUID'и, які ми витягли з `.wotmod` файлів:
+```python
+PRESET_GUIDS = {
+    "standard": None,                                       # не підміняти
+    "midday":   "BF040BCB-4BE1D04F-7D484589-135E881B",
+    "sunset":   "6DEE1EBB-44F63FCC-AACF6185-7FBBC34E",
+    "overcast": "56BA3213-40FFB1DF-125FBCAD-173E8347",
+    "midnight": "15755E11-4090266B-594778B6-B233C12C",
+}
+```
+Якщо завтра оновиш environments-мод — поміняй GUID тут.
 
-## Локальна збірка
+### 2. Рандомайзер
+`pick_preset(weights)` — класична "рулетка": чим більша вага, тим вища ймовірність. Сума всіх ваг = 100% незалежно від абсолютних значень. Протестовано:
+- всі по 20 → рівноймовірний розподіл
+- midday=15, sunset=5 → 75% midday, 25% sunset
+- усі 0 → завжди `standard`
+
+### 3. DAAPI bridge
+AS3 `WeatherMediator` успадковує `AbstractView`. Python-клас `WeatherWindowMeta` має методи `py_onWeightChanged`, `py_onMapSelected` тощо — WoT сам маршрутизує виклики з AS3 через `self.flashObject`.
+
+### 4. Хоткей у бою
+Хукаємо `InputHandler.g_instance.onKeyDown`. Коли натиснуто ALT+F12 — `cycle_preset_in_battle()` циклічно перемикає пресети і показує повідомлення через `SystemMessages`.
+
+## TODO для продакшену
+
+- ⚠️ `apply_preset_to_space()` зараз містить демо-реалізацію патчу `space.settings`. Точні теги (`<environment>` / `<timeOfDay>`) залежать від поточної версії WoT — треба звіряти з актуальним клієнтом.
+- 📋 `MAP_REGISTRY` у `weather_window.py` заповнений тільки для 4 карт як приклад. У продакшені замість хардкоду парсити `ResMgr.openSection("spaces/").keys()` і підтягувати імена з `text/LC_MESSAGES/arenas.mo`.
+- 🖼 Preview-картинки пресетів (`previewSrc`) треба покласти у `gui/maps/weather_previews/` — 220×64 кропи тих 5 скріншотів з різною погодою.
+- 🎨 Шрифти `$FieldFont` / `$TitleFont` — це аліаси, зареєстровані в Scaleform шаблоні WoT. У standalone-збірці їх треба замінити на звичайні системні.
+- 🔌 `izeberg.modssettingsapi` API змінюється між версіями. Перевір актуальну сигнатуру `registerCallback()` у тій версії API, яка в тебе встановлена (у нас `1.7.0`).
+
+## Збірка
+
+1. **AS3**: відкрити у Flash Builder / IntelliJ Flash, скомпілювати в `WeatherMediator.swf` з Scaleform SDK WoT.
+2. **Python**: скопіювати весь `python/` у `mods/<version>/weather_mod/`.
+3. **SWF**: покласти `WeatherMediator.swf` у `mods/<version>/weather_mod/gui/flash/`.
+4. Перепакувати як `.wotmod` (це ж zip).
+
+## Тест без гри
+
+Python-частина перевіряється без клієнта — заглушки `IN_GAME = False` дозволяють імпортувати модулі та ганяти рандомайзер:
 
 ```bash
-# На Python 2.7 (Linux/Mac)
-python2.7 build.py
-
-# → dist/com.example.weather_0.0.1.wotmod
+cd python/
+python -c "from weather_controller import pick_preset, PRESET_ORDER; \
+           print(pick_preset({p: 20 for p in PRESET_ORDER}))"
 ```
-
-## Збірка через GitHub Actions
-
-```bash
-git tag v0.0.1
-git push origin v0.0.1
-```
-
-Actions встановлять Python 2.7, запустять `build.py`, створять GitHub Release.
-
-## TODO перед першим релізом
-
-1. **Змінити `com.example` на свій author_id**
-   - `resources/in/mods/com.example.weather/` — перейменувати папку
-   - `meta.xml` — правити `<id>`
-   - `build.py` — константа `MOD_ID_DIR`
-   - `mod_weather.py` — константа `MOD_LINKAGE`
-
-2. **Допилити `apply_preset_to_space()` у `weather_controller.py`**
-   Єдине місце, яке залежить від версії клієнта — там треба точний патч `space.settings` через `ResMgr`.
-
-3. **Підтягнути всі 48 карт з `ResMgr`** замість хардкоду 4-х у `_build_maps_column()`.
-
-## Встановлення
-
-Покласти в `World_of_Tanks/mods/<game_version>/` разом з:
-- `izeberg.modssettingsapi_X.X.X.wotmod`
-- `environments_common_1_7.wotmod`
-- `environments_midday_1_9.wotmod`
-- `environments_sunset_1_9.wotmod`
-- `environments_overcast_1_9.wotmod`
-- `environments_midnight_1_9.wotmod`
-- `environments_spaces_wg_1_6.wotmod`
-
-## Ліцензія
-
-MIT
