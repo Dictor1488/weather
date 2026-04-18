@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Точка входу мода.
+
+WoT-модуль повинен мати життєвий цикл init()/fini().
+На нових клієнтах відсутність fini() валить імпорт через personality.py.
+Також не можна викликати init() автоматично при імпорті модуля —
+ініціалізацію викликає сам завантажувач клієнта.
 """
 
 try:
@@ -14,25 +19,43 @@ except ImportError:
 from weather_controller import g_controller
 
 
+_ORIGINAL_ON_SPACE_LOADED = None
+_KEY_HOOK_INSTALLED = False
+_INIT_DONE = False
+
+
 def _install_space_hook():
-    if not IN_GAME:
+    global _ORIGINAL_ON_SPACE_LOADED
+    if not IN_GAME or _ORIGINAL_ON_SPACE_LOADED is not None:
         return
     try:
         import BWPersonality
-        original = BWPersonality.onSpaceLoaded
+        _ORIGINAL_ON_SPACE_LOADED = BWPersonality.onSpaceLoaded
 
         def wrapped(spaceName):
             g_controller.on_space_about_to_load(spaceName)
-            return original(spaceName)
+            return _ORIGINAL_ON_SPACE_LOADED(spaceName)
 
         BWPersonality.onSpaceLoaded = wrapped
     except Exception:
+        _ORIGINAL_ON_SPACE_LOADED = None
+
+
+def _remove_space_hook():
+    global _ORIGINAL_ON_SPACE_LOADED
+    if not IN_GAME or _ORIGINAL_ON_SPACE_LOADED is None:
+        return
+    try:
+        import BWPersonality
+        BWPersonality.onSpaceLoaded = _ORIGINAL_ON_SPACE_LOADED
+    except Exception:
         pass
+    _ORIGINAL_ON_SPACE_LOADED = None
 
 
 def _on_key_event(event):
     """
-    FIX 1: читаємо хоткей з конфігу, а не хардкодимо ALT+F12.
+    Читаємо хоткей з конфігу, а не хардкодимо ALT+F12.
     Якщо hotkey_codes не збережено — fallback на KEY_LALT + KEY_F12.
     """
     if not IN_GAME:
@@ -48,7 +71,7 @@ def _on_key_event(event):
             g_controller.cycle_preset_in_battle()
         return
 
-    # Перевіряємо: останній код — натиснута клавіша, решта — модифікатори
+    # Останній код — натиснута клавіша, решта — модифікатори
     trigger_key = codes[-1]
     modifiers = codes[:-1]
 
@@ -63,12 +86,25 @@ def _on_key_event(event):
 
 
 def _install_key_hook():
-    if not IN_GAME:
+    global _KEY_HOOK_INSTALLED
+    if not IN_GAME or _KEY_HOOK_INSTALLED:
         return
     try:
         InputHandler.g_instance.onKeyDown += _on_key_event
+        _KEY_HOOK_INSTALLED = True
     except Exception:
         pass
+
+
+def _remove_key_hook():
+    global _KEY_HOOK_INSTALLED
+    if not IN_GAME or not _KEY_HOOK_INSTALLED:
+        return
+    try:
+        InputHandler.g_instance.onKeyDown -= _on_key_event
+    except Exception:
+        pass
+    _KEY_HOOK_INSTALLED = False
 
 
 def open_weather_window():
@@ -86,7 +122,69 @@ def open_weather_window():
         logging.getLogger("weather_mod").exception("Failed to open weather window")
 
 
+MAP_IDS = ["", "02_malinovka", "04_himmelsdorf", "05_prohorovka", "06_ensk"]
+
+
+def _on_settings_changed(linkage, newSettings):
+    import logging
+    log = logging.getLogger("weather_mod")
+    log.debug("settings changed: %s", newSettings)
+
+    preset_order = ["standard", "midnight", "overcast", "sunset", "midday"]
+
+    for pid in preset_order:
+        key = "global_" + pid
+        if key in newSettings:
+            g_controller.config.set_global_weight(pid, newSettings[key])
+
+    map_idx = newSettings.get("active_map", 0)
+    try:
+        active_map = MAP_IDS[int(map_idx)]
+    except (IndexError, TypeError, ValueError):
+        active_map = ""
+
+    if active_map:
+        for pid in preset_order:
+            key = "map_" + pid
+            if key in newSettings:
+                g_controller.config.set_map_weight(active_map, pid, newSettings[key])
+
+    if "hotkey" in newSettings:
+        raw = newSettings["hotkey"]
+        if isinstance(raw, (list, tuple)):
+            codes = [int(c) for c in raw]
+            try:
+                import Keys as K
+                name_map = {
+                    K.KEY_LALT: "ALT", K.KEY_RALT: "ALT",
+                    K.KEY_LCONTROL: "CTRL", K.KEY_RCONTROL: "CTRL",
+                    K.KEY_LSHIFT: "SHIFT", K.KEY_RSHIFT: "SHIFT"
+                }
+                parts = [name_map.get(c, "KEY_%d" % c) for c in codes]
+                hotkey_str = "+".join(parts)
+            except Exception:
+                hotkey_str = "+".join(str(c) for c in codes)
+            g_controller.on_hotkey_changed(codes, hotkey_str)
+
+
+def _apply_saved_settings(saved):
+    """Застосовуємо збережені налаштування при старті."""
+    preset_order = ["standard", "midnight", "overcast", "sunset", "midday"]
+    for pid in preset_order:
+        key = "global_" + pid
+        if key in saved:
+            g_controller.config.global_weights[pid] = int(saved[key])
+    if "hotkey" in saved:
+        raw = saved["hotkey"]
+        if isinstance(raw, (list, tuple)) and raw:
+            _on_settings_changed("com.example.weather", {"hotkey": raw})
+
+
 def init():
+    global _INIT_DONE
+    if _INIT_DONE:
+        return
+
     _install_space_hook()
     _install_key_hook()
 
@@ -95,7 +193,6 @@ def init():
         from gui.modsSettingsApi import templates as t
         import Keys as K
 
-        # FIX 1: передаємо поточний hotkey_codes з конфігу в modsSettingsApi
         current_codes = g_controller.config.hotkey_codes or [K.KEY_LALT, K.KEY_F12]
 
         template = {
@@ -120,7 +217,6 @@ def init():
                                value=g_controller.config.global_weights.get("midday", 0),
                                min=0, max=20, interval=1),
                 t.createEmpty(),
-                # FIX 1: value — список key codes (int), не dict
                 t.createHotkey(varName="hotkey", text=u"Смена погоды в бою",
                                value=current_codes),
             ],
@@ -154,6 +250,7 @@ def init():
             linkage="com.example.weather",
             template=template,
             callback=_on_settings_changed,
+            buttonHandler=open_weather_window,
         )
         if saved:
             _apply_saved_settings(saved)
@@ -162,64 +259,12 @@ def init():
         import logging
         logging.getLogger("weather_mod").exception("modsSettingsApi registration failed")
 
-
-MAP_IDS = ["", "02_malinovka", "04_himmelsdorf", "05_prohorovka", "06_ensk"]
-
-
-def _on_settings_changed(linkage, newSettings):
-    import logging
-    log = logging.getLogger("weather_mod")
-    log.debug("settings changed: %s", newSettings)
-
-    PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
-
-    for pid in PRESET_ORDER:
-        key = "global_" + pid
-        if key in newSettings:
-            g_controller.config.set_global_weight(pid, newSettings[key])
-
-    map_idx = newSettings.get("active_map", 0)
-    try:
-        active_map = MAP_IDS[int(map_idx)]
-    except (IndexError, TypeError, ValueError):
-        active_map = ""
-
-    if active_map:
-        for pid in PRESET_ORDER:
-            key = "map_" + pid
-            if key in newSettings:
-                g_controller.config.set_map_weight(active_map, pid, newSettings[key])
-
-    # FIX 1: зберігаємо новий хоткей якщо змінився
-    if "hotkey" in newSettings:
-        raw = newSettings["hotkey"]
-        # modsSettingsApi повертає список int-кодів
-        if isinstance(raw, (list, tuple)):
-            codes = [int(c) for c in raw]
-            # будуємо рядок для відображення
-            try:
-                import Keys as K
-                name_map = {K.KEY_LALT: "ALT", K.KEY_RALT: "ALT",
-                            K.KEY_LCONTROL: "CTRL", K.KEY_RCONTROL: "CTRL",
-                            K.KEY_LSHIFT: "SHIFT", K.KEY_RSHIFT: "SHIFT"}
-                parts = [name_map.get(c, "KEY_%d" % c) for c in codes]
-                hotkey_str = "+".join(parts)
-            except Exception:
-                hotkey_str = "+".join(str(c) for c in codes)
-            g_controller.on_hotkey_changed(codes, hotkey_str)
+    _INIT_DONE = True
 
 
-def _apply_saved_settings(saved):
-    """Застосовуємо збережені налаштування при старті."""
-    PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
-    for pid in PRESET_ORDER:
-        key = "global_" + pid
-        if key in saved:
-            g_controller.config.global_weights[pid] = int(saved[key])
-    if "hotkey" in saved:
-        raw = saved["hotkey"]
-        if isinstance(raw, (list, tuple)) and raw:
-            _on_settings_changed("com.example.weather", {"hotkey": raw})
-
-
-init()
+def fini():
+    """Обов'язковий lifecycle hook для нових клієнтів WoT."""
+    global _INIT_DONE
+    _remove_key_hook()
+    _remove_space_hook()
+    _INIT_DONE = False
