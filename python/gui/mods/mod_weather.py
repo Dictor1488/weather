@@ -214,9 +214,9 @@ def _build_template():
             varName="global_" + pid,
             text=PRESET_LABELS[pid],
             value=_g_ctrl.config.global_weights.get(pid, 0),
-            minimum=0,
-            maximum=MAX_WEIGHT,
-            snapInterval=1,
+            min=0,
+            max=MAX_WEIGHT,
+            interval=1,
         ))
 
     col1.append(t.createEmpty())
@@ -254,9 +254,9 @@ def _build_template():
             varName="map_" + pid,
             text=u"[карта] " + PRESET_LABELS[pid],
             value=0,
-            minimum=0,
-            maximum=MAX_WEIGHT,
-            snapInterval=1,
+            min=0,
+            max=MAX_WEIGHT,
+            interval=1,
         ))
 
     return {
