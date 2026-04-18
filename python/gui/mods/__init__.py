@@ -25,7 +25,7 @@ except ImportError:
 from weather_controller import g_controller
 
 
-_ORIGINAL_ON_SPACE_LOADED = None
+_SPACE_HOOKS = []
 _KEY_HOOK_INSTALLED = False
 _INIT_DONE = False
 
@@ -35,34 +35,76 @@ def _log():
     return logging.getLogger('weather_mod')
 
 
+def _extract_space_name(args, kwargs):
+    candidates = []
+    if args:
+        candidates.extend(args)
+    if kwargs:
+        for key in ('spaceName', 'space_name', 'spaceID', 'spaceId', 'name', 'path'):
+            if key in kwargs:
+                candidates.append(kwargs[key])
+    for value in candidates:
+        if isinstance(value, basestring):
+            return value
+    return None
+
+
+def _patch_callable(module, attr_name):
+    original = getattr(module, attr_name, None)
+    if original is None or not callable(original):
+        return False
+
+    for entry in _SPACE_HOOKS:
+        if entry[0] is module and entry[1] == attr_name:
+            return True
+
+    def wrapped(*args, **kwargs):
+        space_name = _extract_space_name(args, kwargs)
+        if space_name:
+            try:
+                g_controller.on_space_about_to_load(space_name)
+            except Exception:
+                _log().exception('space pre-load hook failed for %s', space_name)
+        return original(*args, **kwargs)
+
+    setattr(module, attr_name, wrapped)
+    _SPACE_HOOKS.append((module, attr_name, original))
+    _log().info('Installed weather space hook: %s.%s', getattr(module, '__name__', module), attr_name)
+    return True
+
+
 def _install_space_hook():
-    global _ORIGINAL_ON_SPACE_LOADED
-    if not IN_GAME or _ORIGINAL_ON_SPACE_LOADED is not None:
+    if not IN_GAME or _SPACE_HOOKS:
         return
+
+    installed = False
+
     try:
-        import BWPersonality
-        _ORIGINAL_ON_SPACE_LOADED = BWPersonality.onSpaceLoaded
-
-        def wrapped(spaceName):
-            g_controller.on_space_about_to_load(spaceName)
-            return _ORIGINAL_ON_SPACE_LOADED(spaceName)
-
-        BWPersonality.onSpaceLoaded = wrapped
+        import game
+        for attr_name in ('loadSpace', 'startLoadingSpace', 'switchSpace', 'changeSpace', 'onSpaceLoaded'):
+            installed = _patch_callable(game, attr_name) or installed
     except Exception:
-        _ORIGINAL_ON_SPACE_LOADED = None
-        _log().exception('Failed to install space hook')
+        _log().exception('Failed while probing game module for space hooks')
+
+    if not installed:
+        try:
+            import gui.app_loader.loader as app_loader_module
+            for attr_name in ('notifySpaceChanged', 'onSpaceChanged'):
+                installed = _patch_callable(app_loader_module, attr_name) or installed
+        except Exception:
+            _log().exception('Failed while probing app loader for space hooks')
+
+    if not installed:
+        _log().warning('No compatible space hook target found for WoT 2.2')
 
 
 def _remove_space_hook():
-    global _ORIGINAL_ON_SPACE_LOADED
-    if not IN_GAME or _ORIGINAL_ON_SPACE_LOADED is None:
-        return
-    try:
-        import BWPersonality
-        BWPersonality.onSpaceLoaded = _ORIGINAL_ON_SPACE_LOADED
-    except Exception:
-        _log().exception('Failed to remove space hook')
-    _ORIGINAL_ON_SPACE_LOADED = None
+    while _SPACE_HOOKS:
+        module, attr_name, original = _SPACE_HOOKS.pop()
+        try:
+            setattr(module, attr_name, original)
+        except Exception:
+            _log().exception('Failed to remove space hook: %s.%s', getattr(module, '__name__', module), attr_name)
 
 
 def _on_key_event(event):
