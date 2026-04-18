@@ -26,7 +26,7 @@ from gui.modsSettingsApi import templates as t
 logger = logging.getLogger("weather_mod")
 logger.setLevel(logging.DEBUG if os.path.isfile('.debug_mods') else logging.INFO)
 
-__version__ = '1.0.0'
+__version__ = '1.0.1'
 
 
 # ============================================================================
@@ -53,6 +53,23 @@ PRESET_LABELS = {
 
 PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
 MAX_WEIGHT = 20
+
+# Список карт для dropdown — порядок важливий (value = індекс у списку)
+# Перший елемент (індекс 0) — заглушка "оберіть карту"
+MAP_OPTIONS = [
+    u"— Оберіть карту —",
+    u"Малинівка",
+    u"Хіммельсдорф",
+    u"Прохорівка",
+    u"Енськ",
+]
+MAP_IDS = [
+    "",               # індекс 0 — заглушка
+    "02_malinovka",
+    "04_himmelsdorf",
+    "05_prohorovka",
+    "06_ensk",
+]
 
 # Шлях для збереження конфігу користувача
 try:
@@ -204,7 +221,7 @@ _g_ctrl = WeatherController()
 # ШАБЛОН НАЛАШТУВАНЬ ДЛЯ modsSettingsApi
 # ============================================================================
 def _build_template():
-    # Колонка 1 — глобальні налаштування
+    # --- Колонка 1: глобальні налаштування ---
     col1 = [
         t.createLabel(text=u"Загальні налаштування для всіх карт"),
         t.createEmpty(),
@@ -220,33 +237,25 @@ def _build_template():
         ))
 
     col1.append(t.createEmpty())
+    # ВИПРАВЛЕННЯ 1: createHotkey value — список ключів (list of int), не dict
     col1.append(t.createHotkey(
         varName="hotkey",
         text=u"Смена погоды в бою",
-        value={
-            "keyCode":   Keys.KEY_F12,
-            "isKeyDown": True,
-            "hasAlt":    True,
-            "hasShift":  False,
-            "hasCtrl":   False,
-        },
+        value=[Keys.KEY_LALT, Keys.KEY_F12],
     ))
 
-    # Колонка 2 — налаштування по картах
+    # --- Колонка 2: налаштування по картах ---
     col2 = [
         t.createLabel(text=u"Налаштування по картах"),
         t.createEmpty(),
+        # ВИПРАВЛЕННЯ 2: createDropdown —
+        #   options: список рядків (generateOptions читає тільки label)
+        #   value:   int — індекс у списку options (0 = заглушка)
         t.createDropdown(
             varName="active_map",
             text=u"Карта",
-            options=[
-                {"label": u"— Оберіть карту —", "value": ""},
-                {"label": u"Малинівка",    "value": "02_malinovka"},
-                {"label": u"Хіммельсдорф", "value": "04_himmelsdorf"},
-                {"label": u"Прохорівка",   "value": "05_prohorovka"},
-                {"label": u"Енськ",        "value": "06_ensk"},
-            ],
-            value="",
+            options=MAP_OPTIONS,
+            value=0,
         ),
     ]
     for pid in PRESET_ORDER:
@@ -259,6 +268,7 @@ def _build_template():
             interval=1,
         ))
 
+    # ВИПРАВЛЕННЯ 3: ключі column1/column2 — правильні (підтверджено з _constants.py)
     return {
         "modDisplayName": u"Погода на картах",
         "enabled":        True,
@@ -275,7 +285,14 @@ def _on_settings_changed(linkage, newSettings):
         if key in newSettings:
             _g_ctrl.set_global_weight(pid, newSettings[key])
 
-    active_map = newSettings.get("active_map", "")
+    # ВИПРАВЛЕННЯ 4: active_map приходить як int (індекс dropdown),
+    # конвертуємо в map_id через MAP_IDS
+    map_idx = newSettings.get("active_map", 0)
+    try:
+        active_map = MAP_IDS[int(map_idx)]
+    except (IndexError, TypeError, ValueError):
+        active_map = ""
+
     if active_map:
         for pid in PRESET_ORDER:
             key = "map_" + pid
