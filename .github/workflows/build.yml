@@ -16,38 +16,26 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Python 2.7 via Chocolatey
-        run: choco install python2 -y --no-progress
-
-      - name: Verify Python 2.7
-        shell: pwsh
-        run: |
-          $py2 = "C:\Python27\python.exe"
-          if (-not (Test-Path $py2)) { Write-Error "Python 2.7 not found"; exit 1 }
-          & $py2 --version
-
       - name: Determine version
         id: version
-        shell: pwsh
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-              $version = "${{ inputs.version }}"
-          } else {
-              $version = "${{ github.ref_name }}".TrimStart('v')
-          }
-          echo "PROJECT_VERSION=$version" >> $env:GITHUB_ENV
-          Write-Host "Building version: $version"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          echo "PROJECT_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Building version: $VERSION"
 
       - name: Build .wotmod
-        shell: pwsh
-        run: |
-          & "C:\Python27\python.exe" build.py --version $env:PROJECT_VERSION
+        run: python3 build.py --version $PROJECT_VERSION
 
       - name: Upload to Release
         if: startsWith(github.ref, 'refs/tags/')
