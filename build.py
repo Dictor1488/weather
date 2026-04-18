@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-build.py — збирає .wotmod з сирців.
-
-v2: без AS3 (використовуємо modsSettingsApi від izeberg, який сам малює UI).
-Треба тільки скомпілювати Python у .pyc і спакувати в zip.
+build.py — збирає .wotmod з сирців (MAsters style).
 
 Запуск:
-    python2 build.py                   # збирає версію з meta.xml
-    python2 build.py --version 0.1.2   # форсує версію (для CI на тегах)
-    python2 build.py --skip-pyc        # покласти .py замість .pyc (для тестів)
+    python build.py                     # бере версію з meta.xml
+    python build.py --version 0.1.2     # форсує версію
+
+УВАГА: треба Python 2.7, щоб .pyc були сумісні з WoT.
+У GitHub Actions це робиться через Chocolatey на Windows runner.
+Шлях до Python 2.7 беремо з env PYTHON2_EXE або за замовчуванням 'python2'.
 """
 
 from __future__ import print_function
 import argparse
 import os
-import py_compile
 import shutil
+import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -27,6 +27,9 @@ PY_SRC       = os.path.join(ROOT, "python")
 RES_TEMPLATE = os.path.join(ROOT, "resources", "in", "mods")
 DIST         = os.path.join(ROOT, "dist")
 MOD_ID_DIR   = "com.example.weather"
+
+# Шлях до Python 2.7 — з env або стандартні кандидати
+PYTHON2_EXE = os.environ.get("PYTHON2_EXE") or r"C:\Python27\python.exe"
 
 
 def log(msg):
@@ -46,12 +49,17 @@ def patch_meta_version(staging_dir, version):
     tree.write(meta_path, encoding="UTF-8", xml_declaration=True)
 
 
-def compile_python(src_dir, dst_dir, as_pyc=True):
-    """Рекурсивно кладе .py або .pyc у dst_dir зі збереженням структури."""
-    if as_pyc and sys.version_info[0] != 2:
-        log("WARNING: running on Python {}.{} — WoT needs .pyc from Python 2.7!"
-            .format(sys.version_info[0], sys.version_info[1]))
-        log("         Скомпільовані .pyc, найімовірніше, не завантажаться у грі.")
+def compile_python_to_pyc(src_dir, dst_dir):
+    """
+    Копіює тільки mod_*.py файли в dst_dir і викликає Python 2.7
+    для компіляції у .pyc (так, як робить MAsters).
+    """
+    if not os.path.isfile(PYTHON2_EXE):
+        # якщо Python 2.7 немає — падаємо з зрозумілою помилкою
+        log("ERROR: Python 2.7 not found at {}".format(PYTHON2_EXE))
+        log("       Set PYTHON2_EXE env var or install to default path.")
+        log("       On Windows: choco install python2 -y")
+        sys.exit(1)
 
     count = 0
     for dirpath, _, filenames in os.walk(src_dir):
@@ -60,30 +68,30 @@ def compile_python(src_dir, dst_dir, as_pyc=True):
                 continue
             src_file = os.path.join(dirpath, fn)
             rel = os.path.relpath(src_file, src_dir)
-            if as_pyc:
-                dst_file = os.path.join(dst_dir, rel + "c")
-            else:
-                dst_file = os.path.join(dst_dir, rel)
+            dst_py = os.path.join(dst_dir, rel)
 
-            dst_parent = os.path.dirname(dst_file)
-            if not os.path.exists(dst_parent):
-                os.makedirs(dst_parent)
+            if not os.path.exists(os.path.dirname(dst_py)):
+                os.makedirs(os.path.dirname(dst_py))
+            shutil.copyfile(src_file, dst_py)
 
-            if as_pyc:
-                py_compile.compile(src_file, dst_file, doraise=True)
-            else:
-                shutil.copyfile(src_file, dst_file)
+            # Компіляція у .pyc через Python 2.7
+            subprocess.check_call(
+                [PYTHON2_EXE, "-m", "py_compile", dst_py]
+            )
+
+            # Видаляємо .py, залишаємо тільки .pyc (як у MAsters)
+            os.remove(dst_py)
             count += 1
-    log("Processed {} Python files ({})".format(count, "pyc" if as_pyc else "py"))
+    log("Compiled {} .py files to .pyc with Python 2.7".format(count))
 
 
 def build_wotmod(staging_dir, version):
     """
-    .wotmod = zip такої структури:
-        meta.xml                        <- у корені
+    .wotmod = zip без компресії (ZIP_STORED) такої структури:
+        meta.xml
         res/
-            scripts/client/gui/mods/    <- наш Python
-            mods/<author>.<mod>/        <- наші ресурси (конфіги)
+            scripts/client/gui/mods/mod_*.pyc
+            mods/<author>.<mod>/           <- наші ресурси
     """
     if not os.path.exists(DIST):
         os.makedirs(DIST)
@@ -92,6 +100,7 @@ def build_wotmod(staging_dir, version):
     out_path = os.path.join(DIST, out_name)
 
     log("Packing .wotmod -> {}".format(out_path))
+    # УВАГА: ZIP_STORED — без компресії. WoT не читає стиснуті .wotmod!
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_STORED) as zf:
         for dirpath, _, filenames in os.walk(staging_dir):
             for fn in filenames:
@@ -106,8 +115,6 @@ def build_wotmod(staging_dir, version):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", help="override version from meta.xml")
-    ap.add_argument("--skip-pyc", action="store_true",
-                    help="ship .py instead of .pyc (for local testing)")
     args = ap.parse_args()
 
     version = args.version or get_version_from_meta()
@@ -122,16 +129,16 @@ def main():
         # 1. Ресурси
         shutil.copytree(os.path.join(RES_TEMPLATE, MOD_ID_DIR),
                         os.path.join(staging, "res", "mods", MOD_ID_DIR))
+        # meta.xml — у корінь архіву
         shutil.move(os.path.join(staging, "res", "mods", MOD_ID_DIR, "meta.xml"),
                     os.path.join(staging, "meta.xml"))
         patch_meta_version(staging, version)
 
-        # 2. Python → .pyc
+        # 2. Python → .pyc (через Python 2.7)
         pyc_out_dir = os.path.join(staging, "res", "scripts", "client", "gui", "mods")
-        compile_python(
+        compile_python_to_pyc(
             os.path.join(PY_SRC, "gui", "mods"),
             pyc_out_dir,
-            as_pyc=not args.skip_pyc,
         )
 
         # 3. Zip → .wotmod
