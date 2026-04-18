@@ -6,50 +6,311 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
+      build_swf:
+        description: 'Build SWF files'
+        required: true
+        type: boolean
+        default: false
       version:
         description: 'Mod Version'
         required: true
         default: '0.0.1'
+      mod_id:
+        description: 'Mod ID'
+        required: true
+        default: 'com.example.weather'
+      mod_name:
+        description: 'Mod Name'
+        required: true
+        default: 'Weather'
+      mod_description:
+        description: 'Mod Description'
+        required: true
+        default: 'Weather mod'
+      game_version:
+        description: 'World of Tanks version'
+        required: true
+        default: '1.0.0.0'
 
 permissions:
   contents: write
 
+env:
+  FLEX_VERSION: "4.16.1"
+  FLASH_PLAYER_VERSION: "32.0"
+  SWF_VERSION: "39"
+
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Determine version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${{ github.ref_name }}"
-            VERSION="${VERSION#v}"
-          fi
-          echo "PROJECT_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Building version: $VERSION"
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-      - name: Build .wotmod
-        run: python3 build.py --version $PROJECT_VERSION
+      - name: Install Python 2.7 via Chocolatey
+        shell: pwsh
+        run: |
+          choco install python2 -y --no-progress --params "'/InstallDir:C:\Python27'"
+          refreshenv
+
+      - name: Locate Python 2.7
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "C:\Python27\python.exe",
+            "C:\Python27\python27.exe",
+            "C:\tools\python2\python.exe",
+            "C:\ProgramData\Chocolatey\bin\python.exe",
+            "C:\ProgramData\Chocolatey\bin\python2.exe",
+            "C:\ProgramData\Chocolatey\bin\python2.7.exe"
+          )
+
+          try {
+            $cmdPython2 = (Get-Command python2 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+            if ($cmdPython2) { $candidates += $cmdPython2 }
+          } catch {}
+
+          try {
+            $cmdPython = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+            if ($cmdPython) { $candidates += $cmdPython }
+          } catch {}
+
+          $resolved = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+
+          if (-not $resolved -or $resolved.Count -eq 0) {
+            Write-Host "Known candidate paths:"
+            $candidates | ForEach-Object { Write-Host $_ }
+            Write-Error "Python 2.7 not found"
+            exit 1
+          }
+
+          $py2 = $resolved[0]
+          Write-Host "Using Python 2.7 at: $py2"
+          echo "PYTHON2_EXE=$py2" >> $env:GITHUB_ENV
+          & $py2 --version
+
+      - name: Install Java (required for Flex SDK)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_swf == true)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Cache Flex SDK
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_swf == true)
+        id: cache-flex
+        uses: actions/cache@v4
+        with:
+          path: C:\flex-sdk
+          key: flex-sdk-${{ env.FLEX_VERSION }}-v2
+
+      - name: Download and Setup Apache Flex SDK
+        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_swf == true)) && steps.cache-flex.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $flexUrls = @(
+            "https://archive.apache.org/dist/flex/${{ env.FLEX_VERSION }}/binaries/apache-flex-sdk-${{ env.FLEX_VERSION }}-bin.zip",
+            "https://dlcdn.apache.org/flex/${{ env.FLEX_VERSION }}/binaries/apache-flex-sdk-${{ env.FLEX_VERSION }}-bin.zip"
+          )
+          $downloaded = $false
+          foreach ($url in $flexUrls) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile "flex-sdk.zip" -UseBasicParsing -TimeoutSec 300
+              $downloaded = $true
+              break
+            } catch {
+              Write-Host "Failed: $_"
+            }
+          }
+          if (-not $downloaded) {
+            Write-Error "Could not download Flex SDK"
+            exit 1
+          }
+
+          New-Item -ItemType Directory -Force -Path "C:\flex-sdk" | Out-Null
+          Expand-Archive -Path "flex-sdk.zip" -DestinationPath "C:\flex-sdk-temp" -Force
+
+          $extractedItems = Get-ChildItem "C:\flex-sdk-temp"
+          if ($extractedItems.Count -eq 1 -and $extractedItems[0].PSIsContainer) {
+            Get-ChildItem "$($extractedItems[0].FullName)" | Move-Item -Destination "C:\flex-sdk" -Force
+          } else {
+            Get-ChildItem "C:\flex-sdk-temp" | Move-Item -Destination "C:\flex-sdk" -Force
+          }
+
+          Remove-Item "flex-sdk.zip" -Force -ErrorAction SilentlyContinue
+          Remove-Item "C:\flex-sdk-temp" -Recurse -Force -ErrorAction SilentlyContinue
+
+      - name: Setup playerglobal.swc
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_swf == true)
+        shell: pwsh
+        run: |
+          $libsPlayerGlobal = "as3\libs\playerglobal.swc"
+          if (-not (Test-Path $libsPlayerGlobal)) {
+            Write-Error "playerglobal.swc not found"
+            exit 1
+          }
+
+          $vDir = "C:\flex-sdk\frameworks\libs\player\32.0"
+          New-Item -ItemType Directory -Force -Path $vDir | Out-Null
+          Copy-Item $libsPlayerGlobal "$vDir\playerglobal.swc" -Force
+          Copy-Item $libsPlayerGlobal "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
+
+          $flexConfig = "C:\flex-sdk\frameworks\flex-config.xml"
+          if (Test-Path $flexConfig) {
+            $content = Get-Content $flexConfig -Raw
+            $content = $content -replace '\{playerglobalHome\}', 'C:/flex-sdk/frameworks/libs/player'
+            $content | Set-Content $flexConfig -Encoding UTF8
+          }
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install psutil
+
+      - name: Determine Version and Mod Info
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $version = "${{ inputs.version }}"
+            $modId = "${{ inputs.mod_id }}"
+            $modName = "${{ inputs.mod_name }}"
+            $modDescription = "${{ inputs.mod_description }}"
+            $gameVersion = "${{ inputs.game_version }}"
+          } else {
+            $version = "${{ github.ref_name }}".TrimStart('v')
+            $modId = "com.example.weather"
+            $modName = "Weather"
+            $modDescription = "Weather mod"
+            $gameVersion = "1.0.0.0"
+          }
+
+          echo "PROJECT_VERSION=$version" >> $env:GITHUB_ENV
+          echo "MOD_ID=$modId" >> $env:GITHUB_ENV
+          echo "MOD_NAME=$modName" >> $env:GITHUB_ENV
+          echo "MOD_DESCRIPTION=$modDescription" >> $env:GITHUB_ENV
+          echo "GAME_VERSION=$gameVersion" >> $env:GITHUB_ENV
+
+      - name: Build SWF files
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_swf == true)
+        shell: pwsh
+        run: |
+          $env:Path = "C:\flex-sdk\bin;$env:Path"
+          $mxmlcPath = "C:\flex-sdk\bin\mxmlc.bat"
+          if (-not (Test-Path $mxmlcPath)) {
+            Write-Error "mxmlc not found"
+            exit 1
+          }
+
+          $outputPath = "as3/bin"
+          New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
+
+          $libArgs = @()
+          Get-ChildItem -Path "as3/libs" -Filter "*.swc" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.Name -eq "playerglobal.swc") {
+              $libArgs += "-library-path+=$($_.FullName)"
+            } else {
+              $libArgs += "-external-library-path+=$($_.FullName)"
+            }
+          }
+
+          $projects = Get-ChildItem -Path "as3/src_flash" -Filter "*.as3proj" -Recurse -ErrorAction SilentlyContinue
+          foreach ($proj in $projects) {
+            $projDir = $proj.DirectoryName
+            [xml]$projXml = Get-Content $proj.FullName
+
+            $swfName = ($projXml.project.o.movie | Where-Object { $_.path -and $_.path -ne "" } | Select-Object -First 1).path
+            if (-not $swfName) { $swfName = "output.swf" }
+
+            $mainClassPath = $null
+            $projXml.project.compileTargets.compile | ForEach-Object {
+              if ($_.path) { $mainClassPath = Join-Path $projDir $_.path }
+            }
+
+            if (-not $mainClassPath -or -not (Test-Path $mainClassPath)) {
+              Write-Error "Main class not found for project $($proj.FullName)"
+              exit 1
+            }
+
+            $outputSwf = Join-Path $outputPath $swfName
+            $mxmlcArgs = @()
+
+            $srcDir = Join-Path $projDir "src"
+            if (Test-Path $srcDir) { $mxmlcArgs += "-source-path+=$srcDir" }
+
+            $mxmlcArgs += $libArgs
+            $mxmlcArgs += @(
+              "-output=$outputSwf",
+              "-target-player=${{ env.FLASH_PLAYER_VERSION }}",
+              "-swf-version=${{ env.SWF_VERSION }}",
+              "-strict=true",
+              "-optimize=true",
+              "--"
+            )
+            $mxmlcArgs += $mainClassPath
+
+            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs -NoNewWindow -Wait -PassThru -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
+            Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
+
+            if ($process.ExitCode -ne 0) {
+              Write-Error "Compilation failed"
+              exit 1
+            }
+
+            Write-Host "SUCCESS: $swfName" -ForegroundColor Green
+            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Create build.json
+        shell: pwsh
+        run: |
+          @{
+            version = 5
+            software = @{
+              animate = ""
+              python  = "${{ env.PYTHON2_EXE }}"
+            }
+            game = @{
+              force   = $false
+              folder  = "World_of_Tanks_EU"
+              version = "${{ env.GAME_VERSION }}"
+            }
+            info = @{
+              id          = "${{ env.MOD_ID }}"
+              name        = "${{ env.MOD_NAME }}"
+              description = "${{ env.MOD_DESCRIPTION }}"
+              version     = "${{ env.PROJECT_VERSION }}"
+            }
+          } | ConvertTo-Json -Depth 4 | Out-File -FilePath build.json -Encoding UTF8
+
+      - name: Debug build.json
+        shell: pwsh
+        run: |
+          Get-Content build.json
+          if (-not (Test-Path "${{ env.PYTHON2_EXE }}")) {
+            Write-Error "Resolved Python 2 executable does not exist: ${{ env.PYTHON2_EXE }}"
+            exit 1
+          }
+
+      - name: Run Build Script
+        shell: pwsh
+        run: |
+          python build.py --distribute
 
       - name: Upload to Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: ncipollo/release-action@v1.14.0
         with:
           tag: "v${{ env.PROJECT_VERSION }}"
-          artifacts: "dist/*.wotmod"
+          commit: ${{ github.sha }}
+          artifacts: "build/*.wotmod,build/*.zip"
           allowUpdates: true
+          removeArtifacts: true
           makeLatest: true
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload artifact (for manual runs)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: weather-mod-${{ env.PROJECT_VERSION }}
-          path: dist/*.wotmod
