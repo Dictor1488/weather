@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Weather controller.
-v1.6.0 — точковий probe реального weather API у WoT 2.2
+v1.7.0 — бойовий порядок застосування через player + Weather
 """
 import json
 import os
@@ -36,12 +36,22 @@ PRESET_NUMERIC_IDS = {
     "midnight": 4,
 }
 
-PRESET_TIME_OF_DAY = {
-    "standard": 12.0,
-    "midday": 12.0,
-    "sunset": 18.5,
-    "overcast": 13.0,
-    "midnight": 0.2,
+# arena period ids from probing in logs: 0,1,2,4 were accepted; overcast kept on 3 for continuity
+PRESET_PERIOD_IDS = {
+    "standard": 0,
+    "midday": 1,
+    "sunset": 2,
+    "overcast": 3,
+    "midnight": 4,
+}
+
+# BigWorld.timeOfDay(spaceTimeOfDay) takes unicode like '10:00'
+PRESET_TIME_TEXT = {
+    "standard": u"12:00",
+    "midday": u"12:00",
+    "sunset": u"18:30",
+    "overcast": u"13:00",
+    "midnight": u"00:12",
 }
 
 PRESET_LABELS = {
@@ -203,21 +213,15 @@ def _fmt_exc():
         return '<traceback unavailable>'
 
 
-def _log_probe_ok(label, args, result):
-    logger.info('PROBE OK: %s args=%s result=%s', label, _safe_repr(args), _safe_repr(result))
+def _log_ok(step, detail=''):
+    if detail:
+        logger.info('STEP OK: %s | %s', step, detail)
+    else:
+        logger.info('STEP OK: %s', step)
 
 
-def _log_probe_fail(label, args):
-    logger.error('PROBE FAIL: %s args=%s\n%s', label, _safe_repr(args), _fmt_exc())
-
-
-def _probe_call(fn, label, variants):
-    for args in variants:
-        try:
-            result = fn(*args)
-            _log_probe_ok(label, args, result)
-        except Exception:
-            _log_probe_fail(label, args)
+def _log_fail(step):
+    logger.error('STEP FAIL: %s\n%s', step, _fmt_exc())
 
 
 def _dump_focus_diagnostics():
@@ -225,51 +229,30 @@ def _dump_focus_diagnostics():
     if _DIAGNOSTICS_DONE:
         return
     _DIAGNOSTICS_DONE = True
-
     logger.info('====== FOCUS DIAGNOSTICS START ======')
     try:
         player = BigWorld.player()
         logger.info('player=%s', _safe_repr(player))
         if player is not None:
-            for attr in ('weatherPresetID', '_PlayerAvatar__blArenaPeriod', '_PlayerAvatar__isSpaceInitialized'):
-                try:
-                    logger.info('player.%s=%s', attr, _safe_repr(getattr(player, attr)))
-                except Exception:
-                    _log_probe_fail('getattr(player, %s)' % attr, ())
-            for name in ('_PlayerAvatar__applyTimeAndWeatherSettings', '_PlayerAvatar__onArenaPeriodChange'):
-                fn = getattr(player, name, None)
-                logger.info('player.%s callable=%s', name, callable(fn))
-    except Exception:
-        logger.error('FOCUS player diagnostics failed\n%s', _fmt_exc())
-
-    try:
+            for attr in ('weatherPresetID', '_PlayerAvatar__blArenaPeriod', '_PlayerAvatar__isSpaceInitialized', 'spaceID'):
+                logger.info('player.%s=%s', attr, _safe_repr(getattr(player, attr, None)))
+            logger.info('player._PlayerAvatar__applyTimeAndWeatherSettings callable=%s', callable(getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)))
         logger.info('BigWorld.timeOfDay callable=%s', callable(getattr(BigWorld, 'timeOfDay', None)))
         logger.info('BigWorld.spaceTimeOfDay callable=%s', callable(getattr(BigWorld, 'spaceTimeOfDay', None)))
-    except Exception:
-        logger.error('FOCUS BigWorld diagnostics failed\n%s', _fmt_exc())
-
-    try:
         import Weather
-        logger.info('Weather=%s', _safe_repr(Weather))
         logger.info('Weather.s_weather=%s', _safe_repr(getattr(Weather, 's_weather', None)))
         if hasattr(Weather, 'weather'):
-            try:
-                logger.info('Weather.weather()=%s', _safe_repr(Weather.weather()))
-            except Exception:
-                _log_probe_fail('Weather.weather', ())
+            logger.info('Weather.weather()=%s', _safe_repr(Weather.weather()))
     except Exception:
-        logger.error('FOCUS Weather diagnostics failed\n%s', _fmt_exc())
-
+        logger.error('FOCUS diagnostics failed\n%s', _fmt_exc())
     logger.info('====== FOCUS DIAGNOSTICS END ======')
 
 
-# kept only for hangar/preload path; in battle ResMgr save is not the main path
+# kept only for preload path; battle path is player + Weather
 
 def apply_preset_to_space(space_name, preset_id):
     guid = PRESET_GUIDS.get(preset_id)
-    if guid is None:
-        return
-    if not IN_GAME:
+    if guid is None or not IN_GAME:
         return
     try:
         path = 'spaces/%s/space.settings' % space_name
@@ -279,110 +262,127 @@ def apply_preset_to_space(space_name, preset_id):
             return
         section.writeString('environment/override', guid)
         try:
-            save_result = section.save()
-            logger.info('space.settings save result for %s: %s', space_name, _safe_repr(save_result))
+            section.save()
+            logger.info('space.settings save ok for %s', space_name)
         except Exception:
             logger.error('space.settings save failed for %s\n%s', space_name, _fmt_exc())
     except Exception:
         logger.error('apply_preset_to_space failed for %s\n%s', space_name, _fmt_exc())
 
 
-def _try_weather_api(guid, methods_tried):
+def _set_player_values(player, preset_id):
+    numeric = PRESET_NUMERIC_IDS.get(preset_id, 0)
+    period = PRESET_PERIOD_IDS.get(preset_id, numeric)
+    setattr(player, 'weatherPresetID', numeric)
+    setattr(player, '_PlayerAvatar__blArenaPeriod', period)
+    return numeric, period
+
+
+def _apply_player_weather(player, preset_id, guid):
+    numeric, period = _set_player_values(player, preset_id)
+    _log_ok('player values', 'weatherPresetID=%s blArenaPeriod=%s guid=%s' % (numeric, period, guid))
+
+    apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
+    if callable(apply_fn):
+        try:
+            apply_fn(period)
+            _log_ok('player.apply(period)', _safe_repr(period))
+        except Exception:
+            _log_fail('player.apply(period=%s)' % period)
+        try:
+            apply_fn(numeric)
+            _log_ok('player.apply(numeric)', _safe_repr(numeric))
+        except Exception:
+            _log_fail('player.apply(numeric=%s)' % numeric)
+        try:
+            apply_fn()
+            _log_ok('player.apply()')
+        except Exception:
+            _log_fail('player.apply()')
+        if guid:
+            try:
+                apply_fn(guid)
+                _log_ok('player.apply(guid)', guid)
+            except Exception:
+                _log_fail('player.apply(guid=%s)' % guid)
+    else:
+        logger.warning('player._PlayerAvatar__applyTimeAndWeatherSettings not callable')
+
+    return numeric, period
+
+
+def _apply_time_text(player, preset_id):
+    tod = PRESET_TIME_TEXT.get(preset_id, u'12:00')
+    fn = getattr(BigWorld, 'timeOfDay', None)
+    if callable(fn):
+        try:
+            res = fn(tod)
+            _log_ok('BigWorld.timeOfDay', '%s -> %s' % (tod, _safe_repr(res)))
+        except Exception:
+            _log_fail('BigWorld.timeOfDay(%s)' % tod)
+
+    fn = getattr(BigWorld, 'spaceTimeOfDay', None)
+    space_id = getattr(player, 'spaceID', None)
+    if callable(fn) and space_id is not None:
+        try:
+            res = fn(space_id, tod)
+            _log_ok('BigWorld.spaceTimeOfDay', 'spaceID=%s tod=%s -> %s' % (space_id, tod, _safe_repr(res)))
+        except Exception:
+            _log_fail('BigWorld.spaceTimeOfDay(%s, %s)' % (space_id, tod))
+
+
+def _apply_weather_object(guid):
     try:
         import Weather
     except Exception:
         logger.error('Weather import failed\n%s', _fmt_exc())
         return
 
-    candidates = []
-    if getattr(Weather, 's_weather', None) is not None:
-        candidates.append(('Weather.s_weather', Weather.s_weather))
+    targets = []
+    obj = getattr(Weather, 's_weather', None)
+    if obj is not None:
+        targets.append(('Weather.s_weather', obj))
     if hasattr(Weather, 'weather'):
         try:
-            candidates.append(('Weather.weather()', Weather.weather()))
+            obj2 = Weather.weather()
+            if obj2 is not None and obj2 is not obj:
+                targets.append(('Weather.weather()', obj2))
+            elif obj2 is not None and obj is None:
+                targets.append(('Weather.weather()', obj2))
         except Exception:
-            _log_probe_fail('Weather.weather', ())
+            _log_fail('Weather.weather() resolve')
 
-    for target_name, target in candidates:
+    for label, target in targets:
+        try:
+            is_random = getattr(target, 'isWeatherRandom', None)
+            if callable(is_random):
+                _log_ok(label + '.isWeatherRandom(before)', _safe_repr(is_random()))
+        except Exception:
+            _log_fail(label + '.isWeatherRandom(before)')
+
         toggle = getattr(target, 'toggleRandomWeather', None)
         if callable(toggle):
-            for args in ((), (guid,)):
-                try:
-                    res = toggle(*args)
-                    methods_tried.append('%s.toggleRandomWeather%s' % (target_name, _safe_repr(args)))
-                    _log_probe_ok('%s.toggleRandomWeather' % target_name, args, res)
-                except Exception:
-                    _log_probe_fail('%s.toggleRandomWeather' % target_name, args)
+            try:
+                res = toggle(guid or '')
+                _log_ok(label + '.toggleRandomWeather', '%s -> %s' % (guid or '', _safe_repr(res)))
+            except Exception:
+                _log_fail(label + '.toggleRandomWeather(%s)' % (guid or ''))
 
-        for method_name in ('nextWeatherSystem', '_randomWeather'):
+        for method_name in ('_randomWeather', 'nextWeatherSystem'):
             fn = getattr(target, method_name, None)
             if callable(fn):
-                for args in ((guid,),):
-                    try:
-                        res = fn(*args)
-                        methods_tried.append('%s.%s%s' % (target_name, method_name, _safe_repr(args)))
-                        _log_probe_ok('%s.%s' % (target_name, method_name), args, res)
-                    except Exception:
-                        _log_probe_fail('%s.%s' % (target_name, method_name), args)
-
-        fn = getattr(target, '_weatherSystemsForCurrentSpace', None)
-        if callable(fn):
-            try:
-                res = fn()
-                methods_tried.append('%s._weatherSystemsForCurrentSpace()' % target_name)
-                _log_probe_ok('%s._weatherSystemsForCurrentSpace' % target_name, (), res)
-            except Exception:
-                _log_probe_fail('%s._weatherSystemsForCurrentSpace' % target_name, ())
-
-
-def _try_player_api(player, preset_id, guid, methods_tried):
-    if player is None:
-        return
-
-    numeric = PRESET_NUMERIC_IDS.get(preset_id, 0)
-
-    for attr_name, value in (('weatherPresetID', numeric), ('_PlayerAvatar__blArenaPeriod', numeric)):
-        try:
-            setattr(player, attr_name, value)
-            methods_tried.append('set player.%s=%s' % (attr_name, value))
-            logger.info('SET OK: player.%s=%s', attr_name, value)
-        except Exception:
-            logger.error('SET FAIL: player.%s=%s\n%s', attr_name, value, _fmt_exc())
-
-    private_apply = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
-    if callable(private_apply):
-        for args in ((numeric,), (), (guid,)):
-            try:
-                res = private_apply(*args)
-                methods_tried.append('player._PlayerAvatar__applyTimeAndWeatherSettings%s' % _safe_repr(args))
-                _log_probe_ok('player._PlayerAvatar__applyTimeAndWeatherSettings', args, res)
-            except Exception:
-                _log_probe_fail('player._PlayerAvatar__applyTimeAndWeatherSettings', args)
-
-
-def _try_time_api(player, preset_id, methods_tried):
-    tod = PRESET_TIME_OF_DAY.get(preset_id, 12.0)
-
-    fn = getattr(BigWorld, 'timeOfDay', None)
-    if callable(fn):
-        for args in ((tod,), (float(tod),), (int(tod),)):
-            try:
-                res = fn(*args)
-                methods_tried.append('BigWorld.timeOfDay%s' % _safe_repr(args))
-                _log_probe_ok('BigWorld.timeOfDay', args, res)
-            except Exception:
-                _log_probe_fail('BigWorld.timeOfDay', args)
-
-    if player is not None and hasattr(player, 'spaceID'):
-        fn = getattr(BigWorld, 'spaceTimeOfDay', None)
-        if callable(fn):
-            for args in ((player.spaceID, tod), (player.spaceID, float(tod)), (player.spaceID, int(tod))):
                 try:
-                    res = fn(*args)
-                    methods_tried.append('BigWorld.spaceTimeOfDay%s' % _safe_repr(args))
-                    _log_probe_ok('BigWorld.spaceTimeOfDay', args, res)
+                    res = fn(guid or '')
+                    _log_ok(label + '.' + method_name, '%s -> %s' % (guid or '', _safe_repr(res)))
                 except Exception:
-                    _log_probe_fail('BigWorld.spaceTimeOfDay', args)
+                    _log_fail(label + '.' + method_name + '(%s)' % (guid or ''))
+
+        try:
+            is_random = getattr(target, 'isWeatherRandom', None)
+            if callable(is_random):
+                _log_ok(label + '.isWeatherRandom(after)', _safe_repr(is_random()))
+        except Exception:
+            _log_fail(label + '.isWeatherRandom(after)')
 
 
 def apply_preset_in_battle(preset_id):
@@ -391,27 +391,54 @@ def apply_preset_in_battle(preset_id):
 
     _dump_focus_diagnostics()
 
-    guid = PRESET_GUIDS.get(preset_id, '')
-    if guid is None:
-        guid = ''
+    guid = PRESET_GUIDS.get(preset_id) or ''
+    logger.info('===== APPLY START preset=%s guid=%s numeric=%s period=%s tod=%s =====',
+                preset_id, guid, PRESET_NUMERIC_IDS.get(preset_id), PRESET_PERIOD_IDS.get(preset_id), PRESET_TIME_TEXT.get(preset_id))
 
-    methods_tried = []
     try:
         player = BigWorld.player()
     except Exception:
-        player = None
         logger.error('BigWorld.player() failed\n%s', _fmt_exc())
+        return False
 
-    logger.info('===== APPLY START preset=%s guid=%s numeric=%s tod=%s =====',
-                preset_id, guid, PRESET_NUMERIC_IDS.get(preset_id), PRESET_TIME_OF_DAY.get(preset_id))
+    if player is None:
+        logger.warning('apply_preset_in_battle: no player')
+        return False
 
-    _try_weather_api(guid, methods_tried)
-    _try_player_api(player, preset_id, guid, methods_tried)
-    _try_time_api(player, preset_id, methods_tried)
+    # 1) hard-set player state
+    try:
+        numeric, period = _apply_player_weather(player, preset_id, guid)
+    except Exception:
+        _log_fail('STEP 1 player hard-set')
+        numeric = PRESET_NUMERIC_IDS.get(preset_id, 0)
+        period = PRESET_PERIOD_IDS.get(preset_id, numeric)
 
-    logger.info('apply_preset_in_battle(%s): tried methods = %s', preset_id, methods_tried)
+    # 2) sync textual time to space/client API
+    try:
+        _apply_time_text(player, preset_id)
+    except Exception:
+        _log_fail('STEP 2 time sync')
+
+    # 3) apply Weather object state, which visibly toggles random weather in logs
+    try:
+        _apply_weather_object(guid)
+    except Exception:
+        _log_fail('STEP 3 weather object sync')
+
+    # 4) final player re-apply after Weather mutations
+    try:
+        apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
+        if callable(apply_fn):
+            apply_fn(period)
+            _log_ok('STEP 4 final player.apply(period)', _safe_repr(period))
+    except Exception:
+        _log_fail('STEP 4 final player.apply(period=%s)' % period)
+
+    logger.info('FINAL STATE: player.weatherPresetID=%s player._PlayerAvatar__blArenaPeriod=%s',
+                _safe_repr(getattr(player, 'weatherPresetID', None)),
+                _safe_repr(getattr(player, '_PlayerAvatar__blArenaPeriod', None)))
     logger.info('===== APPLY END preset=%s =====', preset_id)
-    return bool(methods_tried)
+    return True
 
 
 class WeatherController(object):
