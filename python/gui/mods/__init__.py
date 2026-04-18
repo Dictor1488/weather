@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Точка входу мода.
-v1.2.0 — повний список карт (48 штук)
+v1.3.0 — hook на gui.app_loader.loader.BattleSpace + fallback через player.arena
 """
 
 try:
@@ -15,18 +15,14 @@ except ImportError:
 from weather_controller import g_controller
 
 
-_SPACE_HOOKS = []
+_BATTLE_SPACE_HOOKS = []  # list of (cls, attr_name, original_func)
 _KEY_HOOK_INSTALLED = False
 _INIT_DONE = False
 
 
 # ============================================================================
-# Повний список карт (id, локалізована назва)
+# Повний список карт
 # ============================================================================
-# Використовується і в dropdown панелі налаштувань, і для per-map ваг.
-# MAP_IDS — список id у тому ж порядку, що й пункти dropdown.
-# MAP_LABELS — відображувані назви.
-# Перший елемент — порожній плейсхолдер "Оберіть карту".
 ALL_MAPS = [
     ('',                       u'— Оберіть карту —'),
     ('01_karelia',             u'Карелія'),
@@ -88,83 +84,70 @@ def _log():
     return logging.getLogger('weather_mod')
 
 
-def _extract_space_name(args, kwargs):
-    candidates = []
-    if args:
-        candidates.extend(args)
-    if kwargs:
-        for key in ('spaceName', 'space_name', 'spaceID', 'spaceId', 'name', 'path'):
-            if key in kwargs:
-                candidates.append(kwargs[key])
-    for value in candidates:
-        if isinstance(value, basestring):
-            return value
-    return None
+# ============================================================================
+# Hook на BattleSpace / BattleLoadingSpace з gui.app_loader.loader
+# ============================================================================
+def _install_battle_space_hook():
+    """
+    У логу ми бачимо:
+        [gui.app_loader.loader] Space is changed: WaitingSpace() -> BattleLoadingSpace()
+        [gui.app_loader.loader] Space is changed: BattleLoadingSpace() -> BattleSpace()
 
-
-def _patch_callable(module, attr_name):
-    original = getattr(module, attr_name, None)
-    if original is None or not callable(original):
-        return False
-
-    for entry in _SPACE_HOOKS:
-        if entry[0] is module and entry[1] == attr_name:
-            return True
-
-    def wrapped(*args, **kwargs):
-        space_name = _extract_space_name(args, kwargs)
-        if space_name:
-            try:
-                g_controller.on_space_about_to_load(space_name)
-            except Exception:
-                _log().exception('space pre-load hook failed for %s', space_name)
-        return original(*args, **kwargs)
-
-    setattr(module, attr_name, wrapped)
-    _SPACE_HOOKS.append((module, attr_name, original))
-    _log().info('Installed weather space hook: %s.%s', getattr(module, '__name__', module), attr_name)
-    return True
-
-
-def _install_space_hook():
-    if not IN_GAME or _SPACE_HOOKS:
+    Це поля в класі IGlobalSpace, що мають методи enter/exit/update.
+    Хукаємо enter() у BattleSpace — спрацює на початку бою.
+    """
+    if not IN_GAME or _BATTLE_SPACE_HOOKS:
         return
 
-    installed = False
+    log = _log()
 
     try:
-        import game
-        for attr_name in ('loadSpace', 'startLoadingSpace', 'switchSpace', 'changeSpace', 'onSpaceLoaded'):
-            installed = _patch_callable(game, attr_name) or installed
+        from gui.app_loader import spaces
+
+        targets = []
+        # BattleSpace — основний клас гри в бою
+        if hasattr(spaces, 'BattleSpace'):
+            targets.append(('BattleSpace', spaces.BattleSpace))
+        # BattleLoadingSpace — момент завантаження карти
+        if hasattr(spaces, 'BattleLoadingSpace'):
+            targets.append(('BattleLoadingSpace', spaces.BattleLoadingSpace))
+
+        for target_name, cls in targets:
+            # Хукаємо метод enter(), що викликається при переході в цей space
+            if hasattr(cls, 'enter'):
+                original = cls.enter
+
+                def make_wrapper(orig, tname):
+                    def wrapped(self, *args, **kwargs):
+                        try:
+                            g_controller.on_battle_space_entered(tname)
+                        except Exception:
+                            log.exception('battle space hook failed: %s', tname)
+                        return orig(self, *args, **kwargs)
+                    return wrapped
+
+                cls.enter = make_wrapper(original, target_name)
+                _BATTLE_SPACE_HOOKS.append((cls, 'enter', original))
+                log.info('Installed hook: gui.app_loader.spaces.%s.enter', target_name)
+
+        if not _BATTLE_SPACE_HOOKS:
+            log.warning('No BattleSpace classes found in gui.app_loader.spaces')
     except Exception:
-        _log().exception('Failed while probing game module for space hooks')
+        log.exception('Failed to install battle space hook')
 
-    if not installed:
+
+def _remove_battle_space_hook():
+    while _BATTLE_SPACE_HOOKS:
+        cls, attr, original = _BATTLE_SPACE_HOOKS.pop()
         try:
-            import gui.app_loader.loader as app_loader_module
-            for attr_name in ('notifySpaceChanged', 'onSpaceChanged'):
-                installed = _patch_callable(app_loader_module, attr_name) or installed
+            setattr(cls, attr, original)
         except Exception:
-            _log().exception('Failed while probing app loader for space hooks')
-
-    if not installed:
-        _log().warning('No compatible space hook target found for WoT 2.2')
-
-
-def _remove_space_hook():
-    while _SPACE_HOOKS:
-        module, attr_name, original = _SPACE_HOOKS.pop()
-        try:
-            setattr(module, attr_name, original)
-        except Exception:
-            _log().exception('Failed to remove space hook: %s.%s', getattr(module, '__name__', module), attr_name)
+            _log().exception('Failed to remove battle space hook')
 
 
 # ============================================================================
-# Хоткей: обробка КЛАВІАТУРИ у БОЮ
+# Key hook
 # ============================================================================
-# У бою InputHandler.g_instance.onKeyDown може не працювати.
-# Тому слухаємо ще й через BigWorld.player() events, якщо вдасться.
 def _on_key_event(event):
     if not IN_GAME:
         return
@@ -173,7 +156,6 @@ def _on_key_event(event):
 
     codes = g_controller.config.hotkey_codes
     if not codes:
-        # Дефолт ALT+F12
         if event.key == Keys.KEY_F12 and BigWorld.isKeyDown(Keys.KEY_LALT):
             g_controller.cycle_preset_in_battle()
         return
@@ -196,7 +178,7 @@ def _install_key_hook():
         if getattr(InputHandler, 'g_instance', None) is not None:
             InputHandler.g_instance.onKeyDown += _on_key_event
             _KEY_HOOK_INSTALLED = True
-            _log().info('Key hook installed (InputHandler.g_instance.onKeyDown)')
+            _log().info('Key hook installed')
     except Exception:
         _log().exception('Failed to install key hook')
 
@@ -209,17 +191,16 @@ def _remove_key_hook():
         if getattr(InputHandler, 'g_instance', None) is not None:
             InputHandler.g_instance.onKeyDown -= _on_key_event
     except Exception:
-        _log().exception('Failed to remove key hook')
+        pass
     _KEY_HOOK_INSTALLED = False
 
 
 def open_weather_window():
-    """Викликається з кнопки "..." у modsSettingsApi. Для MVP — нічого."""
     pass
 
 
 # ============================================================================
-# modsSettingsApi callback
+# Settings callback
 # ============================================================================
 def _on_settings_changed(linkage, newSettings):
     log = _log()
@@ -278,7 +259,7 @@ def init(*args, **kwargs):
     if _INIT_DONE:
         return
 
-    _install_space_hook()
+    _install_battle_space_hook()
     _install_key_hook()
 
     try:
@@ -288,31 +269,25 @@ def init(*args, **kwargs):
 
         current_codes = g_controller.config.hotkey_codes or [K.KEY_LALT, K.KEY_F12]
 
-        # Слайдери для глобальних налаштувань
-        def make_preset_sliders(prefix, values_from_config):
+        def make_sliders(prefix, values):
             return [
-                t.createSlider(varName=prefix + 'standard', text=u'Стандарт',
-                               value=values_from_config.get('standard', 0),
-                               min=0, max=20, interval=1),
-                t.createSlider(varName=prefix + 'midnight', text=u'Ніч',
-                               value=values_from_config.get('midnight', 0),
-                               min=0, max=20, interval=1),
-                t.createSlider(varName=prefix + 'overcast', text=u'Пасмурно',
-                               value=values_from_config.get('overcast', 0),
-                               min=0, max=20, interval=1),
-                t.createSlider(varName=prefix + 'sunset', text=u'Закат',
-                               value=values_from_config.get('sunset', 0),
-                               min=0, max=20, interval=1),
-                t.createSlider(varName=prefix + 'midday', text=u'Полдень',
-                               value=values_from_config.get('midday', 0),
-                               min=0, max=20, interval=1),
+                t.createSlider(varName=prefix + 'standard', text=u'Стандарт' if prefix == 'global_' else u'[карта] Стандарт',
+                               value=values.get('standard', 0), min=0, max=20, interval=1),
+                t.createSlider(varName=prefix + 'midnight', text=u'Ніч' if prefix == 'global_' else u'[карта] Ніч',
+                               value=values.get('midnight', 0), min=0, max=20, interval=1),
+                t.createSlider(varName=prefix + 'overcast', text=u'Пасмурно' if prefix == 'global_' else u'[карта] Пасмурно',
+                               value=values.get('overcast', 0), min=0, max=20, interval=1),
+                t.createSlider(varName=prefix + 'sunset', text=u'Закат' if prefix == 'global_' else u'[карта] Закат',
+                               value=values.get('sunset', 0), min=0, max=20, interval=1),
+                t.createSlider(varName=prefix + 'midday', text=u'Полдень' if prefix == 'global_' else u'[карта] Полдень',
+                               value=values.get('midday', 0), min=0, max=20, interval=1),
             ]
 
         column1 = [
             t.createLabel(text=u'Загальні налаштування для всіх карт'),
             t.createEmpty(),
         ]
-        column1.extend(make_preset_sliders('global_', g_controller.config.global_weights))
+        column1.extend(make_sliders('global_', g_controller.config.global_weights))
         column1.append(t.createEmpty())
         column1.append(t.createHotkey(varName='hotkey', text=u'Смена погоды в бою',
                                       value=current_codes))
@@ -320,27 +295,11 @@ def init(*args, **kwargs):
         column2 = [
             t.createLabel(text=u'Налаштування по картах'),
             t.createEmpty(),
-            t.createDropdown(
-                varName='active_map',
-                text=u'Карта',
-                options=MAP_LABELS,
-                value=0,
-            ),
+            t.createDropdown(varName='active_map', text=u'Карта',
+                             options=MAP_LABELS, value=0),
         ]
-        column2.extend(make_preset_sliders('map_', {pid: 0 for pid in
-                                                     ['standard', 'midnight', 'overcast', 'sunset', 'midday']}))
-        # Робимо слайдери карт з префіксом [карта] у лейблі
-        for slider in column2[-5:]:
-            if 'text' in slider and slider['text'].startswith(u'Стандарт'):
-                slider['text'] = u'[карта] Стандарт'
-            elif 'text' in slider and slider['text'].startswith(u'Ніч'):
-                slider['text'] = u'[карта] Ніч'
-            elif 'text' in slider and slider['text'].startswith(u'Пасмурно'):
-                slider['text'] = u'[карта] Пасмурно'
-            elif 'text' in slider and slider['text'].startswith(u'Закат'):
-                slider['text'] = u'[карта] Закат'
-            elif 'text' in slider and slider['text'].startswith(u'Полдень'):
-                slider['text'] = u'[карта] Полдень'
+        column2.extend(make_sliders('map_', {pid: 0 for pid in
+                                              ['standard', 'midnight', 'overcast', 'sunset', 'midday']}))
 
         template = {
             'modDisplayName': u'Погода на картах',
@@ -366,7 +325,7 @@ def init(*args, **kwargs):
 def fini(*args, **kwargs):
     global _INIT_DONE
     _remove_key_hook()
-    _remove_space_hook()
+    _remove_battle_space_hook()
     _INIT_DONE = False
 
 
