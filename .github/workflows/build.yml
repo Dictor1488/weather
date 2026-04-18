@@ -1,48 +1,67 @@
-name: Build .wotmod
+name: Build and Release .wotmod
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Mod Version'
+        required: true
+        default: '0.0.1'
+
+permissions:
+  contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-and-release:
+    runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract version
-        id: version
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          else
-            VERSION="0.0.0-dev-${GITHUB_SHA::7}"
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION"
+      - name: Install Python 2.7 via Chocolatey
+        run: choco install python2 -y --no-progress
 
-      - name: Setup Python 2.7
+      - name: Verify Python 2.7
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python2.7
-          python2.7 --version
+          $py2 = "C:\Python27\python.exe"
+          if (-not (Test-Path $py2)) { Write-Error "Python 2.7 not found"; exit 1 }
+          & $py2 --version
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+              $version = "${{ inputs.version }}"
+          } else {
+              $version = "${{ github.ref_name }}".TrimStart('v')
+          }
+          echo "PROJECT_VERSION=$version" >> $env:GITHUB_ENV
+          Write-Host "Building version: $version"
 
       - name: Build .wotmod
-        run: python2.7 build.py --version ${{ steps.version.outputs.version }}
+        shell: pwsh
+        run: |
+          & "C:\Python27\python.exe" build.py --version $env:PROJECT_VERSION
 
-      - name: Upload artifact
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: ncipollo/release-action@v1.14.0
+        with:
+          tag: "v${{ env.PROJECT_VERSION }}"
+          artifacts: "dist/*.wotmod"
+          allowUpdates: true
+          makeLatest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact (for manual runs)
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: weather-mod-${{ steps.version.outputs.version }}
+          name: weather-mod-${{ env.PROJECT_VERSION }}
           path: dist/*.wotmod
-
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.wotmod
-          generate_release_notes: true
