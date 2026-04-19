@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v3.2
-- summon(DataSection) працює (не падає)
-- nextWeatherSystem(fadeSpeed) виправлено
-- Чистий код без зайвого логування
+Weather controller v4.0
+Новий підхід: BigWorld.addSpaceGeometryMapping + фізичний запис у res_mods
+
+З аналізу ProTanki і BigWorld API:
+- BigWorld.addSpaceGeometryMapping(spaceID, path, order) додає VFS маппінг
+- WoT читає environment з папки з найвищим пріоритетом
+- Записуємо мінімальний space.settings з потрібним GUID у res_mods папку
+- Додаємо маппінг -> WoT підхоплює новий environment
 """
 import json
 import os
@@ -56,10 +60,16 @@ try:
     _prefs = (BigWorld.wg_getPreferencesFilePath()
               if hasattr(BigWorld, 'wg_getPreferencesFilePath')
               else BigWorld.getPreferencesFilePath())
-    CONFIG_PATH = os.path.normpath(
-        os.path.join(os.path.dirname(_prefs), 'mods', 'weather', 'config.json'))
+    _prefs_dir = os.path.dirname(_prefs)
+    CONFIG_PATH = os.path.normpath(os.path.join(_prefs_dir, 'mods', 'weather', 'config.json'))
+    # res_mods шлях — для фізичного запису space.settings
+    # WoT завантажується з: D:/World_of_Tanks_EU/
+    # res_mods: AppData/../../../ або шукаємо через BigWorld
+    _RES_MODS_PATH = None  # буде знайдено при першому виклику
 except Exception:
     CONFIG_PATH = os.path.join("mods", "configs", "weather_mod.json")
+    _prefs_dir = ""
+    _RES_MODS_PATH = None
 
 
 class WeatherConfig(object):
@@ -187,8 +197,143 @@ def detect_current_battle_space():
     return None
 
 
+def _fmt_exc():
+    try:
+        return traceback.format_exc()
+    except Exception:
+        return ''
+
+
+# ============================================================================
+# НОВИЙ ПІДХІД: addSpaceGeometryMapping
+# ============================================================================
+
+def _find_res_mods_path():
+    """Знаходимо шлях до res_mods в папці гри."""
+    global _RES_MODS_PATH
+    if _RES_MODS_PATH is not None:
+        return _RES_MODS_PATH
+
+    # Спробуємо через BigWorld.curArg або інший метод
+    try:
+        # BigWorld.getPreferencesFilePath() повертає щось типу:
+        # C:/Users/user/AppData/Roaming/Wargaming.net/WorldOfTanks/preferences.xml
+        # Але нам треба D:/World_of_Tanks_EU/res_mods/2.2.0.2/
+
+        # Спробуємо через ResMgr - відкриємо відомий файл і подивимось на шлях
+        # Або через поточну директорію
+
+        # BigWorld має CWD = папка гри
+        import os
+        cwd = os.getcwd()
+        logger.info("CWD: %s", cwd)
+
+        # Шукаємо res_mods в cwd і вище
+        for base in [cwd, os.path.dirname(cwd)]:
+            candidate = os.path.join(base, 'res_mods', '2.2.0.2')
+            if os.path.isdir(candidate):
+                _RES_MODS_PATH = candidate
+                logger.info("Found res_mods: %s", candidate)
+                return _RES_MODS_PATH
+
+        # Спробуємо через BigWorld методи
+        if hasattr(BigWorld, 'getPathsToScript'):
+            paths = BigWorld.getPathsToScript()
+            logger.info("Script paths: %s", paths)
+
+    except Exception as e:
+        logger.debug("find_res_mods failed: %s", e)
+
+    return None
+
+
+def write_space_settings_to_res_mods(space_name, guid):
+    """
+    Записуємо мінімальний space.settings з потрібним environment/override GUID
+    у res_mods/2.2.0.2/spaces/MAP/ щоб WoT підхопив при наступному завантаженні.
+    """
+    res_mods = _find_res_mods_path()
+    if not res_mods:
+        logger.warning("res_mods path not found, cannot write space.settings")
+        return False
+
+    try:
+        target_dir = os.path.join(res_mods, 'spaces', space_name)
+        if not os.path.isdir(target_dir):
+            os.makedirs(target_dir)
+
+        target_file = os.path.join(target_dir, 'space.settings')
+
+        # Мінімальний space.settings з environment override
+        # Формат WoT XML
+        content = (
+            '<space.settings>\n'
+            '\t<environment>\n'
+            '\t\t<override>\t%s\t</override>\n'
+            '\t</environment>\n'
+            '</space.settings>\n'
+        ) % guid
+
+        with open(target_file, 'w') as f:
+            f.write(content)
+
+        logger.info("Written space.settings for %s -> %s", space_name, guid)
+        return True
+
+    except Exception:
+        logger.error("write_space_settings failed\n%s", _fmt_exc())
+        return False
+
+
+def apply_environment_via_geometry_mapping(space_name, preset_id):
+    """
+    Новий підхід: записуємо space.settings фізично + addSpaceGeometryMapping.
+    """
+    guid = PRESET_GUIDS.get(preset_id)
+    if not guid or not IN_GAME:
+        return False
+
+    # 1. Записуємо space.settings у res_mods
+    written = write_space_settings_to_res_mods(space_name, guid)
+
+    # 2. Пробуємо addSpaceGeometryMapping
+    res_mods = _find_res_mods_path()
+    if res_mods:
+        try:
+            player = BigWorld.player()
+            space_id = getattr(player, 'spaceID', None) if player else None
+
+            if space_id is not None:
+                mapping_path = os.path.join(res_mods, 'spaces', space_name).replace('\\', '/')
+                # Нормалізуємо шлях для BigWorld VFS
+                fn = getattr(BigWorld, 'addSpaceGeometryMapping', None)
+                if callable(fn):
+                    try:
+                        fn(space_id, mapping_path, 0)
+                        logger.info("OK: addSpaceGeometryMapping(%s, %s)", space_id, mapping_path)
+                        return True
+                    except Exception as e:
+                        logger.warning("addSpaceGeometryMapping failed: %s", e)
+        except Exception:
+            logger.debug("geometry mapping failed\n%s", _fmt_exc())
+
+    # 3. Fallback: ResMgr patch
+    try:
+        section = ResMgr.openSection('spaces/%s/space.settings' % space_name)
+        if section is not None:
+            section.writeString('environment/override', guid)
+            logger.info("ResMgr patch: %s -> %s", space_name, guid)
+    except Exception:
+        pass
+
+    return written
+
+
+# ============================================================================
+# Weather systems (для хоткея в бою)
+# ============================================================================
+
 def _get_weather():
-    """Weather об'єкт ініціалізований для поточного простору."""
     try:
         import Weather
         w = getattr(Weather, 's_weather', None)
@@ -212,23 +357,14 @@ def _get_weather():
 
 
 def cycle_weather_system():
-    """
-    Циклічно перемикає weather system.
-    Повертає (success, system_name).
-
-    Стратегія:
-    1. nextWeatherSystem(fadeSpeed) — вбудований цикл WoT
-    2. summon(DataSection) — пряма передача секції конфігу
-    """
     w = _get_weather()
     if w is None:
         return False, None
 
-    # --- Спроба 1: nextWeatherSystem(fadeSpeed) ---
-    # Потребує як мінімум 2 аргументи: self + fadeSpeed
+    # nextWeatherSystem(fadeSpeed)
     fn_next = getattr(w, 'nextWeatherSystem', None)
     if callable(fn_next):
-        for fade in (15.0, 5.0, 1.0, 0.0):
+        for fade in (15.0, 5.0, 1.0):
             try:
                 fn_next(fade)
                 current = getattr(w, 'system', None)
@@ -236,13 +372,11 @@ def cycle_weather_system():
                 logger.info("OK: nextWeatherSystem(%.1f) -> %s", fade, name)
                 return True, name
             except Exception as e:
-                err = str(e)
-                if 'takes at least' in err or 'argument' in err.lower():
-                    continue  # спробуємо інший аргумент
-                logger.debug("nextWeatherSystem(%.1f) failed: %s", fade, e)
+                if 'argument' in str(e).lower() or 'takes' in str(e).lower():
+                    continue
                 break
 
-    # --- Спроба 2: summon(DataSection) ---
+    # summon(DataSection)
     fn_systems = getattr(w, '_weatherSystemsForCurrentSpace', None)
     systems = fn_systems() if callable(fn_systems) else []
     if systems:
@@ -251,40 +385,20 @@ def cycle_weather_system():
         w._mod_weather_idx = next_idx
         target = systems[next_idx]
         target_name = getattr(target, 'name', str(next_idx))
-
         fn_summon = getattr(w, 'summon', None)
         if callable(fn_summon):
             try:
                 fn_summon(target)
-                logger.info("OK: summon(DataSection[%d] '%s')", next_idx, target_name)
                 return True, target_name
-            except Exception as e:
-                logger.warning("summon(DataSection) failed: %s", e)
-
-            # Fallback: summon(name_string)
-            try:
-                fn_summon(target_name)
-                logger.info("OK: summon('%s')", target_name)
-                return True, target_name
-            except Exception as e:
-                logger.debug("summon(name) failed: %s", e)
+            except Exception:
+                pass
 
     return False, None
 
 
-def apply_environment_preset(space_name, preset_id):
-    """Патчимо VFS при вході в бій."""
-    guid = PRESET_GUIDS.get(preset_id)
-    if not guid or not IN_GAME:
-        return
-    try:
-        section = ResMgr.openSection('spaces/%s/space.settings' % space_name)
-        if section is not None:
-            section.writeString('environment/override', guid)
-            logger.info("env: %s -> %s (guid=%s)", space_name, preset_id, guid)
-    except Exception:
-        pass
-
+# ============================================================================
+# Controller
+# ============================================================================
 
 class WeatherController(object):
 
@@ -315,6 +429,7 @@ class WeatherController(object):
         pass
 
     def on_space_entered(self, space_name):
+        """Викликається при Avatar.onEnterWorld."""
         normalized = normalize_space_name(space_name)
         if not is_battle_map_space(normalized):
             return
@@ -323,7 +438,23 @@ class WeatherController(object):
         preset = pick_preset(weights)
         self._current_preset = preset
         logger.info("onEnterWorld: %s -> env=%s", normalized, preset)
-        apply_environment_preset(normalized, preset)
+        apply_environment_via_geometry_mapping(normalized, preset)
+
+    def preload_all_spaces(self):
+        """
+        Записуємо space.settings для всіх карт у res_mods ЗА ЗВАЖЕНО,
+        щоб при будь-якому бою правильний environment вже був.
+        Викликається при старті гри.
+        """
+        res_mods = _find_res_mods_path()
+        if not res_mods:
+            logger.warning("preload_all_spaces: res_mods not found")
+            return
+
+        # Для кожної карти беремо зважений пресет і записуємо
+        # Але краще записати тільки якщо є non-standard ваги
+        # або записати для всіх з поточними вагами
+        logger.info("preload_all_spaces: not implemented yet, res_mods=%s", res_mods)
 
     def cycle_weather_in_battle(self):
         """F12: перемикаємо weather system у бою."""
@@ -345,8 +476,6 @@ class WeatherController(object):
                 msg, type=SystemMessages.SM_TYPE.Information)
         except Exception:
             pass
-
-        logger.info("cycle_weather: name=%s ok=%s", name, ok)
 
 
 g_controller = WeatherController()
