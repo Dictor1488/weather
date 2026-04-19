@@ -6,7 +6,7 @@ Weather controller v5.0
 - шукає встановлені пакети в mods/<version>/
 - витягує реальні GUID та <name> з environment.xml
 - будує registry: preset -> space -> {guid, env_name, package}
-- застосовує preset до карти через space.settings + environments/environments.xml
+- застосовує preset до карти через WG template space.settings
 
 Без хардкоду GUID та без обов'язкового geometry_mapping.json.
 """
@@ -70,12 +70,8 @@ ENV_XML_RE = re.compile(
     re.I
 )
 ENV_NAME_RE = re.compile(r"<name>\s*([^<]+?)\s*</name>", re.I | re.S)
-XML_DECL_RE = re.compile(r'^\s*<\?xml[^>]*\?>\s*', re.I)
 ROOT_ENV_RE = re.compile(r'(<environment>)([^<]*)(</environment>)', re.I)
 ROOT_ENV_OVERRIDE_RE = re.compile(r'(<environmentOverride>)([^<]*)(</environmentOverride>)', re.I)
-ACTIVE_ENV_RE = re.compile(r'(<activeEnvironment>)([^<]*)(</activeEnvironment>)', re.I)
-IS_SWITCH_ALLOWED_RE = re.compile(r'(<isEnvironmentSwitchAllowed>)([^<]*)(</isEnvironmentSwitchAllowed>)', re.I)
-ALL_ENV_TAGS_RE = re.compile(r'\s*<environment>[^<]*</environment>\s*', re.I)
 
 try:
     _prefs = (BigWorld.wg_getPreferencesFilePath()
@@ -237,9 +233,13 @@ def _find_spaces_wg_package_path():
     if not version_dir:
         return None
 
-    for folder in (version_dir, os.path.join(version_dir, 'environments')):
-        if not os.path.isdir(folder):
+    preferred = os.path.join(version_dir, 'environments')
+    folders = [preferred, version_dir]
+    seen = set()
+    for folder in folders:
+        if folder in seen or not os.path.isdir(folder):
             continue
+        seen.add(folder)
         for name in _safe_listdir(folder):
             if SPACES_WG_PACKAGE_RE.match(name):
                 path = os.path.normpath(os.path.join(folder, name))
@@ -619,34 +619,6 @@ def build_space_settings_xml(env_name, preset_guid):
 '''.format(env=env_name, guid=preset_guid)
 
 
-def build_environments_xml(active_guid, all_guids):
-    if not active_guid:
-        return None
-
-    def _dotted(guid):
-        return guid.replace('-', '.')
-
-    lines = [u'<root>']
-    lines.append(u'\t<activeEnvironment>{0}</activeEnvironment>'.format(_dotted(active_guid)))
-    lines.append(u'\t<isEnvironmentSwitchAllowed>False</isEnvironmentSwitchAllowed>')
-
-    seen = set()
-    ordered = []
-    for g in all_guids:
-        if g and g not in seen:
-            seen.add(g)
-            ordered.append(g)
-    if active_guid not in seen:
-        ordered.append(active_guid)
-
-    for g in ordered:
-        lines.append(u'\t<environment>{0}</environment>'.format(_dotted(g)))
-
-    lines.append(u'</root>')
-    lines.append(u'')
-    return u'\r\n'.join(lines)
-
-
 def _decode_xml_bytes(data):
     if isinstance(data, basestring):
         return data
@@ -659,7 +631,7 @@ def _get_spaces_wg_templates(space_name):
         return _spaces_wg_template_cache[space_name]
 
     path = _get_spaces_wg_package_path()
-    result = {'space_settings': None, 'environments_xml': None}
+    result = {'space_settings': None}
     _spaces_wg_template_cache[space_name] = result
     if not path:
         return result
@@ -671,18 +643,12 @@ def _get_spaces_wg_templates(space_name):
         return result
 
     try:
-        ss_member = 'spaces/%s/space.settings' % space_name
-        env_member = 'spaces/%s/environments/environments.xml' % space_name
+        ss_member = 'res/spaces/%s/space.settings' % space_name
         try:
             result['space_settings'] = _decode_xml_bytes(archive.read(ss_member))
             LOG.info('Loaded spaces_wg space.settings template: %s from %s', ss_member, os.path.basename(path))
         except Exception:
             LOG.warning('spaces_wg template missing: %s', ss_member)
-        try:
-            result['environments_xml'] = _decode_xml_bytes(archive.read(env_member))
-            LOG.info('Loaded spaces_wg environments.xml template: %s from %s', env_member, os.path.basename(path))
-        except Exception:
-            LOG.warning('spaces_wg template missing: %s', env_member)
     finally:
         try:
             archive.close()
@@ -694,7 +660,8 @@ def _get_spaces_wg_templates(space_name):
 
 def _patch_space_settings_template(template_text, env_name, preset_guid):
     if not template_text:
-        return build_space_settings_xml(env_name, preset_guid)
+        LOG.warning('_patch_space_settings_template: missing WG template, fallback XML generation disabled')
+        return None
 
     text = template_text
     if ROOT_ENV_RE.search(text):
@@ -713,51 +680,6 @@ def _patch_space_settings_template(template_text, env_name, preset_guid):
     return text
 
 
-def _patch_environments_template(template_text, active_guid, all_guids):
-    if not active_guid:
-        return template_text
-
-    if not template_text:
-        return build_environments_xml(active_guid, all_guids)
-
-    def _dotted(guid):
-        return guid.replace('-', '.')
-
-    dotted_active = _dotted(active_guid)
-    ordered = []
-    seen = set()
-    for guid in all_guids:
-        if guid and guid not in seen:
-            seen.add(guid)
-            ordered.append(guid)
-    if active_guid not in seen:
-        ordered.append(active_guid)
-
-    env_lines = u'\r\n'.join([u'\t<environment>%s</environment>' % _dotted(g) for g in ordered])
-    text = template_text
-
-    if ACTIVE_ENV_RE.search(text):
-        text = ACTIVE_ENV_RE.sub(r'\1%s\3' % dotted_active, text, count=1)
-    else:
-        text = re.sub(r'<root>', u'<root>\r\n\t<activeEnvironment>%s</activeEnvironment>' % dotted_active, text, count=1, flags=re.I)
-
-    if IS_SWITCH_ALLOWED_RE.search(text):
-        text = IS_SWITCH_ALLOWED_RE.sub(r'\1False\3', text, count=1)
-
-    start = re.search(r'<activeEnvironment>.*?</activeEnvironment>', text, re.I | re.S)
-    end = re.search(r'<isEnvironmentSwitchAllowed>.*?</isEnvironmentSwitchAllowed>', text, re.I | re.S)
-    if start and end:
-        insert_pos = end.end()
-        tail = text[insert_pos:]
-        tail = ALL_ENV_TAGS_RE.sub(u'', tail)
-        text = text[:insert_pos] + u'\r\n' + env_lines + tail
-    else:
-        text = ALL_ENV_TAGS_RE.sub(u'', text)
-        text = re.sub(r'</root>', u'\r\n%s\r\n</root>' % env_lines, text, count=1, flags=re.I)
-
-    return text
-
-
 def find_space_settings_path(space_name):
     try:
         version_dir = _find_latest_version_dir('res_mods')
@@ -769,19 +691,6 @@ def find_space_settings_path(space_name):
         return candidate
     except Exception:
         LOG.error('find_space_settings_path: failed\n%s', traceback.format_exc())
-        return None
-
-
-def find_environments_xml_path(space_name):
-    try:
-        version_dir = _find_latest_version_dir('res_mods')
-        if not version_dir:
-            return None
-        candidate = os.path.join(version_dir, 'spaces', space_name, 'environments', 'environments.xml')
-        LOG.info('find_environments_xml_path: candidate=%s', candidate)
-        return candidate
-    except Exception:
-        LOG.error('find_environments_xml_path: failed\n%s', traceback.format_exc())
         return None
 
 
@@ -801,16 +710,6 @@ def _write_text_file(target_path, content):
 
 def write_space_settings_to_res_mods(target_path, content):
     return _write_text_file(target_path, content)
-
-
-def _get_all_known_guids_for_space(space_name):
-    registry = get_environment_registry()
-    guids = []
-    for _preset_id, preset_data in registry.items():
-        entry = preset_data.get('spaces', {}).get(space_name)
-        if entry and entry.get('guid'):
-            guids.append(entry['guid'])
-    return guids
 
 
 def apply_environment_via_packages(space_name, preset_id):
@@ -833,30 +732,20 @@ def apply_environment_via_packages(space_name, preset_id):
         LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s', preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
 
         templates = _get_spaces_wg_templates(space_name)
-        all_guids = _get_all_known_guids_for_space(space_name)
 
         space_settings_path = find_space_settings_path(space_name)
         if not space_settings_path:
             LOG.warning('apply_environment_via_packages: space_settings path not found for %s', space_name)
             return False
+
         settings_content = _patch_space_settings_template(templates.get('space_settings'), env_name, preset_guid)
         if not settings_content:
-            LOG.warning('apply_environment_via_packages: generated empty space.settings')
+            LOG.warning('apply_environment_via_packages: WG space.settings template not found for %s, apply skipped', space_name)
             return False
+
         ok1 = _write_text_file(space_settings_path, settings_content)
-
-        env_xml_path = find_environments_xml_path(space_name)
-        if not env_xml_path:
-            LOG.warning('apply_environment_via_packages: environments.xml path not found for %s', space_name)
-            return ok1
-        env_xml_content = _patch_environments_template(templates.get('environments_xml'), preset_guid, all_guids)
-        if not env_xml_content:
-            LOG.warning('apply_environment_via_packages: generated empty environments.xml')
-            return ok1
-        ok2 = _write_text_file(env_xml_path, env_xml_content)
-
-        LOG.info('apply_environment_via_packages: space.settings=%s environments.xml=%s template_ss=%s template_env=%s', ok1, ok2, bool(templates.get('space_settings')), bool(templates.get('environments_xml')))
-        return ok1 and ok2
+        LOG.info('apply_environment_via_packages: space.settings=%s template_ss=%s', ok1, bool(templates.get('space_settings')))
+        return ok1
     except Exception:
         LOG.error('apply_environment_via_packages: failed\n%s', traceback.format_exc())
         return False
@@ -986,7 +875,7 @@ def cycle_weather_in_battle():
         if applied:
             msg += ' (applied)'
         elif battle_loaded and arena_name:
-            msg += ' (stored, may require reload)'
+            msg += ' (stored, WG template missing)'
         else:
             msg += ' (stored for next battle)'
 
