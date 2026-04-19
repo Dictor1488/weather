@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 Точка входу мода.
-v1.3.0 — hook на gui.app_loader.loader.BattleSpace + fallback через player.arena
+v1.4.0 — виправлено розсинхронізацію з weather_controller v4.0
+         (прибрано всі звернення до g_controller.config,
+          виправлено _get_space_name_from_avatar)
 """
 
 try:
@@ -18,6 +20,9 @@ from weather_controller import g_controller
 _BATTLE_SPACE_HOOKS = []  # list of (cls, attr_name, original_func)
 _KEY_HOOK_INSTALLED = False
 _INIT_DONE = False
+
+# Зберігаємо hotkey-коди локально (список int)
+_hotkey_codes = []
 
 
 # ============================================================================
@@ -84,36 +89,69 @@ def _log():
     return logging.getLogger('weather_mod')
 
 
+def _load_hotkey_codes():
+    """Читає hotkey з g_controller і конвертує у список int-кодів клавіш."""
+    global _hotkey_codes
+    if not IN_GAME:
+        _hotkey_codes = []
+        return
+    try:
+        hk = g_controller.getHotkey()
+        if not hk.get('enabled', True):
+            _hotkey_codes = []
+            return
+        codes = []
+        for mod_name in hk.get('mods', []):
+            code = getattr(Keys, mod_name, None)
+            if code is not None:
+                codes.append(code)
+        key_name = hk.get('key', 'KEY_F12')
+        key_code = getattr(Keys, key_name, None)
+        if key_code is not None:
+            codes.append(key_code)
+        _hotkey_codes = codes
+    except Exception:
+        _log().exception('_load_hotkey_codes failed')
+        _hotkey_codes = []
+
+
 # ============================================================================
-# Hook на BattleSpace / BattleLoadingSpace з gui.app_loader.loader
+# Hook на Avatar.PlayerAvatar.onEnterWorld
 # ============================================================================
 def _get_space_name_from_avatar(avatar):
-    """Витягує назву карти з Avatar через arena.arenaType."""
+    """
+    Витягує назву карти з Avatar через arena.arenaType.
+    ВИПРАВЛЕНО: прибрано виклики normalize_space_name / is_battle_map_space,
+    яких немає в weather_controller v4.0.
+    Повертає просто назву геометрії (напр. '19_monastery').
+    """
     try:
         arena = getattr(avatar, 'arena', None)
         arena_type = getattr(arena, 'arenaType', None) if arena else None
         if not arena_type:
             return None
-        from weather_controller import normalize_space_name, is_battle_map_space
         for attr in ('geometryName', 'geometry', 'name'):
             v = getattr(arena_type, attr, None)
-            if v:
-                norm = normalize_space_name(v)
-                if is_battle_map_space(norm):
-                    return norm
+            if v and isinstance(v, str):
+                # geometryName зазвичай виглядає як 'spaces/19_monastery'
+                # або просто '19_monastery'
+                name = v.strip()
+                if '/' in name:
+                    name = name.rsplit('/', 1)[-1]
+                if name:
+                    return name
     except Exception:
-        pass
+        _log().exception('_get_space_name_from_avatar failed')
     return None
 
 
 def _install_battle_space_hook():
     """
-    Хукаємо Avatar.PlayerAvatar.onEnterWorld — це до завантаження геометрії.
+    Хукаємо Avatar.PlayerAvatar.onEnterWorld.
 
-    Хронологія з логу:
-      22:31:34.768 [SPACE] Loading space: spaces/31_airfield  <- space.settings читається
-      22:31:34.796 Avatar.onEnterWorld                        <- НАШ ХУК (до/під час)
-      22:31:38.990 Avatar.onSpaceLoaded                       <- пізно, вже завантажено
+    ВАЖЛИВО: на момент onEnterWorld файл space.settings вже прочитаний рушієм,
+    тому зміна освітлення набере чинності лише в НАСТУПНОМУ бою.
+    Це обмеження архітектури WoT, а не бага мода.
     """
     if not IN_GAME or _BATTLE_SPACE_HOOKS:
         return
@@ -141,11 +179,11 @@ def _install_battle_space_hook():
                     space_name = _get_space_name_from_avatar(self)
                     if space_name:
                         log.info('onEnterWorld pre-hook: space=%s', space_name)
-                        g_controller.on_space_entered(space_name)
+                        # Записуємо space.settings для НАСТУПНОГО бою
+                        g_controller.onSpaceEntered(space_name)
                 except Exception:
                     log.exception('onEnterWorld pre-hook failed')
-                result = orig(self, *args, **kwargs)
-                return result
+                return orig(self, *args, **kwargs)
             return wrapped
 
         cls.onEnterWorld = make_wrapper(original)
@@ -154,6 +192,7 @@ def _install_battle_space_hook():
 
     except Exception:
         log.exception('Failed to install battle space hook')
+
 
 def _remove_battle_space_hook():
     while _BATTLE_SPACE_HOOKS:
@@ -168,25 +207,29 @@ def _remove_battle_space_hook():
 # Key hook
 # ============================================================================
 def _on_key_event(event):
+    """
+    ВИПРАВЛЕНО: прибрано g_controller.config.hotkey_codes,
+    тепер використовується локальний _hotkey_codes.
+    """
     if not IN_GAME:
         return
     if not hasattr(event, 'isKeyDown') or not event.isKeyDown():
         return
 
-    codes = g_controller.config.hotkey_codes
-    if not codes:
+    if not _hotkey_codes:
+        # Fallback: Alt+F12 якщо hotkey не налаштований
         if event.key == Keys.KEY_F12 and BigWorld.isKeyDown(Keys.KEY_LALT):
-            g_controller.cycle_weather_in_battle()
+            g_controller.cycleWeatherInBattle()
         return
 
-    trigger_key = codes[-1]
-    modifiers = codes[:-1]
+    trigger_key = _hotkey_codes[-1]
+    modifiers = _hotkey_codes[:-1]
     if event.key != trigger_key:
         return
     for mod in modifiers:
         if not BigWorld.isKeyDown(mod):
             return
-    g_controller.cycle_weather_in_battle()
+    g_controller.cycleWeatherInBattle()
 
 
 def _install_key_hook():
@@ -229,15 +272,27 @@ def open_weather_window():
 # Settings callback
 # ============================================================================
 def _on_settings_changed(linkage, newSettings):
+    """
+    ВИПРАВЛЕНО: замість g_controller.config.set_global_weight / set_map_weight
+    використовуємо g_controller.setGeneralWeights / setMapWeights.
+    """
     log = _log()
     log.debug('settings changed: %s', newSettings)
 
     preset_order = ['standard', 'midnight', 'overcast', 'sunset', 'midday']
+
+    # --- Загальні ваги ---
+    current_general = g_controller.getGeneralWeights()
+    changed_general = False
     for pid in preset_order:
         key = 'global_' + pid
         if key in newSettings:
-            g_controller.config.set_global_weight(pid, newSettings[key])
+            current_general[pid] = int(newSettings[key])
+            changed_general = True
+    if changed_general:
+        g_controller.setGeneralWeights(current_general)
 
+    # --- Ваги для конкретної карти ---
     map_idx = newSettings.get('active_map', 0)
     try:
         active_map = MAP_IDS[int(map_idx)]
@@ -245,45 +300,90 @@ def _on_settings_changed(linkage, newSettings):
         active_map = ''
 
     if active_map:
+        current_map = g_controller.getMapWeights(active_map)
+        changed_map = False
         for pid in preset_order:
             key = 'map_' + pid
             if key in newSettings:
-                g_controller.config.set_map_weight(active_map, pid, newSettings[key])
+                current_map[pid] = int(newSettings[key])
+                changed_map = True
+        if changed_map:
+            g_controller.setMapWeights(active_map, current_map)
 
+    # --- Hotkey ---
     if 'hotkey' in newSettings:
         raw = newSettings['hotkey']
         if isinstance(raw, (list, tuple)):
-            codes = [int(c) for c in raw]
-            try:
-                import Keys as K
-                name_map = {
-                    K.KEY_LALT: 'ALT', K.KEY_RALT: 'ALT',
-                    K.KEY_LCONTROL: 'CTRL', K.KEY_RCONTROL: 'CTRL',
-                    K.KEY_LSHIFT: 'SHIFT', K.KEY_RSHIFT: 'SHIFT'
-                }
-                parts = [name_map.get(c, 'KEY_%d' % c) for c in codes]
-                hotkey_str = '+'.join(parts)
-            except Exception:
-                hotkey_str = '+'.join(str(c) for c in codes)
-            g_controller.on_hotkey_changed(codes, hotkey_str)
+            _update_hotkey_from_codes([int(c) for c in raw])
+
+
+def _update_hotkey_from_codes(int_codes):
+    """Конвертує список int-кодів у hk-dict і зберігає через g_controller."""
+    global _hotkey_codes
+    _hotkey_codes = int_codes
+
+    if not IN_GAME:
+        return
+    try:
+        import Keys as K
+        modifier_map = {
+            K.KEY_LALT: 'LALT', K.KEY_RALT: 'RALT',
+            K.KEY_LCONTROL: 'LCTRL', K.KEY_RCONTROL: 'RCTRL',
+            K.KEY_LSHIFT: 'LSHIFT', K.KEY_RSHIFT: 'RSHIFT',
+        }
+        # Всі клавіші крім останньої — модифікатори
+        mods = []
+        for code in int_codes[:-1]:
+            name = modifier_map.get(code)
+            if name:
+                mods.append(name)
+        # Остання клавіша — основна
+        key_name = 'KEY_F12'
+        if int_codes:
+            last = int_codes[-1]
+            # Шукаємо назву клавіші за кодом
+            for attr in dir(K):
+                if attr.startswith('KEY_') and getattr(K, attr) == last:
+                    key_name = attr
+                    break
+        g_controller.setHotkey(True, mods, key_name)
+    except Exception:
+        _log().exception('_update_hotkey_from_codes failed')
 
 
 def _apply_saved_settings(saved):
+    """
+    ВИПРАВЛЕНО: замість g_controller.config.global_weights[pid] = ...
+    читаємо поточні ваги і встановлюємо через setGeneralWeights.
+    """
     preset_order = ['standard', 'midnight', 'overcast', 'sunset', 'midday']
+
+    current_general = g_controller.getGeneralWeights()
+    changed = False
     for pid in preset_order:
         key = 'global_' + pid
         if key in saved:
-            g_controller.config.global_weights[pid] = int(saved[key])
+            current_general[pid] = int(saved[key])
+            changed = True
+    if changed:
+        g_controller.setGeneralWeights(current_general)
+
     if 'hotkey' in saved:
         raw = saved['hotkey']
         if isinstance(raw, (list, tuple)) and raw:
-            _on_settings_changed('com.example.weather', {'hotkey': raw})
+            _update_hotkey_from_codes([int(c) for c in raw])
+
+    # Оновлюємо локальний кеш hotkey-кодів
+    _load_hotkey_codes()
 
 
 def init(*args, **kwargs):
     global _INIT_DONE
     if _INIT_DONE:
         return
+
+    # Завантажуємо hotkey до встановлення хука клавіатури
+    _load_hotkey_codes()
 
     _install_battle_space_hook()
     _install_key_hook()
@@ -293,19 +393,40 @@ def init(*args, **kwargs):
         from gui.modsSettingsApi import templates as t
         import Keys as K
 
-        current_codes = g_controller.config.hotkey_codes or [K.KEY_LALT, K.KEY_F12]
+        # ВИПРАВЛЕНО: читаємо hotkey через getHotkey(), а не config.hotkey_codes
+        hk = g_controller.getHotkey()
+        mods = hk.get('mods', ['LALT'])
+        key  = hk.get('key', 'KEY_F12')
+        current_codes = []
+        for m in mods:
+            code = getattr(K, m, None)
+            if code is not None:
+                current_codes.append(code)
+        key_code = getattr(K, key, None)
+        if key_code is not None:
+            current_codes.append(key_code)
+        if not current_codes:
+            current_codes = [K.KEY_LALT, K.KEY_F12]
+
+        # ВИПРАВЛЕНО: g_controller.getGeneralWeights() замість config.global_weights
+        general_weights = g_controller.getGeneralWeights()
 
         def make_sliders(prefix, values):
             return [
-                t.createSlider(varName=prefix + 'standard', text=u'Стандарт' if prefix == 'global_' else u'[карта] Стандарт',
+                t.createSlider(varName=prefix + 'standard',
+                               text=u'Стандарт' if prefix == 'global_' else u'[карта] Стандарт',
                                value=values.get('standard', 0), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix + 'midnight', text=u'Ніч' if prefix == 'global_' else u'[карта] Ніч',
+                t.createSlider(varName=prefix + 'midnight',
+                               text=u'Ніч' if prefix == 'global_' else u'[карта] Ніч',
                                value=values.get('midnight', 0), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix + 'overcast', text=u'Пасмурно' if prefix == 'global_' else u'[карта] Пасмурно',
+                t.createSlider(varName=prefix + 'overcast',
+                               text=u'Хмарно' if prefix == 'global_' else u'[карта] Хмарно',
                                value=values.get('overcast', 0), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix + 'sunset', text=u'Закат' if prefix == 'global_' else u'[карта] Закат',
+                t.createSlider(varName=prefix + 'sunset',
+                               text=u'Захід' if prefix == 'global_' else u'[карта] Захід',
                                value=values.get('sunset', 0), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix + 'midday', text=u'Полдень' if prefix == 'global_' else u'[карта] Полдень',
+                t.createSlider(varName=prefix + 'midday',
+                               text=u'Полудень' if prefix == 'global_' else u'[карта] Полудень',
                                value=values.get('midday', 0), min=0, max=20, interval=1),
             ]
 
@@ -313,9 +434,9 @@ def init(*args, **kwargs):
             t.createLabel(text=u'Загальні налаштування для всіх карт'),
             t.createEmpty(),
         ]
-        column1.extend(make_sliders('global_', g_controller.config.global_weights))
+        column1.extend(make_sliders('global_', general_weights))
         column1.append(t.createEmpty())
-        column1.append(t.createHotkey(varName='hotkey', text=u'Смена погоды в бою',
+        column1.append(t.createHotkey(varName='hotkey', text=u'Зміна погоди в бою',
                                       value=current_codes))
 
         column2 = [
@@ -325,7 +446,7 @@ def init(*args, **kwargs):
                              options=MAP_LABELS, value=0),
         ]
         column2.extend(make_sliders('map_', {pid: 0 for pid in
-                                              ['standard', 'midnight', 'overcast', 'sunset', 'midday']}))
+                                             ['standard', 'midnight', 'overcast', 'sunset', 'midday']}))
 
         template = {
             'modDisplayName': u'Погода на картах',
@@ -342,6 +463,7 @@ def init(*args, **kwargs):
         )
         if saved:
             _apply_saved_settings(saved)
+
     except Exception:
         _log().exception('modsSettingsApi registration failed')
 
