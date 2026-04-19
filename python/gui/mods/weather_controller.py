@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller.
-v2.1.0 — дамп Weather об'єкта + пошук setEnvironmentPreset
+Weather controller v2.2
+Ключова знахідка з дампу:
+- Weather.currentSpaceID = -1 (не ініціалізований для простору)
+- Weather._weatherSystemsForCurrentSpace = <callable> (дасть список доступних систем)
+- Weather.onChangeSpace = <callable> (ініціалізує Weather для простору)
 """
 import json
 import os
@@ -62,7 +65,7 @@ PRESET_LABELS = {
 
 PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
 MAX_WEIGHT = 20
-_DUMP_DONE = False
+_SYSTEMS_DUMPED = False
 
 try:
     _prefs = BigWorld.wg_getPreferencesFilePath() if hasattr(BigWorld, 'wg_getPreferencesFilePath') else BigWorld.getPreferencesFilePath()
@@ -91,9 +94,9 @@ class WeatherConfig(object):
                 if saved_codes:
                     self.hotkey_codes = [int(c) for c in saved_codes]
                     self.hotkey_str = data.get('hotkey_str', self.hotkey_str)
-                logger.info("Weather config loaded from %s", CONFIG_PATH)
+                logger.info("config loaded from %s", CONFIG_PATH)
         except Exception:
-            logger.exception("Failed to load weather config")
+            logger.exception("config load failed")
 
     def save(self):
         try:
@@ -108,7 +111,7 @@ class WeatherConfig(object):
                     'hotkey_str': self.hotkey_str,
                 }, f, indent=2)
         except Exception:
-            logger.exception("Failed to save weather config")
+            logger.exception("config save failed")
 
     def set_global_weight(self, preset_id, value):
         if preset_id in PRESET_ORDER:
@@ -202,159 +205,151 @@ def _fmt_exc():
         return ''
 
 
-def _dump_weather_object_once():
-    """
-    Один раз дампаємо повний список атрибутів Weather об'єкта
-    та BigWorld щоб знайти правильний метод для перемикання environment.
-    """
-    global _DUMP_DONE
-    if _DUMP_DONE:
-        return
-    _DUMP_DONE = True
-
-    logger.info("===== WEATHER DUMP START =====")
+def _get_weather():
+    """Повертає Weather об'єкт, ініціалізований для поточного простору."""
     try:
         import Weather
         w = getattr(Weather, 's_weather', None)
         if w is None and hasattr(Weather, 'weather'):
             w = Weather.weather()
+        if w is None:
+            return None
 
-        if w is not None:
-            # Всі атрибути Weather об'єкта
-            all_attrs = [a for a in dir(w) if not a.startswith('__')]
-            logger.info("Weather attrs: %s", all_attrs)
-
-            # Атрибути що можуть бути списком систем/пресетів
-            for attr in all_attrs:
-                try:
-                    val = getattr(w, attr)
-                    if isinstance(val, (list, tuple, dict)) and len(val) > 0:
-                        logger.info("Weather.%s = %s", attr, repr(val)[:300])
-                    elif callable(val):
-                        logger.info("Weather.%s = <callable>", attr)
-                    else:
-                        logger.info("Weather.%s = %s", attr, repr(val)[:100])
-                except Exception as e:
-                    logger.info("Weather.%s -> access error: %s", attr, e)
-        else:
-            logger.warning("No Weather object!")
-    except Exception:
-        logger.error("Weather dump failed\n%s", _fmt_exc())
-
-    # BigWorld методи для environment
-    try:
-        bw_env_methods = []
-        for attr in dir(BigWorld):
-            if any(kw in attr.lower() for kw in
-                   ('environment', 'environ', 'preset', 'space', 'reload')):
-                val = getattr(BigWorld, attr, None)
-                if callable(val):
-                    bw_env_methods.append(attr)
-        logger.info("BigWorld env methods: %s", bw_env_methods)
-
-        # Спробуємо setEnvironmentPreset і схожі
+        # Якщо Weather не ініціалізований для поточного простору — ініціалізуємо
         player = BigWorld.player()
         space_id = getattr(player, 'spaceID', None) if player else None
-        logger.info("player.spaceID=%s", space_id)
 
-        # Дамп weather systems із самого об'єкта
-        import Weather
-        w = Weather.weather()
-        if w:
-            # Пробуємо знайти метод що повертає список доступних пресетів
-            for method in ('getEnvironments', 'environments', 'getPresets',
-                           'presets', 'systems', 'getSystems', 'getWeathers',
-                           'currentEnvironment', 'getCurrentEnvironment',
-                           'overridenWeather', 'weatherController'):
-                if hasattr(w, method):
+        if space_id is not None:
+            current = getattr(w, 'currentSpaceID', -1)
+            if current != space_id:
+                # Ініціалізуємо Weather для поточного простору
+                on_change = getattr(w, 'onChangeSpace', None)
+                if callable(on_change):
                     try:
-                        val = getattr(w, method)
-                        if callable(val):
-                            result = val()
-                            logger.info("Weather.%s() = %s", method, repr(result)[:300])
-                        else:
-                            logger.info("Weather.%s = %s", method, repr(val)[:300])
+                        on_change(space_id)
+                        logger.info("Weather.onChangeSpace(%s) -> currentSpaceID now=%s",
+                                    space_id, getattr(w, 'currentSpaceID', '?'))
                     except Exception as e:
-                        logger.info("Weather.%s -> %s", method, e)
+                        logger.debug("onChangeSpace failed: %s", e)
+
+        return w
+    except Exception:
+        return None
+
+
+def _dump_weather_systems_once(w):
+    """Показуємо список доступних weather systems для поточного простору."""
+    global _SYSTEMS_DUMPED
+    if _SYSTEMS_DUMPED:
+        return
+    _SYSTEMS_DUMPED = True
+
+    try:
+        fn = getattr(w, '_weatherSystemsForCurrentSpace', None)
+        if callable(fn):
+            systems = fn()
+            logger.info("_weatherSystemsForCurrentSpace() = %s", repr(systems)[:500])
+            # Якщо повернув список — виведемо імена кожної системи
+            if systems:
+                for i, s in enumerate(systems):
+                    name = getattr(s, 'name', None) or getattr(s, '_name', None)
+                    logger.info("  system[%d]: name=%s type=%s repr=%s",
+                                i, name, type(s).__name__, repr(s)[:100])
+        else:
+            logger.info("_weatherSystemsForCurrentSpace not callable")
+
+        # Також перевіримо поточний стан
+        logger.info("After onChangeSpace: currentSpaceID=%s system=%s overridenWeather=%s",
+                    getattr(w, 'currentSpaceID', '?'),
+                    repr(getattr(w, 'system', None))[:100],
+                    repr(getattr(w, 'overridenWeather', None))[:100])
+
+        # Пробуємо newSystemByName з різними варіантами після ініціалізації
+        for test_name in ('03_midday', '02_Sunset', '01_Overcast', 'RexpTM',
+                          'standard', 'default', 'clear', 'day', 'night'):
+            fn2 = getattr(w, 'newSystemByName', None)
+            if callable(fn2):
+                try:
+                    result = fn2(test_name)
+                    if result is not None:
+                        logger.info("newSystemByName(%s) = %s (name=%s)",
+                                    test_name, type(result).__name__,
+                                    getattr(result, 'name', '?'))
+                    else:
+                        logger.debug("newSystemByName(%s) = None", test_name)
+                except Exception as e:
+                    logger.debug("newSystemByName(%s) failed: %s", test_name, e)
 
     except Exception:
-        logger.error("BigWorld dump failed\n%s", _fmt_exc())
-
-    logger.info("===== WEATHER DUMP END =====")
+        logger.error("systems dump failed\n%s", _fmt_exc())
 
 
 def apply_preset_in_battle(preset_id):
     if not IN_GAME:
         return False
 
-    _dump_weather_object_once()
-
     env_name = PRESET_ENV_NAMES.get(preset_id)
     guid = PRESET_GUIDS.get(preset_id, '') or ''
     period = PRESET_PERIOD_IDS.get(preset_id, 0)
     tod = PRESET_TOD.get(preset_id, u'12:00')
 
-    logger.info("apply: preset=%s env_name=%s period=%s", preset_id, env_name, period)
+    logger.info("apply: preset=%s env=%s period=%s", preset_id, env_name, period)
 
-    # Крок 1: BigWorld.setEnvironmentPreset якщо є
+    # ---- 1. Ініціалізуємо Weather для простору і беремо системи ----
+    w = _get_weather()
+    if w is not None:
+        _dump_weather_systems_once(w)
+
+        # Пробуємо override через систему яку знайде _weatherSystemsForCurrentSpace
+        try:
+            fn = getattr(w, '_weatherSystemsForCurrentSpace', None)
+            if callable(fn):
+                systems = fn()
+                if systems:
+                    # Шукаємо потрібну систему за іменем або беремо першу
+                    target = None
+                    for s in systems:
+                        sname = getattr(s, 'name', None) or getattr(s, '_name', None)
+                        if sname and (sname == env_name or sname == guid):
+                            target = s
+                            break
+                    # Якщо не знайшли за іменем — беремо по period ID
+                    if target is None and len(systems) > period:
+                        target = systems[period]
+                    if target is None and systems:
+                        target = systems[0]
+
+                    if target is not None:
+                        override_fn = getattr(w, 'override', None)
+                        if callable(override_fn):
+                            try:
+                                override_fn(target)
+                                logger.info("OK: Weather.override(system=%s)",
+                                            getattr(target, 'name', repr(target)[:50]))
+                            except Exception as e:
+                                logger.warning("FAIL: Weather.override(system): %s", e)
+        except Exception:
+            logger.debug("systems override failed\n%s", _fmt_exc())
+
+        # Спробуємо summon зі списку доступних систем за іменем
+        summon_fn = getattr(w, 'summon', None)
+        if callable(summon_fn) and env_name:
+            try:
+                fn = getattr(w, '_weatherSystemsForCurrentSpace', None)
+                systems = fn() if callable(fn) else []
+                for s in (systems or []):
+                    sname = getattr(s, 'name', None)
+                    if sname == env_name:
+                        summon_fn(s)
+                        logger.info("OK: Weather.summon(system %s)", env_name)
+                        break
+            except Exception as e:
+                logger.debug("summon by system failed: %s", e)
+
+    # ---- 2. player period sync ----
     try:
         player = BigWorld.player()
-        space_id = getattr(player, 'spaceID', None) if player else None
-
-        for method_name in ('setEnvironmentPreset', 'setSpaceEnvironment',
-                            'setCurrentEnvironment', 'reloadEnvironment',
-                            'setEnvironment'):
-            fn = getattr(BigWorld, method_name, None)
-            if fn and callable(fn):
-                try:
-                    if space_id is not None:
-                        fn(space_id, guid)
-                        logger.info("OK: BigWorld.%s(%s, %s)", method_name, space_id, guid)
-                    else:
-                        fn(guid)
-                        logger.info("OK: BigWorld.%s(%s)", method_name, guid)
-                except Exception as e:
-                    logger.debug("FAIL: BigWorld.%s: %s", method_name, e)
-    except Exception:
-        pass
-
-    # Крок 2: Weather.overridenWeather — встановити override environment
-    try:
-        import Weather
-        w = Weather.weather()
-        if w and guid:
-            # Пробуємо через overridenWeather property
-            ow = getattr(w, 'overridenWeather', None)
-            logger.info("Weather.overridenWeather = %s", repr(ow)[:100])
-
-            # Пробуємо newSystemByName з guid як іменем
-            if hasattr(w, 'newSystemByName'):
-                try:
-                    sys = w.newSystemByName(guid)
-                    logger.info("Weather.newSystemByName(%s) = %s", guid, repr(sys)[:100])
-                    if sys and hasattr(w, 'override'):
-                        w.override(sys)
-                        logger.info("OK: Weather.override(system from newSystemByName)")
-                except Exception as e:
-                    logger.debug("newSystemByName failed: %s", e)
-
-            if hasattr(w, 'newSystemByName') and env_name:
-                try:
-                    sys = w.newSystemByName(env_name)
-                    logger.info("Weather.newSystemByName(%s) = %s", env_name, repr(sys)[:100])
-                    if sys and hasattr(w, 'override'):
-                        w.override(sys)
-                        logger.info("OK: Weather.override(system from env_name)")
-                except Exception as e:
-                    logger.debug("newSystemByName(env_name) failed: %s", e)
-
-    except Exception:
-        logger.debug("Weather block 2 failed\n%s", _fmt_exc())
-
-    # Крок 3: player period sync (завжди робимо)
-    try:
-        player = BigWorld.player()
-        if player is not None:
+        if player:
             setattr(player, 'weatherPresetID', period)
             setattr(player, '_PlayerAvatar__blArenaPeriod', period)
             apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
@@ -367,16 +362,16 @@ def apply_preset_in_battle(preset_id):
     except Exception:
         pass
 
-    # Крок 4: час доби
+    # ---- 3. час доби ----
     try:
         fn = getattr(BigWorld, 'timeOfDay', None)
         if callable(fn):
             fn(tod)
         player = BigWorld.player()
         fn2 = getattr(BigWorld, 'spaceTimeOfDay', None)
-        space_id = getattr(player, 'spaceID', None) if player else None
-        if callable(fn2) and space_id:
-            fn2(space_id, tod)
+        sid = getattr(player, 'spaceID', None) if player else None
+        if callable(fn2) and sid:
+            fn2(sid, tod)
     except Exception:
         pass
 
@@ -406,7 +401,7 @@ class WeatherController(object):
         self.config.hotkey_codes = [int(c) for c in key_codes]
         self.config.hotkey_str = hotkey_str
         self.config.save()
-        logger.info("Hotkey updated: %s codes=%s", hotkey_str, key_codes)
+        logger.info("Hotkey: %s %s", hotkey_str, key_codes)
 
     def on_battle_space_entered(self, space_class_name):
         pass
@@ -424,7 +419,7 @@ class WeatherController(object):
     def cycle_preset_in_battle(self):
         detected = detect_current_battle_space()
         if not detected:
-            logger.info("cycle_preset: not in battle")
+            logger.info("cycle: not in battle")
             return
         self._current_space = detected
 
@@ -432,8 +427,8 @@ class WeatherController(object):
             prev = self._current_preset or 'standard'
             idx = PRESET_ORDER.index(prev)
         except ValueError:
-            prev = 'standard'
-            idx = 0
+            prev, idx = 'standard', 0
+
         next_preset = PRESET_ORDER[(idx + 1) % len(PRESET_ORDER)]
         self._current_preset = next_preset
 
