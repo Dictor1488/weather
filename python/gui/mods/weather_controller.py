@@ -369,6 +369,45 @@ def resolve_environment_for_space(space_name, preset_id):
     return data
 
 
+def _get_fallback_preset_order(primary_preset):
+    order = []
+    if primary_preset and primary_preset != 'standard':
+        order.append(primary_preset)
+    for preset_id in PRESET_ORDER:
+        if preset_id == 'standard':
+            continue
+        if preset_id not in order:
+            order.append(preset_id)
+    return order
+
+
+def resolve_environment_with_fallback(space_name, preset_id):
+    candidates = _get_fallback_preset_order(preset_id)
+    if not candidates:
+        return None, None
+
+    for candidate in candidates:
+        resolved = resolve_environment_for_space(space_name, candidate)
+        if resolved:
+            if candidate != preset_id:
+                LOG.warning(
+                    'resolve_environment_with_fallback: fallback selected for space=%s requested=%s actual=%s package=%s',
+                    space_name, preset_id, candidate, resolved.get('package')
+                )
+            else:
+                LOG.info(
+                    'resolve_environment_with_fallback: exact preset selected for space=%s preset=%s package=%s',
+                    space_name, candidate, resolved.get('package')
+                )
+            return candidate, resolved
+
+    LOG.warning(
+        'resolve_environment_with_fallback: no available preset for space=%s requested=%s candidates=%s',
+        space_name, preset_id, candidates
+    )
+    return None, None
+
+
 def get_preset_guid(preset_id, space_name=None):
     if not preset_id or preset_id == 'standard':
         return None
@@ -611,15 +650,15 @@ def apply_environment_via_packages(space_name, preset_id):
             LOG.info('apply_environment_via_packages: preset is standard, skipping override')
             return False
 
-        resolved = resolve_environment_for_space(space_name, preset_id)
+        actual_preset_id, resolved = resolve_environment_with_fallback(space_name, preset_id)
         if not resolved:
             return False
 
         env_name = resolved.get('env_name')
         preset_guid = resolved.get('guid')
 
-        LOG.info('apply_environment_via_packages: resolved env_name=%s guid=%s package=%s',
-                 env_name, preset_guid, resolved.get('package'))
+        LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s',
+                 preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
 
         space_settings_path = find_space_settings_path(space_name)
         if not space_settings_path:
