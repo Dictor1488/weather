@@ -1,19 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v4.0
-Новий підхід: BigWorld.addSpaceGeometryMapping + фізичний запис у res_mods
+Weather controller v5.0
 
-З аналізу ProTanki і BigWorld API:
-- BigWorld.addSpaceGeometryMapping(spaceID, path, order) додає VFS маппінг
-- WoT читає environment з папки з найвищим пріоритетом
-- Записуємо мінімальний space.settings з потрібним GUID у res_mods папку
-- Додаємо маппінг -> WoT підхоплює новий environment
+Читає дані прямо з environments.*.wotmod:
+- шукає встановлені пакети в mods/<version>/
+- витягує реальні GUID та <name> з environment.xml
+- будує registry: preset -> space -> {guid, env_name, package}
+- застосовує preset до карти через space.settings
+
+Без хардкоду GUID та без обов'язкового geometry_mapping.json.
 """
 import json
 import os
 import random
 import logging
 import traceback
+import zipfile
+import re
 
 try:
     basestring
@@ -31,14 +34,6 @@ except ImportError:
 logger = logging.getLogger("weather_mod")
 logger.setLevel(logging.INFO)
 LOG = logger
-
-PRESET_GUIDS = {
-    "standard": None,
-    "midday":   "BF040BCB-4BE1D04F-7D484589-135E881B",
-    "sunset":   "6DEE1EBB-44F63FCC-AACF6185-7FBBC34E",
-    "overcast": "56BA3213-40FFB1DF-125FBCAD-173E8347",
-    "midnight": "15755E11-4090266B-594778B6-B233C12C",
-}
 
 PRESET_LABELS = {
     "standard": u"Стандарт",
@@ -62,20 +57,27 @@ WEATHER_SYSTEM_LABELS = {
     "Hail":    u"Град",
 }
 
+PRESET_PACKAGE_PATTERNS = {
+    "midday": re.compile(r"^environments\.midday_.*\.wotmod$", re.I),
+    "midnight": re.compile(r"^environments\.midnight_.*\.wotmod$", re.I),
+    "overcast": re.compile(r"^environments\.overcast_.*\.wotmod$", re.I),
+    "sunset": re.compile(r"^environments\.sunset_.*\.wotmod$", re.I),
+}
+
+ENV_XML_RE = re.compile(
+    r"^res/spaces/([^/]+)/environments/([A-Fa-f0-9\-]+)/environment\.xml$",
+    re.I
+)
+ENV_NAME_RE = re.compile(r"<name>\s*([^<]+?)\s*</name>", re.I | re.S)
+
 try:
     _prefs = (BigWorld.wg_getPreferencesFilePath()
               if hasattr(BigWorld, 'wg_getPreferencesFilePath')
               else BigWorld.getPreferencesFilePath())
     _prefs_dir = os.path.dirname(_prefs)
     CONFIG_PATH = os.path.normpath(os.path.join(_prefs_dir, 'mods', 'weather', 'config.json'))
-    _RES_MODS_CANDIDATES = [
-        os.path.normpath(os.path.join(_prefs_dir, '../../../../res_mods')),
-        os.path.normpath(os.path.join(_prefs_dir, '../../../res_mods')),
-        os.path.normpath(os.path.join(os.getcwd(), 'res_mods')),
-    ]
 except Exception:
     CONFIG_PATH = os.path.normpath(os.path.join(os.getcwd(), 'mods', 'weather', 'config.json'))
-    _RES_MODS_CANDIDATES = [os.path.normpath(os.path.join(os.getcwd(), 'res_mods'))]
 
 DEFAULT_CFG = {
     "enabled": True,
@@ -89,6 +91,8 @@ DEFAULT_CFG = {
 _cfg = {}
 _current_override_preset = None
 _current_cycle_index = 0
+_environment_registry = {}
+_registry_loaded = False
 
 
 def _ensure_dir(path):
@@ -115,6 +119,242 @@ def _normalize_weights(dct):
     return out
 
 
+def _safe_listdir(path):
+    try:
+        return os.listdir(path)
+    except Exception:
+        return []
+
+
+def _resolve_game_root():
+    try:
+        if IN_GAME:
+            prefs = (BigWorld.wg_getPreferencesFilePath()
+                     if hasattr(BigWorld, 'wg_getPreferencesFilePath')
+                     else BigWorld.getPreferencesFilePath())
+            if prefs:
+                return os.path.abspath(os.path.join(os.path.dirname(prefs), '..', '..', '..', '..'))
+    except Exception:
+        LOG.error('_resolve_game_root via prefs failed\n%s', traceback.format_exc())
+
+    try:
+        return os.path.abspath(os.getcwd())
+    except Exception:
+        return os.getcwd()
+
+
+def _find_latest_version_dir(root_name):
+    game_root = _resolve_game_root()
+    root = os.path.join(game_root, root_name)
+    if not os.path.isdir(root):
+        LOG.warning('%s root not found: %s', root_name, root)
+        return None
+
+    dirs = []
+    for name in _safe_listdir(root):
+        full = os.path.join(root, name)
+        if os.path.isdir(full):
+            dirs.append(full)
+
+    if not dirs:
+        LOG.warning('No version dirs in %s', root)
+        return None
+
+    dirs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    LOG.info('Resolved latest %s dir: %s', root_name, dirs[0])
+    return dirs[0]
+
+
+def _extract_env_name(xml_bytes):
+    try:
+        if not isinstance(xml_bytes, basestring):
+            xml_text = xml_bytes.decode('utf-8', 'ignore')
+        else:
+            xml_text = xml_bytes
+        match = ENV_NAME_RE.search(xml_text)
+        if match:
+            return match.group(1).strip()
+    except Exception:
+        LOG.error('_extract_env_name failed\n%s', traceback.format_exc())
+    return None
+
+
+def _detect_preset_from_filename(filename):
+    lower = os.path.basename(filename).lower()
+    for preset_id, pattern in PRESET_PACKAGE_PATTERNS.items():
+        if pattern.match(lower):
+            return preset_id
+    return None
+
+
+def scan_environment_packages():
+    packages = []
+    version_dir = _find_latest_version_dir('mods')
+    if not version_dir:
+        return packages
+
+    candidates = [version_dir, os.path.join(version_dir, 'environments')]
+    seen = set()
+
+    for folder in candidates:
+        if not os.path.isdir(folder):
+            continue
+
+        for name in _safe_listdir(folder):
+            lower = name.lower()
+            if not lower.endswith('.wotmod'):
+                continue
+            if not lower.startswith('environments.'):
+                continue
+
+            preset_id = _detect_preset_from_filename(name)
+            if not preset_id:
+                continue
+
+            full_path = os.path.normpath(os.path.join(folder, name))
+            if full_path in seen:
+                continue
+
+            seen.add(full_path)
+            packages.append({
+                'preset_id': preset_id,
+                'path': full_path,
+                'name': name,
+            })
+
+    LOG.info('scan_environment_packages: found=%s packages=%s',
+             len(packages), [p['name'] for p in packages])
+    return packages
+
+
+def _read_package_registry_entry(package_info):
+    result = {
+        'preset_id': package_info['preset_id'],
+        'path': package_info['path'],
+        'name': package_info['name'],
+        'spaces': {},
+    }
+
+    try:
+        archive = zipfile.ZipFile(package_info['path'], 'r')
+    except Exception:
+        LOG.error('Failed to open package: %s\n%s', package_info['path'], traceback.format_exc())
+        return result
+
+    try:
+        for member in archive.namelist():
+            match = ENV_XML_RE.match(member)
+            if not match:
+                continue
+
+            space_name = match.group(1)
+            guid = match.group(2).upper()
+
+            try:
+                xml_bytes = archive.read(member)
+            except Exception:
+                LOG.error('Failed to read %s from %s\n%s',
+                          member, package_info['path'], traceback.format_exc())
+                continue
+
+            env_name = _extract_env_name(xml_bytes)
+            if not env_name:
+                LOG.warning('No <name> in %s from %s', member, package_info['name'])
+                continue
+
+            result['spaces'][space_name] = {
+                'guid': guid,
+                'env_name': env_name,
+                'package': package_info['name'],
+                'package_path': package_info['path'],
+                'environment_xml_path': member,
+            }
+    finally:
+        try:
+            archive.close()
+        except Exception:
+            pass
+
+    LOG.info('Loaded package %s preset=%s spaces=%s',
+             package_info['name'], package_info['preset_id'], len(result['spaces']))
+    return result
+
+
+def load_environment_registry(force=False):
+    global _environment_registry, _registry_loaded
+
+    if _registry_loaded and not force:
+        return _environment_registry
+
+    registry = {}
+    packages = scan_environment_packages()
+
+    for package_info in packages:
+        package_data = _read_package_registry_entry(package_info)
+        preset_id = package_data['preset_id']
+        entry = registry.setdefault(preset_id, {
+            'package': package_data['name'],
+            'package_path': package_data['path'],
+            'spaces': {},
+        })
+
+        if package_data['spaces']:
+            entry['spaces'].update(package_data['spaces'])
+
+    _environment_registry = registry
+    _registry_loaded = True
+
+    summary = {}
+    for preset_id, data in registry.items():
+        summary[preset_id] = len(data.get('spaces', {}))
+    LOG.info('Environment registry loaded: %s', summary)
+    return _environment_registry
+
+
+def get_environment_registry():
+    return load_environment_registry(force=False)
+
+
+def resolve_environment_for_space(space_name, preset_id):
+    if not preset_id or preset_id == 'standard':
+        return None
+
+    registry = get_environment_registry()
+    preset_data = registry.get(preset_id)
+    if not preset_data:
+        LOG.warning('resolve_environment_for_space: preset not found in registry: %s', preset_id)
+        return None
+
+    data = preset_data.get('spaces', {}).get(space_name)
+    if not data:
+        LOG.warning('resolve_environment_for_space: no space=%s in preset=%s package=%s',
+                    space_name, preset_id, preset_data.get('package'))
+        return None
+
+    return data
+
+
+def get_preset_guid(preset_id, space_name=None):
+    if not preset_id or preset_id == 'standard':
+        return None
+
+    registry = get_environment_registry()
+    preset_data = registry.get(preset_id)
+    if not preset_data:
+        return None
+
+    if space_name:
+        data = preset_data.get('spaces', {}).get(space_name)
+        return data.get('guid') if data else None
+
+    spaces = preset_data.get('spaces', {})
+    for _space_name, data in spaces.items():
+        guid = data.get('guid')
+        if guid:
+            return guid
+    return None
+
+
 def load_config():
     global _cfg
     _cfg = json.loads(json.dumps(DEFAULT_CFG))
@@ -134,6 +374,7 @@ def load_config():
             fixed[map_name] = _normalize_weights(weights)
     _cfg["mapWeights"] = fixed
     save_config()
+    load_environment_registry(force=True)
     logger.info("config loaded from %s", CONFIG_PATH)
     return _cfg
 
@@ -238,10 +479,14 @@ def get_preset_for_map(map_name):
 def get_all_general_for_ui():
     items = []
     weights = _cfg.get("generalWeights", {})
+    registry = get_environment_registry()
     for preset in PRESET_ORDER:
+        label = PRESET_LABELS[preset]
+        if preset != 'standard' and preset not in registry:
+            label += u' [missing]'
         items.append({
             "id": preset,
-            "label": PRESET_LABELS[preset],
+            "label": label,
             "weight": int(weights.get(preset, 0))
         })
     return items
@@ -250,10 +495,16 @@ def get_all_general_for_ui():
 def get_all_for_map_ui(map_name):
     items = []
     weights = get_map_weights(map_name)
+    registry = get_environment_registry()
     for preset in PRESET_ORDER:
+        label = PRESET_LABELS[preset]
+        if preset != 'standard':
+            has_space = bool(registry.get(preset, {}).get('spaces', {}).get(map_name))
+            if not has_space:
+                label += u' [n/a]'
         items.append({
             "id": preset,
-            "label": PRESET_LABELS[preset],
+            "label": label,
             "weight": int(weights.get(preset, 0))
         })
     return items
@@ -269,7 +520,7 @@ def build_space_settings_xml(env_name, preset_guid):
     <environment>{env}</environment>
 </root>
 '''.format(env=env_name)
-        return content.encode('utf-8') if not isinstance(content, basestring) else content
+        return content
 
     content = u'''<?xml version="1.0" encoding="utf-8"?>
 <root>
@@ -277,86 +528,19 @@ def build_space_settings_xml(env_name, preset_guid):
     <environmentOverride>{guid}</environmentOverride>
 </root>
 '''.format(env=env_name, guid=preset_guid)
-    return content.encode('utf-8') if not isinstance(content, basestring) else content
-
-
-def _read_json_resource(path):
-    try:
-        if not IN_GAME:
-            return None
-        sect = ResMgr.openSection(path)
-        if sect is None:
-            return None
-        if hasattr(sect, 'asBinary'):
-            raw = sect.asBinary
-            if callable(raw):
-                raw = raw()
-        else:
-            raw = sect.readString('') if hasattr(sect, 'readString') else None
-        if not raw:
-            return None
-        if not isinstance(raw, basestring):
-            raw = raw.decode('utf-8')
-        return json.loads(raw)
-    except Exception:
-        logger.exception("read json resource failed: %s", path)
-        return None
-
-
-def load_geometry_mapping():
-    candidates = [
-        'spaces/geometry_mapping.json',
-        'spaces/spaces_geometry_mapping.json',
-        'scripts/client/mods/weather/geometry_mapping.json',
-        'mods/weather/geometry_mapping.json',
-    ]
-    for path in candidates:
-        data = _read_json_resource(path)
-        if isinstance(data, dict) and data:
-            return data
-    return {}
+    return content
 
 
 def find_space_settings_path(space_name):
     try:
-        game_root = None
-
-        try:
-            import BigWorld
-            if hasattr(BigWorld, 'wg_getPreferencesFilePath'):
-                prefs = BigWorld.wg_getPreferencesFilePath()
-                if prefs:
-                    game_root = os.path.abspath(os.path.join(os.path.dirname(prefs), '..', '..', '..', '..'))
-        except Exception:
-            LOG.error('find_space_settings_path: failed to resolve via prefs\n%s', traceback.format_exc())
-
-        if not game_root:
-            game_root = os.getcwd()
-
-        LOG.info('find_space_settings_path: game_root=%s', game_root)
-
-        res_mods_root = os.path.join(game_root, 'res_mods')
-        if not os.path.isdir(res_mods_root):
-            LOG.warning('find_space_settings_path: no res_mods root at %s', res_mods_root)
+        version_dir = _find_latest_version_dir('res_mods')
+        if not version_dir:
+            LOG.warning('find_space_settings_path: no res_mods version dir')
             return None
 
-        version_dirs = []
-        for name in os.listdir(res_mods_root):
-            full = os.path.join(res_mods_root, name)
-            if os.path.isdir(full):
-                version_dirs.append(full)
-
-        version_dirs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-
-        LOG.info('find_space_settings_path: version dirs=%s', version_dirs)
-
-        for version_dir in version_dirs:
-            candidate = os.path.join(version_dir, 'spaces', space_name, 'space.settings')
-            LOG.info('find_space_settings_path: checking %s', candidate)
-            return candidate
-
-        LOG.warning('find_space_settings_path: no version dirs in res_mods')
-        return None
+        candidate = os.path.join(version_dir, 'spaces', space_name, 'space.settings')
+        LOG.info('find_space_settings_path: candidate=%s', candidate)
+        return candidate
 
     except Exception:
         LOG.error('find_space_settings_path: failed\n%s', traceback.format_exc())
@@ -380,46 +564,42 @@ def write_space_settings_to_res_mods(target_path, content):
         return False
 
 
-def apply_environment_via_geometry_mapping(space_name, preset_id):
+def apply_environment_via_packages(space_name, preset_id):
     try:
-        LOG.info('apply_environment_via_geometry_mapping: start space=%s preset=%s', space_name, preset_id)
+        LOG.info('apply_environment_via_packages: start space=%s preset=%s', space_name, preset_id)
 
         if not space_name:
-            LOG.warning('apply_environment_via_geometry_mapping: no space_name')
+            LOG.warning('apply_environment_via_packages: no space_name')
             return False
 
-        env_map = load_geometry_mapping()
-        LOG.info('apply_environment_via_geometry_mapping: geometry map loaded, entries=%s', len(env_map) if env_map else 0)
-
-        env_name = env_map.get(space_name)
-        if not env_name:
-            LOG.warning('apply_environment_via_geometry_mapping: no mapping for space=%s', space_name)
+        if not preset_id or preset_id == 'standard':
+            LOG.info('apply_environment_via_packages: preset is standard, skipping override')
             return False
 
-        preset_guid = PRESET_GUIDS.get(preset_id) if preset_id else None
-        LOG.info(
-            'apply_environment_via_geometry_mapping: env_name=%s preset_guid=%s',
-            env_name, preset_guid
-        )
+        resolved = resolve_environment_for_space(space_name, preset_id)
+        if not resolved:
+            return False
+
+        env_name = resolved.get('env_name')
+        preset_guid = resolved.get('guid')
+
+        LOG.info('apply_environment_via_packages: resolved env_name=%s guid=%s package=%s',
+                 env_name, preset_guid, resolved.get('package'))
 
         space_settings_path = find_space_settings_path(space_name)
         if not space_settings_path:
-            LOG.warning('apply_environment_via_geometry_mapping: space settings path not found for %s', space_name)
+            LOG.warning('apply_environment_via_packages: space settings path not found for %s', space_name)
             return False
-
-        LOG.info('apply_environment_via_geometry_mapping: target path=%s', space_settings_path)
 
         content = build_space_settings_xml(env_name, preset_guid)
         if not content:
-            LOG.warning('apply_environment_via_geometry_mapping: generated empty content')
+            LOG.warning('apply_environment_via_packages: generated empty content')
             return False
 
-        write_space_settings_to_res_mods(space_settings_path, content)
-        LOG.info('apply_environment_via_geometry_mapping: write OK')
-        return True
+        return write_space_settings_to_res_mods(space_settings_path, content)
 
     except Exception:
-        LOG.error('apply_environment_via_geometry_mapping: failed\n%s', traceback.format_exc())
+        LOG.error('apply_environment_via_packages: failed\n%s', traceback.format_exc())
         return False
 
 
@@ -432,12 +612,15 @@ def on_space_entered(space_name):
             return False
 
         preset_id = _current_override_preset
+        if not preset_id:
+            preset_id = get_preset_for_map(space_name)
+
         LOG.info('on_space_entered: chosen preset=%s', preset_id if preset_id else 'standard')
 
-        result = apply_environment_via_geometry_mapping(space_name, preset_id)
+        result = apply_environment_via_packages(space_name, preset_id)
 
         LOG.info(
-            'on_space_entered: apply_environment_via_geometry_mapping(space=%s, preset=%s) -> %s',
+            'on_space_entered: apply_environment_via_packages(space=%s, preset=%s) -> %s',
             space_name, preset_id, result
         )
         return result
@@ -521,9 +704,9 @@ def cycle_weather_in_battle():
 
         if battle_loaded and arena_name:
             try:
-                applied = apply_environment_via_geometry_mapping(arena_name, _current_override_preset)
+                applied = apply_environment_via_packages(arena_name, _current_override_preset)
                 LOG.info(
-                    'cycle_weather_in_battle: apply_environment_via_geometry_mapping returned %s for arena=%s preset=%s',
+                    'cycle_weather_in_battle: apply_environment_via_packages returned %s for arena=%s preset=%s',
                     applied, arena_name, _current_override_preset
                 )
             except Exception:
@@ -646,6 +829,9 @@ class WeatherController(object):
 
     def getPresetForMap(self, map_name):
         return get_preset_for_map(map_name)
+
+    def getEnvironmentRegistry(self):
+        return get_environment_registry()
 
 
 g_controller = WeatherController()
