@@ -93,7 +93,6 @@ _current_override_preset = None
 _current_cycle_index = 0
 _environment_registry = {}
 _registry_loaded = False
-_last_space_name = None  # кешується в on_space_entered, потрібно для cycle_weather_in_battle
 
 
 def _ensure_dir(path):
@@ -586,6 +585,12 @@ def get_all_for_map_ui(map_name):
 
 
 def build_space_settings_xml(env_name, preset_guid):
+    """
+    Генерує вміст файлу spaces/<map>/space.settings.
+
+    Формат підтверджено порівнянням з робочим модпаком (see ref/).
+    GUID тут з ТИРЕ (BF040BCB-4BE1D04F-...), env_name — ім'я <n> з environment.xml пресета.
+    """
     if not env_name:
         return None
 
@@ -606,6 +611,51 @@ def build_space_settings_xml(env_name, preset_guid):
     return content
 
 
+def build_environments_xml(active_guid, all_guids):
+    """
+    Генерує вміст файлу spaces/<map>/environments/environments.xml.
+
+    ВАЖЛИВО: без цього файлу рушій WoT відкидає environmentOverride
+    у space.settings як недозволений — саме тому раніше погода не змінювалась.
+
+    Формат (підтверджено порівнянням з робочим модпаком):
+      - корінь <root>
+      - <activeEnvironment> — який пресет активний
+      - <isEnvironmentSwitchAllowed>False</isEnvironmentSwitchAllowed> — заборона авто-циклу
+      - <environment> — список ВСІХ дозволених GUID
+
+    GUID тут пишуться через ТОЧКУ (BF040BCB.4BE1D04F.7D484589.135E881B),
+    а не через тире як у space.settings.
+    """
+    if not active_guid:
+        return None
+
+    def _dotted(guid):
+        # BF040BCB-4BE1D04F-7D484589-135E881B -> BF040BCB.4BE1D04F.7D484589.135E881B
+        return guid.replace('-', '.')
+
+    lines = [u'<root>']
+    lines.append(u'\t<activeEnvironment>{0}</activeEnvironment>'.format(_dotted(active_guid)))
+    lines.append(u'\t<isEnvironmentSwitchAllowed>False</isEnvironmentSwitchAllowed>')
+
+    # Список усіх дозволених пресетів. Активний має бути в цьому списку.
+    seen = set()
+    ordered = []
+    for g in all_guids:
+        if g and g not in seen:
+            seen.add(g)
+            ordered.append(g)
+    if active_guid not in seen:
+        ordered.append(active_guid)
+
+    for g in ordered:
+        lines.append(u'\t<environment>{0}</environment>'.format(_dotted(g)))
+
+    lines.append(u'</root>')
+    lines.append(u'')
+    return u'\r\n'.join(lines)
+
+
 def find_space_settings_path(space_name):
     try:
         version_dir = _find_latest_version_dir('res_mods')
@@ -622,7 +672,20 @@ def find_space_settings_path(space_name):
         return None
 
 
-def write_space_settings_to_res_mods(target_path, content):
+def find_environments_xml_path(space_name):
+    try:
+        version_dir = _find_latest_version_dir('res_mods')
+        if not version_dir:
+            return None
+        candidate = os.path.join(version_dir, 'spaces', space_name, 'environments', 'environments.xml')
+        LOG.info('find_environments_xml_path: candidate=%s', candidate)
+        return candidate
+    except Exception:
+        LOG.error('find_environments_xml_path: failed\n%s', traceback.format_exc())
+        return None
+
+
+def _write_text_file(target_path, content):
     try:
         folder = os.path.dirname(target_path)
         if not os.path.isdir(folder):
@@ -631,12 +694,27 @@ def write_space_settings_to_res_mods(target_path, content):
         with open(target_path, 'w') as f:
             f.write(content)
 
-        LOG.info('write_space_settings_to_res_mods: wrote %s bytes to %s', len(content), target_path)
+        LOG.info('wrote %s bytes to %s', len(content), target_path)
         return True
-
     except Exception:
-        LOG.error('write_space_settings_to_res_mods: failed\n%s', traceback.format_exc())
+        LOG.error('write %s failed\n%s', target_path, traceback.format_exc())
         return False
+
+
+def write_space_settings_to_res_mods(target_path, content):
+    return _write_text_file(target_path, content)
+
+
+def _get_all_known_guids_for_space(space_name):
+    """Повертає список усіх GUID, які є в завантажених environments.*.wotmod для даної карти."""
+    registry = get_environment_registry()
+    guids = []
+    for preset_id, preset_data in registry.items():
+        spaces = preset_data.get('spaces', {})
+        entry = spaces.get(space_name)
+        if entry and entry.get('guid'):
+            guids.append(entry['guid'])
+    return guids
 
 
 def apply_environment_via_packages(space_name, preset_id):
@@ -661,17 +739,36 @@ def apply_environment_via_packages(space_name, preset_id):
         LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s',
                  preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
 
+        # 1) space.settings — задає активний environment по імені та GUID (через тире).
         space_settings_path = find_space_settings_path(space_name)
         if not space_settings_path:
-            LOG.warning('apply_environment_via_packages: space settings path not found for %s', space_name)
+            LOG.warning('apply_environment_via_packages: space_settings path not found for %s', space_name)
             return False
 
-        content = build_space_settings_xml(env_name, preset_guid)
-        if not content:
-            LOG.warning('apply_environment_via_packages: generated empty content')
+        settings_content = build_space_settings_xml(env_name, preset_guid)
+        if not settings_content:
+            LOG.warning('apply_environment_via_packages: generated empty space.settings')
             return False
 
-        return write_space_settings_to_res_mods(space_settings_path, content)
+        ok1 = _write_text_file(space_settings_path, settings_content)
+
+        # 2) environments/environments.xml — легалізує activeEnvironment у списку дозволених.
+        #    Без цього файлу environmentOverride зі space.settings відкидається.
+        env_xml_path = find_environments_xml_path(space_name)
+        if not env_xml_path:
+            LOG.warning('apply_environment_via_packages: environments.xml path not found for %s', space_name)
+            return ok1
+
+        all_guids = _get_all_known_guids_for_space(space_name)
+        env_xml_content = build_environments_xml(preset_guid, all_guids)
+        if not env_xml_content:
+            LOG.warning('apply_environment_via_packages: generated empty environments.xml')
+            return ok1
+
+        ok2 = _write_text_file(env_xml_path, env_xml_content)
+
+        LOG.info('apply_environment_via_packages: space.settings=%s environments.xml=%s', ok1, ok2)
+        return ok1 and ok2
 
     except Exception:
         LOG.error('apply_environment_via_packages: failed\n%s', traceback.format_exc())
@@ -679,16 +776,12 @@ def apply_environment_via_packages(space_name, preset_id):
 
 
 def on_space_entered(space_name):
-    global _last_space_name
     try:
         LOG.info('on_space_entered: raw space_name=%s override=%s', space_name, _current_override_preset)
 
         if not space_name:
             LOG.warning('on_space_entered: empty space_name')
             return False
-
-        # Кешуємо нормалізоване ім'я для подальших hotkey-викликів у бою.
-        _last_space_name = space_name
 
         preset_id = _current_override_preset
         if not preset_id:
@@ -738,48 +831,6 @@ def cycle_weather_system():
         logger.exception("cycle_weather_system failed")
 
 
-def _resolve_current_arena_name():
-    """
-    Повертає нормалізовану назву карти поточного бою або None.
-
-    Шукає в такому порядку:
-      1. player.arena.arenaType.geometryName / geometry / name   (стандартний шлях WoT)
-      2. player.arena.geometryName                                (на випадок майбутніх змін API)
-      3. _last_space_name                                         (кеш з onEnterWorld-хука)
-    """
-    try:
-        import BigWorld
-        player = BigWorld.player()
-        if player is None:
-            return None
-
-        arena = getattr(player, 'arena', None)
-        if arena is not None:
-            arena_type = getattr(arena, 'arenaType', None)
-            if arena_type is not None:
-                for attr in ('geometryName', 'geometry', 'name'):
-                    v = getattr(arena_type, attr, None)
-                    if v and isinstance(v, basestring):
-                        name = v.strip()
-                        if '/' in name:
-                            name = name.rsplit('/', 1)[-1]
-                        if name:
-                            return name
-
-            v = getattr(arena, 'geometryName', None)
-            if v and isinstance(v, basestring):
-                name = v.strip()
-                if '/' in name:
-                    name = name.rsplit('/', 1)[-1]
-                if name:
-                    return name
-    except Exception:
-        LOG.error('_resolve_current_arena_name failed\n%s', traceback.format_exc())
-
-    # Fallback: значення, збережене в on_space_entered (onEnterWorld-хук).
-    return _last_space_name
-
-
 def cycle_weather_in_battle():
     global _current_cycle_index, _current_override_preset
 
@@ -804,16 +855,17 @@ def cycle_weather_in_battle():
         _current_override_preset = None if next_preset == 'standard' else next_preset
 
         battle_loaded = False
+        arena_name = None
         player = None
 
         try:
             import BigWorld
             player = BigWorld.player()
             battle_loaded = player is not None and getattr(player, 'arena', None) is not None
+            if battle_loaded:
+                arena_name = getattr(player.arena, 'geometryName', None)
         except Exception:
             LOG.error('cycle_weather_in_battle: failed to inspect BigWorld state\n%s', traceback.format_exc())
-
-        arena_name = _resolve_current_arena_name()
 
         LOG.info(
             'cycle_weather_in_battle: battle_loaded=%s arena_name=%s override=%s',
@@ -822,7 +874,7 @@ def cycle_weather_in_battle():
 
         applied = False
 
-        if arena_name:
+        if battle_loaded and arena_name:
             try:
                 applied = apply_environment_via_packages(arena_name, _current_override_preset)
                 LOG.info(
@@ -832,18 +884,14 @@ def cycle_weather_in_battle():
             except Exception:
                 LOG.error('cycle_weather_in_battle: apply failed\n%s', traceback.format_exc())
         else:
-            LOG.warning('cycle_weather_in_battle: arena name unknown, preset only stored')
+            LOG.warning('cycle_weather_in_battle: battle or arena not ready, preset only stored')
 
         save_config()
 
         msg = '[Weather] preset: %s' % next_preset
-        if applied:
-            # space.settings вже читається рушієм ДО onEnterWorld,
-            # тому зміна візуально набере чинності з наступного бою.
-            msg += ' (applied, takes effect next battle)'
-        elif battle_loaded and arena_name:
+        if not applied and battle_loaded:
             msg += ' (stored, may require next battle reload)'
-        else:
+        elif not battle_loaded:
             msg += ' (stored for next battle)'
 
         if SystemMessages is not None:
