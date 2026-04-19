@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Weather controller.
-v1.8.0 — стабільний мінімум через player + BigWorld timeOfDay
+v2.0.0 — використовуємо правильні імена environment для Weather.override()
 """
 import json
 import os
@@ -20,6 +20,7 @@ except ImportError:
 logger = logging.getLogger("weather_mod")
 logger.setLevel(logging.INFO)
 
+# GUID'и папок з environments_*.wotmod
 PRESET_GUIDS = {
     "standard": None,
     "midday":   "BF040BCB-4BE1D04F-7D484589-135E881B",
@@ -28,28 +29,30 @@ PRESET_GUIDS = {
     "midnight": "15755E11-4090266B-594778B6-B233C12C",
 }
 
-PRESET_NUMERIC_IDS = {
-    "standard": 0,
-    "midday": 1,
-    "sunset": 2,
-    "overcast": 3,
-    "midnight": 4,
+# Імена з тегу <name> в environment.xml — потрібні для Weather.override()
+# Взяті безпосередньо з environment.xml кожного пресету (поле <n>)
+PRESET_ENV_NAMES = {
+    "standard": None,        # стандарт — скидаємо override
+    "midday":   "03_midday",
+    "sunset":   "02_Sunset",
+    "overcast": "01_Overcast",
+    "midnight": "RexpTM",    # так виглядає в midnight/environment.xml <n> тег
 }
 
-# arena period ids from probing in logs: 0,1,2,4 were accepted; overcast kept on 3 for continuity
+# Period IDs для player.__applyTimeAndWeatherSettings
 PRESET_PERIOD_IDS = {
     "standard": 0,
-    "midday": 1,
-    "sunset": 2,
+    "midday":   1,
+    "sunset":   2,
     "overcast": 3,
     "midnight": 4,
 }
 
-# BigWorld.timeOfDay(spaceTimeOfDay) takes unicode like '10:00'
-PRESET_TIME_TEXT = {
+# Час доби для BigWorld.timeOfDay / BigWorld.spaceTimeOfDay
+PRESET_TOD = {
     "standard": u"12:00",
-    "midday": u"12:00",
-    "sunset": u"18:30",
+    "midday":   u"12:00",
+    "sunset":   u"18:30",
     "overcast": u"13:00",
     "midnight": u"00:12",
 }
@@ -64,7 +67,6 @@ PRESET_LABELS = {
 
 PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
 MAX_WEIGHT = 20
-_DIAGNOSTICS_DONE = False
 
 try:
     _prefs = BigWorld.wg_getPreferencesFilePath() if hasattr(BigWorld, 'wg_getPreferencesFilePath') else BigWorld.getPreferencesFilePath()
@@ -166,7 +168,8 @@ def is_battle_map_space(space_name):
     if not name:
         return False
     lowered = name.lower()
-    blocked_prefixes = ('hangar', 'garage', 'login', 'waiting', 'intro', 'bootcamp', 'story', 'fun_random_hangar')
+    blocked_prefixes = ('hangar', 'garage', 'login', 'waiting', 'intro',
+                        'bootcamp', 'story', 'fun_random_hangar')
     if lowered.startswith(blocked_prefixes):
         return False
     return '_' in name
@@ -192,18 +195,8 @@ def detect_current_battle_space():
                 if is_battle_map_space(norm):
                     return norm
     except Exception:
-        logger.exception("detect_current_battle_space failed")
+        pass
     return None
-
-
-def _safe_repr(value, limit=240):
-    try:
-        text = repr(value)
-    except Exception as e:
-        text = '<repr failed: %s>' % e
-    if len(text) > limit:
-        text = text[:limit] + '...'
-    return text
 
 
 def _fmt_exc():
@@ -213,230 +206,108 @@ def _fmt_exc():
         return '<traceback unavailable>'
 
 
-def _log_ok(step, detail=''):
-    if detail:
-        logger.info('STEP OK: %s | %s', step, detail)
-    else:
-        logger.info('STEP OK: %s', step)
-
-
-def _log_fail(step):
-    logger.error('STEP FAIL: %s\n%s', step, _fmt_exc())
-
-
-def _dump_focus_diagnostics():
-    global _DIAGNOSTICS_DONE
-    if _DIAGNOSTICS_DONE:
-        return
-    _DIAGNOSTICS_DONE = True
-    logger.info('====== FOCUS DIAGNOSTICS START ======')
-    try:
-        player = BigWorld.player()
-        logger.info('player=%s', _safe_repr(player))
-        if player is not None:
-            for attr in ('weatherPresetID', '_PlayerAvatar__blArenaPeriod', '_PlayerAvatar__isSpaceInitialized', 'spaceID'):
-                logger.info('player.%s=%s', attr, _safe_repr(getattr(player, attr, None)))
-            logger.info('player._PlayerAvatar__applyTimeAndWeatherSettings callable=%s', callable(getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)))
-        logger.info('BigWorld.timeOfDay callable=%s', callable(getattr(BigWorld, 'timeOfDay', None)))
-        logger.info('BigWorld.spaceTimeOfDay callable=%s', callable(getattr(BigWorld, 'spaceTimeOfDay', None)))
-        import Weather
-        logger.info('Weather.s_weather=%s', _safe_repr(getattr(Weather, 's_weather', None)))
-        if hasattr(Weather, 'weather'):
-            logger.info('Weather.weather()=%s', _safe_repr(Weather.weather()))
-    except Exception:
-        logger.error('FOCUS diagnostics failed\n%s', _fmt_exc())
-    logger.info('====== FOCUS DIAGNOSTICS END ======')
-
-
-# kept only for preload path; battle path is player + BigWorld timeOfDay
-
-def apply_preset_to_space(space_name, preset_id):
-    guid = PRESET_GUIDS.get(preset_id)
-    if guid is None or not IN_GAME:
-        return
-    try:
-        path = 'spaces/%s/space.settings' % space_name
-        section = ResMgr.openSection(path)
-        if section is None:
-            logger.warning('space.settings not found for %s', space_name)
-            return
-        section.writeString('environment/override', guid)
-        # NOTE: section.save() intentionally removed — WoT VFS is read-only at runtime.
-        # The writeString patches the in-memory section which is read during space load.
-        logger.info('space.settings patched in-memory for %s (guid=%s)', space_name, guid)
-    except Exception:
-        logger.error('apply_preset_to_space failed for %s\n%s', space_name, _fmt_exc())
-
-
-def _set_player_values(player, preset_id):
-    numeric = PRESET_NUMERIC_IDS.get(preset_id, 0)
-    period = PRESET_PERIOD_IDS.get(preset_id, numeric)
-    setattr(player, 'weatherPresetID', numeric)
-    setattr(player, '_PlayerAvatar__blArenaPeriod', period)
-    return numeric, period
-
-
-def _apply_player_weather(player, preset_id, guid):
-    numeric, period = _set_player_values(player, preset_id)
-    _log_ok('player values', 'weatherPresetID=%s blArenaPeriod=%s guid=%s' % (numeric, period, guid))
-
-    apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
-    if callable(apply_fn):
-        try:
-            apply_fn(period)
-            _log_ok('player.apply(period)', _safe_repr(period))
-        except Exception:
-            _log_fail('player.apply(period=%s)' % period)
-        try:
-            apply_fn(numeric)
-            _log_ok('player.apply(numeric)', _safe_repr(numeric))
-        except Exception:
-            _log_fail('player.apply(numeric=%s)' % numeric)
-        try:
-            apply_fn()
-            _log_ok('player.apply()')
-        except Exception:
-            _log_fail('player.apply()')
-        if guid:
-            try:
-                apply_fn(guid)
-                _log_ok('player.apply(guid)', guid)
-            except Exception:
-                _log_fail('player.apply(guid=%s)' % guid)
-    else:
-        logger.warning('player._PlayerAvatar__applyTimeAndWeatherSettings not callable')
-
-    return numeric, period
-
-
-def _apply_time_text(player, preset_id):
-    tod = PRESET_TIME_TEXT.get(preset_id, u'12:00')
-    fn = getattr(BigWorld, 'timeOfDay', None)
-    if callable(fn):
-        try:
-            res = fn(tod)
-            _log_ok('BigWorld.timeOfDay', '%s -> %s' % (tod, _safe_repr(res)))
-        except Exception:
-            _log_fail('BigWorld.timeOfDay(%s)' % tod)
-
-    fn = getattr(BigWorld, 'spaceTimeOfDay', None)
-    space_id = getattr(player, 'spaceID', None)
-    if callable(fn) and space_id is not None:
-        try:
-            res = fn(space_id, tod)
-            _log_ok('BigWorld.spaceTimeOfDay', 'spaceID=%s tod=%s -> %s' % (space_id, tod, _safe_repr(res)))
-        except Exception:
-            _log_fail('BigWorld.spaceTimeOfDay(%s, %s)' % (space_id, tod))
-
-
-def _apply_weather_object(guid):
+def apply_preset_in_battle(preset_id):
     """
-    Змінює візуальний environment через Weather.override або localOverride.
-    Список методів з логу:
-    localOverride, override, overridenWeather, summon, system,
-    weatherController, newSystemByName, nextWeatherSystem, onChangeSpace
+    Головна функція перемикання environment у бою.
+
+    Стратегія (в порядку пріоритету):
+    1. Weather.override(env_name) — головний метод, використовує ім'я з <name> тегу
+    2. Weather.summon(env_name)   — fallback через summon з тим самим іменем
+    3. player.__applyTimeAndWeatherSettings(period) — зміна period ID
+    4. BigWorld.timeOfDay / spaceTimeOfDay — зміна часу доби
+
+    env_name береться з PRESET_ENV_NAMES — це реальне ім'я з <name> тегу
+    у файлі environment.xml всередині .wotmod мода.
     """
     if not IN_GAME:
-        return
+        return False
+
+    env_name = PRESET_ENV_NAMES.get(preset_id)
+    guid = PRESET_GUIDS.get(preset_id, '')
+    if guid is None:
+        guid = ''
+    period = PRESET_PERIOD_IDS.get(preset_id, 0)
+    tod = PRESET_TOD.get(preset_id, u'12:00')
+
+    logger.info('apply preset=%s env_name=%s guid=%s period=%s',
+                preset_id, env_name, guid, period)
+
+    # ---- Крок 1: Weather.override(env_name) --------------------------------
     try:
         import Weather
         w = getattr(Weather, 's_weather', None)
         if w is None and hasattr(Weather, 'weather'):
             w = Weather.weather()
-        if w is None:
+
+        if w is not None:
+            if env_name:
+                # Спробуємо override з іменем environment
+                if hasattr(w, 'override') and callable(w.override):
+                    try:
+                        w.override(env_name)
+                        logger.info('OK: Weather.override(%s)', env_name)
+                    except Exception:
+                        logger.warning('FAIL: Weather.override(%s)\n%s', env_name, _fmt_exc())
+
+                # Спробуємо summon з іменем environment
+                if hasattr(w, 'summon') and callable(w.summon):
+                    try:
+                        w.summon(env_name)
+                        logger.info('OK: Weather.summon(%s)', env_name)
+                    except Exception:
+                        logger.debug('FAIL: Weather.summon(%s)\n%s', env_name, _fmt_exc())
+
+            else:
+                # Для standard — скидаємо override (якщо є метод)
+                for reset_method in ('clearOverride', 'resetOverride', 'clearLocalOverride'):
+                    if hasattr(w, reset_method) and callable(getattr(w, reset_method)):
+                        try:
+                            getattr(w, reset_method)()
+                            logger.info('OK: Weather.%s()', reset_method)
+                            break
+                        except Exception:
+                            pass
+        else:
             logger.warning('Weather object not available')
-            return
 
-        applied = False
-
-        # Метод 1: localOverride(guid) — локальне перевизначення для клієнта
-        if hasattr(w, 'localOverride') and guid:
-            try:
-                w.localOverride(guid)
-                _log_ok('Weather.localOverride', guid)
-                applied = True
-            except Exception:
-                _log_fail('Weather.localOverride(%s)' % guid)
-
-        # Метод 2: override(guid) — глобальне перевизначення
-        if not applied and hasattr(w, 'override') and guid:
-            try:
-                w.override(guid)
-                _log_ok('Weather.override', guid)
-                applied = True
-            except Exception:
-                _log_fail('Weather.override(%s)' % guid)
-
-        # Метод 3: summon(guid) — виклик weather system за назвою/guid
-        if not applied and hasattr(w, 'summon') and guid:
-            try:
-                w.summon(guid)
-                _log_ok('Weather.summon', guid)
-                applied = True
-            except Exception:
-                _log_fail('Weather.summon(%s)' % guid)
-
-        if not applied:
-            logger.warning('Weather: no applicable method found for guid=%s', guid)
-
+    except ImportError:
+        logger.warning('Weather module not importable')
     except Exception:
-        _log_fail('_apply_weather_object(guid=%s)' % guid)
+        logger.error('Weather block failed\n%s', _fmt_exc())
 
-
-def apply_preset_in_battle(preset_id):
-    if not IN_GAME:
-        return False
-
-    _dump_focus_diagnostics()
-
-    guid = PRESET_GUIDS.get(preset_id) or ''
-    logger.info('===== APPLY START preset=%s guid=%s numeric=%s period=%s tod=%s =====',
-                preset_id, guid, PRESET_NUMERIC_IDS.get(preset_id), PRESET_PERIOD_IDS.get(preset_id), PRESET_TIME_TEXT.get(preset_id))
-
+    # ---- Крок 2: player period + applyTimeAndWeatherSettings ----------------
     try:
         player = BigWorld.player()
+        if player is not None:
+            setattr(player, 'weatherPresetID', period)
+            setattr(player, '_PlayerAvatar__blArenaPeriod', period)
+
+            apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
+            if callable(apply_fn):
+                try:
+                    apply_fn(period)
+                    logger.info('OK: player.apply(period=%s)', period)
+                except Exception:
+                    logger.debug('FAIL: player.apply(%s)\n%s', period, _fmt_exc())
     except Exception:
-        logger.error('BigWorld.player() failed\n%s', _fmt_exc())
-        return False
+        logger.error('player block failed\n%s', _fmt_exc())
 
-    if player is None:
-        logger.warning('apply_preset_in_battle: no player')
-        return False
-
-    # 1) Weather.localOverride — головний механізм зміни рендеру
-    #    Це той самий шлях що використовують environments_*.wotmod в рантаймі
+    # ---- Крок 3: час доби --------------------------------------------------
     try:
-        _apply_weather_object(guid)
-    except Exception:
-        _log_fail('STEP 1 Weather.localOverride')
+        fn = getattr(BigWorld, 'timeOfDay', None)
+        if callable(fn):
+            fn(tod)
+            logger.info('OK: BigWorld.timeOfDay(%s)', tod)
 
-    # 2) player state sync
-    try:
-        numeric, period = _apply_player_weather(player, preset_id, guid)
+        player = BigWorld.player()
+        fn2 = getattr(BigWorld, 'spaceTimeOfDay', None)
+        space_id = getattr(player, 'spaceID', None) if player else None
+        if callable(fn2) and space_id is not None:
+            fn2(space_id, tod)
+            logger.info('OK: BigWorld.spaceTimeOfDay(%s, %s)', space_id, tod)
     except Exception:
-        _log_fail('STEP 2 player hard-set')
-        numeric = PRESET_NUMERIC_IDS.get(preset_id, 0)
-        period = PRESET_PERIOD_IDS.get(preset_id, numeric)
+        logger.debug('timeOfDay block failed\n%s', _fmt_exc())
 
-    # 3) time of day
-    try:
-        _apply_time_text(player, preset_id)
-    except Exception:
-        _log_fail('STEP 3 time sync')
-
-    # 4) final re-apply
-    try:
-        apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
-        if callable(apply_fn):
-            apply_fn(period)
-            _log_ok('STEP 4 final player.apply(period)', _safe_repr(period))
-    except Exception:
-        _log_fail('STEP 4 final player.apply(period=%s)' % period)
-
-    logger.info('FINAL STATE: player.weatherPresetID=%s player._PlayerAvatar__blArenaPeriod=%s',
-                _safe_repr(getattr(player, 'weatherPresetID', None)),
-                _safe_repr(getattr(player, '_PlayerAvatar__blArenaPeriod', None)))
-    logger.info('===== APPLY END preset=%s =====', preset_id)
     return True
 
 
@@ -461,7 +332,7 @@ class WeatherController(object):
 
     def on_hotkey_changed(self, key_codes, hotkey_str):
         self.config.hotkey_codes = [int(c) for c in key_codes]
-        self.hotkey_str = hotkey_str
+        self.config.hotkey_str = hotkey_str
         self.config.save()
         logger.info('Hotkey updated: %s codes=%s', hotkey_str, key_codes)
 
@@ -476,7 +347,18 @@ class WeatherController(object):
         weights = self.config.get_weights_for_map(normalized)
         preset = pick_preset(weights)
         self._current_preset = preset
-        apply_preset_to_space(normalized, preset)
+        # space.settings patch залишаємо для pre-load (нешкідливо навіть якщо VFS read-only)
+        try:
+            if IN_GAME:
+                guid = PRESET_GUIDS.get(preset)
+                if guid:
+                    path = 'spaces/%s/space.settings' % normalized
+                    section = ResMgr.openSection(path)
+                    if section is not None:
+                        section.writeString('environment/override', guid)
+                        logger.info('pre-load patch: %s -> %s', normalized, preset)
+        except Exception:
+            pass
         return preset
 
     def cycle_preset_in_battle(self):
@@ -487,15 +369,15 @@ class WeatherController(object):
         self._current_space = detected
 
         try:
-            prev_name = self._current_preset or 'standard'
-            idx = PRESET_ORDER.index(prev_name)
+            prev = self._current_preset or 'standard'
+            idx = PRESET_ORDER.index(prev)
         except ValueError:
-            prev_name = 'standard'
+            prev = 'standard'
             idx = 0
         next_preset = PRESET_ORDER[(idx + 1) % len(PRESET_ORDER)]
         self._current_preset = next_preset
 
-        logger.info('cycle: %s -> %s on %s', prev_name, next_preset, self._current_space)
+        logger.info('cycle: %s -> %s on %s', prev, next_preset, self._current_space)
         apply_preset_in_battle(next_preset)
 
         try:
