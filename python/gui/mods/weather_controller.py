@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v3.1
-Weather hotkey: nextWeatherSystem() + summon(DataSection)
-Environment randomizer: при вході в бій
+Weather controller v3.2
+- summon(DataSection) працює (не падає)
+- nextWeatherSystem(fadeSpeed) виправлено
+- Чистий код без зайвого логування
 """
 import json
 import os
@@ -186,15 +187,8 @@ def detect_current_battle_space():
     return None
 
 
-def _fmt_exc():
-    try:
-        return traceback.format_exc()
-    except Exception:
-        return ''
-
-
 def _get_weather():
-    """Повертає Weather об'єкт ініціалізований для поточного простору."""
+    """Weather об'єкт ініціалізований для поточного простору."""
     try:
         import Weather
         w = getattr(Weather, 's_weather', None)
@@ -202,12 +196,10 @@ def _get_weather():
             w = Weather.weather()
         if w is None:
             return None
-
         player = BigWorld.player()
         space_id = getattr(player, 'spaceID', None) if player else None
         if space_id is not None:
-            current = getattr(w, 'currentSpaceID', -1)
-            if current != space_id:
+            if getattr(w, 'currentSpaceID', -1) != space_id:
                 fn = getattr(w, 'onChangeSpace', None)
                 if callable(fn):
                     try:
@@ -221,36 +213,39 @@ def _get_weather():
 
 def cycle_weather_system():
     """
-    Перемикає weather system.
-    Стратегія:
-    1. Weather.nextWeatherSystem() — вбудований метод WoT для циклічного перемикання
-    2. Weather.summon(DataSection) — пряма передача DataSection об'єкта
-    3. Weather.summon(name_string) — передача імені як рядка
-
+    Циклічно перемикає weather system.
     Повертає (success, system_name).
+
+    Стратегія:
+    1. nextWeatherSystem(fadeSpeed) — вбудований цикл WoT
+    2. summon(DataSection) — пряма передача секції конфігу
     """
     w = _get_weather()
     if w is None:
         return False, None
 
-    # --- Спроба 1: nextWeatherSystem() ---
+    # --- Спроба 1: nextWeatherSystem(fadeSpeed) ---
+    # Потребує як мінімум 2 аргументи: self + fadeSpeed
     fn_next = getattr(w, 'nextWeatherSystem', None)
     if callable(fn_next):
-        try:
-            fn_next()
-            # Після виклику дізнаємось яка система активна
-            current_sys = getattr(w, 'system', None)
-            name = getattr(current_sys, 'name', None) if current_sys else None
-            logger.info("OK: Weather.nextWeatherSystem() -> system=%s", name)
-            return True, name
-        except Exception as e:
-            logger.warning("FAIL: nextWeatherSystem: %s", e)
+        for fade in (15.0, 5.0, 1.0, 0.0):
+            try:
+                fn_next(fade)
+                current = getattr(w, 'system', None)
+                name = getattr(current, 'name', None) if current else None
+                logger.info("OK: nextWeatherSystem(%.1f) -> %s", fade, name)
+                return True, name
+            except Exception as e:
+                err = str(e)
+                if 'takes at least' in err or 'argument' in err.lower():
+                    continue  # спробуємо інший аргумент
+                logger.debug("nextWeatherSystem(%.1f) failed: %s", fade, e)
+                break
 
     # --- Спроба 2: summon(DataSection) ---
     fn_systems = getattr(w, '_weatherSystemsForCurrentSpace', None)
     systems = fn_systems() if callable(fn_systems) else []
     if systems:
-        # Вибираємо наступну в черзі (зберігаємо idx в closure через атрибут)
         current_idx = getattr(w, '_mod_weather_idx', 0)
         next_idx = (current_idx + 1) % len(systems)
         w._mod_weather_idx = next_idx
@@ -261,35 +256,32 @@ def cycle_weather_system():
         if callable(fn_summon):
             try:
                 fn_summon(target)
-                logger.info("OK: Weather.summon(DataSection[%d] name=%s)", next_idx, target_name)
+                logger.info("OK: summon(DataSection[%d] '%s')", next_idx, target_name)
                 return True, target_name
             except Exception as e:
-                logger.warning("FAIL: summon(DataSection): %s", e)
+                logger.warning("summon(DataSection) failed: %s", e)
 
-        # --- Спроба 3: summon(name_string) ---
-        if callable(fn_summon):
+            # Fallback: summon(name_string)
             try:
                 fn_summon(target_name)
-                logger.info("OK: Weather.summon('%s')", target_name)
+                logger.info("OK: summon('%s')", target_name)
                 return True, target_name
             except Exception as e:
-                logger.warning("FAIL: summon(name): %s", e)
+                logger.debug("summon(name) failed: %s", e)
 
     return False, None
 
 
 def apply_environment_preset(space_name, preset_id):
-    """Патчимо VFS для environment при вході в бій."""
+    """Патчимо VFS при вході в бій."""
     guid = PRESET_GUIDS.get(preset_id)
     if not guid or not IN_GAME:
         return
     try:
-        path = 'spaces/%s/space.settings' % space_name
-        section = ResMgr.openSection(path)
-        if section is None:
-            return
-        section.writeString('environment/override', guid)
-        logger.info("env preset: %s -> %s (guid=%s)", space_name, preset_id, guid)
+        section = ResMgr.openSection('spaces/%s/space.settings' % space_name)
+        if section is not None:
+            section.writeString('environment/override', guid)
+            logger.info("env: %s -> %s (guid=%s)", space_name, preset_id, guid)
     except Exception:
         pass
 
@@ -323,7 +315,6 @@ class WeatherController(object):
         pass
 
     def on_space_entered(self, space_name):
-        """Викликається при Avatar.onEnterWorld — вибираємо environment пресет."""
         normalized = normalize_space_name(space_name)
         if not is_battle_map_space(normalized):
             return
@@ -335,7 +326,7 @@ class WeatherController(object):
         apply_environment_preset(normalized, preset)
 
     def cycle_weather_in_battle(self):
-        """F12 у бою: циклічно перемикаємо weather system."""
+        """F12: перемикаємо weather system у бою."""
         if not detect_current_battle_space():
             logger.info("cycle_weather: not in battle")
             return
@@ -349,11 +340,13 @@ class WeatherController(object):
             else:
                 msg = u"Атмосфера: перемкнуто"
             if not ok:
-                msg = u"Атмосфера: помилка (лог)"
+                msg = u"Атмосфера: не вдалось"
             SystemMessages.pushI18nMessage(
                 msg, type=SystemMessages.SM_TYPE.Information)
         except Exception:
             pass
+
+        logger.info("cycle_weather: name=%s ok=%s", name, ok)
 
 
 g_controller = WeatherController()
