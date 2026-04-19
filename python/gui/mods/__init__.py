@@ -143,7 +143,7 @@ def _install_battle_space_hook():
                     space_name = _get_space_name_from_avatar(self)
                     if space_name:
                         log.info('onEnterWorld hook: space=%s', space_name)
-                        g_controller.on_space_about_to_load(space_name)
+                        g_controller.on_space_entered(space_name)
                 except Exception:
                     log.exception('onEnterWorld hook failed')
                 return result
@@ -177,7 +177,7 @@ def _on_key_event(event):
     codes = g_controller.config.hotkey_codes
     if not codes:
         if event.key == Keys.KEY_F12 and BigWorld.isKeyDown(Keys.KEY_LALT):
-            g_controller.cycle_preset_in_battle()
+            g_controller.cycle_weather_in_battle()
         return
 
     trigger_key = codes[-1]
@@ -187,7 +187,7 @@ def _on_key_event(event):
     for mod in modifiers:
         if not BigWorld.isKeyDown(mod):
             return
-    g_controller.cycle_preset_in_battle()
+    g_controller.cycle_weather_in_battle()
 
 
 def _install_key_hook():
