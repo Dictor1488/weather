@@ -16,6 +16,11 @@ import logging
 import traceback
 
 try:
+    basestring
+except NameError:
+    basestring = str
+
+try:
     import BigWorld
     import ResMgr
     from gui import SystemMessages
@@ -209,52 +214,53 @@ def _fmt_exc():
 # ============================================================================
 
 def _find_res_mods_path():
-    """Знаходимо шлях до res_mods в папці гри."""
+    """Знаходимо актуальний шлях до res_mods/<version>."""
     global _RES_MODS_PATH
     if _RES_MODS_PATH is not None:
         return _RES_MODS_PATH
 
-    # Спробуємо через BigWorld.curArg або інший метод
     try:
-        # BigWorld.getPreferencesFilePath() повертає щось типу:
-        # C:/Users/user/AppData/Roaming/Wargaming.net/WorldOfTanks/preferences.xml
-        # Але нам треба D:/World_of_Tanks_EU/res_mods/2.2.0.2/
-
-        # Спробуємо через ResMgr - відкриємо відомий файл і подивимось на шлях
-        # Або через поточну директорію
-
-        # BigWorld має CWD = папка гри
-        import os
         cwd = os.getcwd()
-        logger.info("CWD: %s", cwd)
+        candidates = []
 
-        # Шукаємо res_mods в cwd і вище
-        for base in [cwd, os.path.dirname(cwd)]:
-            candidate = os.path.join(base, 'res_mods', '2.2.0.2')
+        for base in (cwd, os.path.dirname(cwd), os.path.dirname(os.path.dirname(cwd))):
+            if not base:
+                continue
+            res_mods_root = os.path.join(base, 'res_mods')
+            if not os.path.isdir(res_mods_root):
+                continue
+
+            version_dirs = []
+            for name in os.listdir(res_mods_root):
+                full = os.path.join(res_mods_root, name)
+                if not os.path.isdir(full):
+                    continue
+                if name and name[0].isdigit():
+                    version_dirs.append((name, full))
+
+            version_dirs.sort(reverse=True)
+            for _, full in version_dirs:
+                candidates.append(full)
+
+        for candidate in candidates:
             if os.path.isdir(candidate):
                 _RES_MODS_PATH = candidate
-                logger.info("Found res_mods: %s", candidate)
+                logger.info('Found res_mods: %s', candidate)
                 return _RES_MODS_PATH
-
-        # Спробуємо через BigWorld методи
-        if hasattr(BigWorld, 'getPathsToScript'):
-            paths = BigWorld.getPathsToScript()
-            logger.info("Script paths: %s", paths)
-
-    except Exception as e:
-        logger.debug("find_res_mods failed: %s", e)
+    except Exception:
+        logger.debug('find_res_mods failed\n%s', _fmt_exc())
 
     return None
 
 
 def write_space_settings_to_res_mods(space_name, guid):
     """
-    Записуємо мінімальний space.settings з потрібним environment/override GUID
-    у res_mods/2.2.0.2/spaces/MAP/ щоб WoT підхопив при наступному завантаженні.
+    Записуємо або прибираємо override для space.settings у res_mods.
+    guid=None => скидання до стандартної погоди.
     """
     res_mods = _find_res_mods_path()
     if not res_mods:
-        logger.warning("res_mods path not found, cannot write space.settings")
+        logger.warning('res_mods path not found, cannot write space.settings')
         return False
 
     try:
@@ -264,8 +270,15 @@ def write_space_settings_to_res_mods(space_name, guid):
 
         target_file = os.path.join(target_dir, 'space.settings')
 
-        # Мінімальний space.settings з environment override
-        # Формат WoT XML
+        if not guid:
+            if os.path.isfile(target_file):
+                try:
+                    os.remove(target_file)
+                    logger.info('Removed space.settings override for %s', space_name)
+                except Exception:
+                    logger.warning('Failed to remove override for %s\n%s', space_name, _fmt_exc())
+            return True
+
         content = (
             '<space.settings>\n'
             '\t<environment>\n'
@@ -277,54 +290,55 @@ def write_space_settings_to_res_mods(space_name, guid):
         with open(target_file, 'w') as f:
             f.write(content)
 
-        logger.info("Written space.settings for %s -> %s", space_name, guid)
+        logger.info('Written space.settings for %s -> %s', space_name, guid)
         return True
 
     except Exception:
-        logger.error("write_space_settings failed\n%s", _fmt_exc())
+        logger.error('write_space_settings failed\n%s', _fmt_exc())
         return False
 
 
 def apply_environment_via_geometry_mapping(space_name, preset_id):
     """
-    Новий підхід: записуємо space.settings фізично + addSpaceGeometryMapping.
+    Пишемо override у res_mods і, якщо можливо, пробуємо live-mapping.
+    Для standard прибираємо override.
     """
-    guid = PRESET_GUIDS.get(preset_id)
-    if not guid or not IN_GAME:
+    if not IN_GAME:
         return False
 
-    # 1. Записуємо space.settings у res_mods
+    guid = PRESET_GUIDS.get(preset_id)
     written = write_space_settings_to_res_mods(space_name, guid)
 
-    # 2. Пробуємо addSpaceGeometryMapping
     res_mods = _find_res_mods_path()
     if res_mods:
         try:
             player = BigWorld.player()
             space_id = getattr(player, 'spaceID', None) if player else None
-
             if space_id is not None:
                 mapping_path = os.path.join(res_mods, 'spaces', space_name).replace('\\', '/')
-                # Нормалізуємо шлях для BigWorld VFS
                 fn = getattr(BigWorld, 'addSpaceGeometryMapping', None)
                 if callable(fn):
                     try:
                         fn(space_id, mapping_path, 0)
-                        logger.info("OK: addSpaceGeometryMapping(%s, %s)", space_id, mapping_path)
-                        return True
-                    except Exception as e:
-                        logger.warning("addSpaceGeometryMapping failed: %s", e)
+                        logger.info('addSpaceGeometryMapping(%s, %s) for %s', space_id, mapping_path, preset_id)
+                    except Exception:
+                        logger.warning('addSpaceGeometryMapping failed\n%s', _fmt_exc())
         except Exception:
-            logger.debug("geometry mapping failed\n%s", _fmt_exc())
+            logger.debug('geometry mapping failed\n%s', _fmt_exc())
 
-    # 3. Fallback: ResMgr patch
     try:
         section = ResMgr.openSection('spaces/%s/space.settings' % space_name)
         if section is not None:
-            section.writeString('environment/override', guid)
-            logger.info("ResMgr patch: %s -> %s", space_name, guid)
+            if guid:
+                section.writeString('environment/override', guid)
+            else:
+                try:
+                    section.deleteSection('environment/override')
+                except Exception:
+                    pass
+            logger.info('ResMgr patch: %s -> %s', space_name, preset_id)
     except Exception:
-        pass
+        logger.debug('ResMgr patch failed\n%s', _fmt_exc())
 
     return written
 
@@ -457,23 +471,30 @@ class WeatherController(object):
         logger.info("preload_all_spaces: not implemented yet, res_mods=%s", res_mods)
 
     def cycle_weather_in_battle(self):
-        """F12: перемикаємо weather system у бою."""
-        if not detect_current_battle_space():
-            logger.info("cycle_weather: not in battle")
+        """Хоткей циклічно перемикає саме environment-пресети мода."""
+        space_name = detect_current_battle_space() or self._current_space
+        if not space_name:
+            logger.info('cycle_weather: not in battle')
             return
 
-        ok, name = cycle_weather_system()
+        current = self._current_preset or 'standard'
+        try:
+            index = PRESET_ORDER.index(current)
+        except ValueError:
+            index = 0
+        next_preset = PRESET_ORDER[(index + 1) % len(PRESET_ORDER)]
+
+        ok = apply_environment_via_geometry_mapping(space_name, next_preset)
+        self._current_space = space_name
+        self._current_preset = next_preset
 
         try:
-            if name:
-                label = WEATHER_SYSTEM_LABELS.get(name, name)
-                msg = u"Атмосфера: %s" % label
+            label = PRESET_LABELS.get(next_preset, next_preset)
+            if ok:
+                msg = u'Погода: %s' % label
             else:
-                msg = u"Атмосфера: перемкнуто"
-            if not ok:
-                msg = u"Атмосфера: не вдалось"
-            SystemMessages.pushI18nMessage(
-                msg, type=SystemMessages.SM_TYPE.Information)
+                msg = u'Погода: %s (override записано не всюди)' % label
+            SystemMessages.pushI18nMessage(msg, type=SystemMessages.SM_TYPE.Information)
         except Exception:
             pass
 

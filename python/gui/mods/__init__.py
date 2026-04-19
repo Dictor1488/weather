@@ -137,15 +137,14 @@ def _install_battle_space_hook():
 
         def make_wrapper(orig):
             def wrapped(self, *args, **kwargs):
-                # Спочатку оригінал — щоб arena.arenaType був доступний
-                result = orig(self, *args, **kwargs)
                 try:
                     space_name = _get_space_name_from_avatar(self)
                     if space_name:
-                        log.info('onEnterWorld hook: space=%s', space_name)
+                        log.info('onEnterWorld pre-hook: space=%s', space_name)
                         g_controller.on_space_entered(space_name)
                 except Exception:
-                    log.exception('onEnterWorld hook failed')
+                    log.exception('onEnterWorld pre-hook failed')
+                result = orig(self, *args, **kwargs)
                 return result
             return wrapped
 
@@ -216,7 +215,14 @@ def _remove_key_hook():
 
 
 def open_weather_window():
-    pass
+    try:
+        from gui import SystemMessages
+        SystemMessages.pushI18nMessage(
+            u'Окреме вікно ще не підключене. Користуйся панеллю Mod Settings.',
+            type=SystemMessages.SM_TYPE.Information
+        )
+    except Exception:
+        pass
 
 
 # ============================================================================
