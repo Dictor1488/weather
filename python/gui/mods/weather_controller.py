@@ -403,28 +403,35 @@ def apply_preset_in_battle(preset_id):
         logger.warning('apply_preset_in_battle: no player')
         return False
 
-    # 1) hard-set player state
+    # 1) Weather.localOverride — головний механізм зміни рендеру
+    #    Це той самий шлях що використовують environments_*.wotmod в рантаймі
+    try:
+        _apply_weather_object(guid)
+    except Exception:
+        _log_fail('STEP 1 Weather.localOverride')
+
+    # 2) player state sync
     try:
         numeric, period = _apply_player_weather(player, preset_id, guid)
     except Exception:
-        _log_fail('STEP 1 player hard-set')
+        _log_fail('STEP 2 player hard-set')
         numeric = PRESET_NUMERIC_IDS.get(preset_id, 0)
         period = PRESET_PERIOD_IDS.get(preset_id, numeric)
 
-    # 2) sync textual time to space/client API
+    # 3) time of day
     try:
         _apply_time_text(player, preset_id)
     except Exception:
-        _log_fail('STEP 2 time sync')
+        _log_fail('STEP 3 time sync')
 
-    # 3) final player re-apply after time sync
+    # 4) final re-apply
     try:
         apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
         if callable(apply_fn):
             apply_fn(period)
-            _log_ok('STEP 3 final player.apply(period)', _safe_repr(period))
+            _log_ok('STEP 4 final player.apply(period)', _safe_repr(period))
     except Exception:
-        _log_fail('STEP 3 final player.apply(period=%s)' % period)
+        _log_fail('STEP 4 final player.apply(period=%s)' % period)
 
     logger.info('FINAL STATE: player.weatherPresetID=%s player._PlayerAvatar__blArenaPeriod=%s',
                 _safe_repr(getattr(player, 'weatherPresetID', None)),
