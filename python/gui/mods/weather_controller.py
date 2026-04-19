@@ -93,6 +93,7 @@ _current_override_preset = None
 _current_cycle_index = 0
 _environment_registry = {}
 _registry_loaded = False
+_last_space_name = None  # кешується в on_space_entered, потрібно для cycle_weather_in_battle
 
 
 def _ensure_dir(path):
@@ -678,12 +679,16 @@ def apply_environment_via_packages(space_name, preset_id):
 
 
 def on_space_entered(space_name):
+    global _last_space_name
     try:
         LOG.info('on_space_entered: raw space_name=%s override=%s', space_name, _current_override_preset)
 
         if not space_name:
             LOG.warning('on_space_entered: empty space_name')
             return False
+
+        # Кешуємо нормалізоване ім'я для подальших hotkey-викликів у бою.
+        _last_space_name = space_name
 
         preset_id = _current_override_preset
         if not preset_id:
@@ -733,6 +738,48 @@ def cycle_weather_system():
         logger.exception("cycle_weather_system failed")
 
 
+def _resolve_current_arena_name():
+    """
+    Повертає нормалізовану назву карти поточного бою або None.
+
+    Шукає в такому порядку:
+      1. player.arena.arenaType.geometryName / geometry / name   (стандартний шлях WoT)
+      2. player.arena.geometryName                                (на випадок майбутніх змін API)
+      3. _last_space_name                                         (кеш з onEnterWorld-хука)
+    """
+    try:
+        import BigWorld
+        player = BigWorld.player()
+        if player is None:
+            return None
+
+        arena = getattr(player, 'arena', None)
+        if arena is not None:
+            arena_type = getattr(arena, 'arenaType', None)
+            if arena_type is not None:
+                for attr in ('geometryName', 'geometry', 'name'):
+                    v = getattr(arena_type, attr, None)
+                    if v and isinstance(v, basestring):
+                        name = v.strip()
+                        if '/' in name:
+                            name = name.rsplit('/', 1)[-1]
+                        if name:
+                            return name
+
+            v = getattr(arena, 'geometryName', None)
+            if v and isinstance(v, basestring):
+                name = v.strip()
+                if '/' in name:
+                    name = name.rsplit('/', 1)[-1]
+                if name:
+                    return name
+    except Exception:
+        LOG.error('_resolve_current_arena_name failed\n%s', traceback.format_exc())
+
+    # Fallback: значення, збережене в on_space_entered (onEnterWorld-хук).
+    return _last_space_name
+
+
 def cycle_weather_in_battle():
     global _current_cycle_index, _current_override_preset
 
@@ -757,17 +804,16 @@ def cycle_weather_in_battle():
         _current_override_preset = None if next_preset == 'standard' else next_preset
 
         battle_loaded = False
-        arena_name = None
         player = None
 
         try:
             import BigWorld
             player = BigWorld.player()
             battle_loaded = player is not None and getattr(player, 'arena', None) is not None
-            if battle_loaded:
-                arena_name = getattr(player.arena, 'geometryName', None)
         except Exception:
             LOG.error('cycle_weather_in_battle: failed to inspect BigWorld state\n%s', traceback.format_exc())
+
+        arena_name = _resolve_current_arena_name()
 
         LOG.info(
             'cycle_weather_in_battle: battle_loaded=%s arena_name=%s override=%s',
@@ -776,7 +822,7 @@ def cycle_weather_in_battle():
 
         applied = False
 
-        if battle_loaded and arena_name:
+        if arena_name:
             try:
                 applied = apply_environment_via_packages(arena_name, _current_override_preset)
                 LOG.info(
@@ -786,14 +832,18 @@ def cycle_weather_in_battle():
             except Exception:
                 LOG.error('cycle_weather_in_battle: apply failed\n%s', traceback.format_exc())
         else:
-            LOG.warning('cycle_weather_in_battle: battle or arena not ready, preset only stored')
+            LOG.warning('cycle_weather_in_battle: arena name unknown, preset only stored')
 
         save_config()
 
         msg = '[Weather] preset: %s' % next_preset
-        if not applied and battle_loaded:
+        if applied:
+            # space.settings вже читається рушієм ДО onEnterWorld,
+            # тому зміна візуально набере чинності з наступного бою.
+            msg += ' (applied, takes effect next battle)'
+        elif battle_loaded and arena_name:
             msg += ' (stored, may require next battle reload)'
-        elif not battle_loaded:
+        else:
             msg += ' (stored for next battle)'
 
         if SystemMessages is not None:
