@@ -1,15 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-weather_controller.py
-Live-first controller:
-1) tries runtime environment switch in current battle
-2) falls back to writing res_mods/.../space.settings for next battle
-3) keeps backward compatibility with current __init__.py
+Спрощений weather_controller.py
+
+Мета:
+- без ваг
+- без live runtime apply
+- без складної логіки
+- завжди форсити один preset для перевірки, що environment взагалі працює
+
+ВАЖЛИВО:
+Ця схема застосовується на НАСТУПНИЙ бій через запис space.settings.
 """
 
 import json
 import os
-import random
 import logging
 import traceback
 
@@ -20,7 +24,6 @@ except NameError:
 
 try:
     import BigWorld
-    import ResMgr
     from gui import SystemMessages
     IN_GAME = True
 except Exception:
@@ -30,6 +33,11 @@ logger = logging.getLogger("weather_mod")
 logger.setLevel(logging.INFO)
 LOG = logger
 
+# ----------------------------------------------------------------------
+# ТУТ МІНЯЙ ПРЕСЕТ ДЛЯ ТЕСТУ
+# Можна ставити: 'midday', 'midnight', 'overcast', 'sunset'
+# ----------------------------------------------------------------------
+FORCED_PRESET = 'midday'
 
 PRESET_GUIDS = {
     "standard": None,
@@ -41,36 +49,13 @@ PRESET_GUIDS = {
 
 PRESET_LABELS = {
     "standard": u"Стандарт",
-    "midnight": u"Ніч",
+    "midday":   u"Полдень",
+    "sunset":   u"Закат",
     "overcast": u"Пасмурно",
-    "sunset":   u"Захід",
-    "midday":   u"Полудень",
+    "midnight": u"Ніч",
 }
 
 PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
-MAX_WEIGHT = 20
-
-WEATHER_SYSTEM_LABELS = {
-    "Clear":   u"Ясно",
-    "Cloudy":  u"Хмарно",
-    "Cloudy2": u"Хмарно 2",
-    "Cloudy3": u"Хмарно 3",
-    "Cloudy4": u"Хмарно 4",
-    "Urban":   u"Місто",
-    "Stormy":  u"Шторм",
-    "Hail":    u"Град",
-}
-
-
-try:
-    _prefs = (BigWorld.wg_getPreferencesFilePath()
-              if hasattr(BigWorld, 'wg_getPreferencesFilePath')
-              else BigWorld.getPreferencesFilePath())
-    _prefs_dir = os.path.dirname(_prefs)
-    CONFIG_PATH = os.path.normpath(os.path.join(_prefs_dir, 'mods', 'weather', 'config.json'))
-except Exception:
-    CONFIG_PATH = os.path.normpath(os.path.join(os.getcwd(), 'mods', 'weather', 'config.json'))
-
 
 DEFAULT_CFG = {
     "enabled": True,
@@ -79,17 +64,21 @@ DEFAULT_CFG = {
     "mapWeights": {},
     "hotkey": {"enabled": True, "mods": ["KEY_LALT"], "key": "KEY_F12"},
     "iconPosition": {"x": 20, "y": 120},
-    "currentPreset": "standard"
+    "currentPreset": FORCED_PRESET
 }
 
 _cfg = {}
-_current_override_preset = None
-_current_cycle_index = 0
 
 
-# -----------------------------------------------------------------------------
-# utils
-# -----------------------------------------------------------------------------
+def _push_message(text):
+    if not IN_GAME:
+        return
+    try:
+        SystemMessages.pushMessage(text, SystemMessages.SM_TYPE.Information)
+    except Exception:
+        LOG.error('_push_message failed\n%s', traceback.format_exc())
+
+
 def _ensure_dir(path):
     folder = os.path.dirname(path)
     if folder and not os.path.isdir(folder):
@@ -104,33 +93,19 @@ def _deep_update(dst, src):
             dst[k] = v
 
 
-def _normalize_weights(dct):
-    out = {}
-    for key in PRESET_ORDER:
-        try:
-            out[key] = max(0, min(MAX_WEIGHT, int(dct.get(key, 0))))
-        except Exception:
-            out[key] = 0
-    return out
+try:
+    _prefs = (BigWorld.wg_getPreferencesFilePath()
+              if hasattr(BigWorld, 'wg_getPreferencesFilePath')
+              else BigWorld.getPreferencesFilePath())
+    _prefs_dir = os.path.dirname(_prefs)
+    CONFIG_PATH = os.path.normpath(os.path.join(_prefs_dir, 'mods', 'weather', 'config.json'))
+except Exception:
+    CONFIG_PATH = os.path.normpath(os.path.join(os.getcwd(), 'mods', 'weather', 'config.json'))
 
 
-def _push_message(text):
-    if not IN_GAME:
-        return
-    try:
-        SystemMessages.pushMessage(text, SystemMessages.SM_TYPE.Information)
-    except Exception:
-        LOG.error('_push_message failed\n%s', traceback.format_exc())
-
-
-# -----------------------------------------------------------------------------
-# config
-# -----------------------------------------------------------------------------
 def load_config():
-    global _cfg, _current_override_preset, _current_cycle_index
-
+    global _cfg
     _cfg = json.loads(json.dumps(DEFAULT_CFG))
-
     try:
         if os.path.isfile(CONFIG_PATH):
             with open(CONFIG_PATH, 'r') as f:
@@ -139,22 +114,8 @@ def load_config():
     except Exception:
         LOG.exception("load_config failed")
 
-    _cfg["generalWeights"] = _normalize_weights(_cfg.get("generalWeights", {}))
-
-    maps = _cfg.get("mapWeights", {})
-    fixed = {}
-    for map_name, weights in maps.items():
-        if isinstance(weights, dict):
-            fixed[map_name] = _normalize_weights(weights)
-    _cfg["mapWeights"] = fixed
-
-    preset = _cfg.get("currentPreset", "standard")
-    if preset not in PRESET_ORDER:
-        preset = "standard"
-
-    _current_override_preset = None if preset == "standard" else preset
-    _current_cycle_index = PRESET_ORDER.index(preset)
-
+    # Тримай currentPreset жорстко на FORCED_PRESET
+    _cfg["currentPreset"] = FORCED_PRESET
     save_config()
     LOG.info("config loaded from %s", CONFIG_PATH)
     return _cfg
@@ -162,7 +123,7 @@ def load_config():
 
 def save_config():
     try:
-        _cfg["currentPreset"] = get_current_override_preset()
+        _cfg["currentPreset"] = FORCED_PRESET
         _ensure_dir(CONFIG_PATH)
         with open(CONFIG_PATH, 'w') as f:
             json.dump(_cfg, f, indent=2, sort_keys=True)
@@ -197,18 +158,18 @@ def get_general_weights():
 
 
 def set_general_weights(weights):
-    _cfg["generalWeights"] = _normalize_weights(weights or {})
+    _cfg["generalWeights"] = dict(weights or {})
     save_config()
 
 
 def get_map_weights(map_name):
     maps = _cfg.setdefault("mapWeights", {})
-    return dict(maps.get(map_name, _cfg.get("generalWeights", {})))
+    return dict(maps.get(map_name, {}))
 
 
 def set_map_weights(map_name, weights):
     maps = _cfg.setdefault("mapWeights", {})
-    maps[map_name] = _normalize_weights(weights or {})
+    maps[map_name] = dict(weights or {})
     save_config()
 
 
@@ -240,56 +201,47 @@ def set_icon_position(x, y):
     save_config()
 
 
-# -----------------------------------------------------------------------------
-# weights / UI helpers
-# -----------------------------------------------------------------------------
-def weighted_choice(weights_dict):
-    pool = []
-    for preset in PRESET_ORDER:
-        w = int(weights_dict.get(preset, 0))
-        if w > 0:
-            pool.extend([preset] * w)
-    if not pool:
-        return "standard"
-    return random.choice(pool)
-
-
 def get_preset_for_map(map_name):
-    maps = _cfg.get("mapWeights", {})
-    if map_name in maps:
-        return weighted_choice(maps[map_name])
-    return weighted_choice(_cfg.get("generalWeights", {}))
+    # Тимчасово завжди один preset
+    return FORCED_PRESET
 
 
 def get_all_general_for_ui():
     items = []
-    weights = _cfg.get("generalWeights", {})
     for preset in PRESET_ORDER:
         items.append({
             "id": preset,
             "label": PRESET_LABELS[preset],
-            "weight": int(weights.get(preset, 0))
+            "weight": 20 if preset == FORCED_PRESET else 0
         })
     return items
 
 
 def get_all_for_map_ui(map_name):
-    items = []
-    weights = get_map_weights(map_name)
-    for preset in PRESET_ORDER:
-        items.append({
-            "id": preset,
-            "label": PRESET_LABELS[preset],
-            "weight": int(weights.get(preset, 0))
-        })
-    return items
+    return get_all_general_for_ui()
 
 
-# -----------------------------------------------------------------------------
-# map/environment fallback mapping
-# -----------------------------------------------------------------------------
-# Fallback env names. If your environment packages use another naming scheme,
-# the log will show it and we can adjust.
+def build_space_settings_xml(env_name, preset_guid):
+    if not env_name:
+        return None
+
+    if not preset_guid:
+        return u'''<?xml version="1.0" encoding="utf-8"?>
+<root>
+    <environment>{env}</environment>
+</root>
+'''.format(env=env_name)
+
+    return u'''<?xml version="1.0" encoding="utf-8"?>
+<root>
+    <environment>{env}</environment>
+    <environmentOverride>{guid}</environmentOverride>
+</root>
+'''.format(env=env_name, guid=preset_guid)
+
+
+# Fallback mapping: space_name -> environment name
+# Поки вважаємо, що ім'я environment збігається з ім'ям карти
 FALLBACK_ENVIRONMENT_BY_SPACE = {
     '01_karelia': '01_karelia',
     '02_malinovka': '02_malinovka',
@@ -342,97 +294,32 @@ FALLBACK_ENVIRONMENT_BY_SPACE = {
 }
 
 
-def _read_json_resource(path):
-    try:
-        if not IN_GAME:
-            return None
-        sect = ResMgr.openSection(path)
-        if sect is None:
-            return None
-        raw = None
-        if hasattr(sect, 'asBinary'):
-            try:
-                raw = sect.asBinary
-                if callable(raw):
-                    raw = raw()
-            except Exception:
-                raw = None
-        if not raw and hasattr(sect, 'readString'):
-            try:
-                raw = sect.readString('')
-            except Exception:
-                raw = None
-        if not raw:
-            return None
-        if not isinstance(raw, basestring):
-            raw = raw.decode('utf-8')
-        return json.loads(raw)
-    except Exception:
-        LOG.exception("read json resource failed: %s", path)
-        return None
-
-
 def load_geometry_mapping():
-    candidates = [
-        'spaces/geometry_mapping.json',
-        'spaces/spaces_geometry_mapping.json',
-        'scripts/client/mods/weather/geometry_mapping.json',
-        'mods/weather/geometry_mapping.json',
-    ]
-    for path in candidates:
-        data = _read_json_resource(path)
-        if isinstance(data, dict) and data:
-            LOG.info('load_geometry_mapping: loaded from %s entries=%s', path, len(data))
-            return data
-    LOG.warning('load_geometry_mapping: no json mapping found, using fallback dictionary')
+    LOG.info('load_geometry_mapping: using fallback dictionary, entries=%s', len(FALLBACK_ENVIRONMENT_BY_SPACE))
     return dict(FALLBACK_ENVIRONMENT_BY_SPACE)
-
-
-# -----------------------------------------------------------------------------
-# next-battle fallback through space.settings
-# -----------------------------------------------------------------------------
-def build_space_settings_xml(env_name, preset_guid):
-    if not env_name:
-        return None
-
-    if not preset_guid:
-        return u'''<?xml version="1.0" encoding="utf-8"?>
-<root>
-    <environment>{env}</environment>
-</root>
-'''.format(env=env_name)
-
-    return u'''<?xml version="1.0" encoding="utf-8"?>
-<root>
-    <environment>{env}</environment>
-    <environmentOverride>{guid}</environmentOverride>
-</root>
-'''.format(env=env_name, guid=preset_guid)
 
 
 def find_space_settings_path(space_name):
     try:
-        game_root = None
+        possible_roots = [
+            os.path.join(os.getcwd(), 'res_mods'),
+            os.path.normpath(os.path.join(os.getcwd(), '..', 'res_mods')),
+            r'D:\World_of_Tanks_EU\res_mods',
+        ]
 
-        try:
-            if hasattr(BigWorld, 'wg_getPreferencesFilePath'):
-                prefs = BigWorld.wg_getPreferencesFilePath()
-            else:
-                prefs = None
-            if prefs:
-                game_root = os.path.abspath(os.path.join(os.path.dirname(prefs), '..', '..', '..', '..'))
-        except Exception:
-            LOG.error('find_space_settings_path: failed to resolve via prefs\n%s', traceback.format_exc())
+        LOG.info('find_space_settings_path: cwd=%s', os.getcwd())
 
-        if not game_root:
-            game_root = os.getcwd()
+        res_mods_root = None
+        for root in possible_roots:
+            if os.path.isdir(root):
+                res_mods_root = root
+                break
 
-        LOG.info('find_space_settings_path: game_root=%s', game_root)
-
-        res_mods_root = os.path.join(game_root, 'res_mods')
-        if not os.path.isdir(res_mods_root):
-            LOG.warning('find_space_settings_path: no res_mods root at %s', res_mods_root)
+        if not res_mods_root:
+            LOG.warning('find_space_settings_path: res_mods root not found')
             return None
+
+        LOG.info('find_space_settings_path: using res_mods_root=%s', res_mods_root)
 
         version_dirs = []
         for name in os.listdir(res_mods_root):
@@ -440,13 +327,14 @@ def find_space_settings_path(space_name):
             if os.path.isdir(full):
                 version_dirs.append(full)
 
-        version_dirs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        version_dirs.sort(reverse=True)
 
         for version_dir in version_dirs:
             candidate = os.path.join(version_dir, 'spaces', space_name, 'space.settings')
-            LOG.info('find_space_settings_path: using %s', candidate)
+            LOG.info('find_space_settings_path: candidate=%s', candidate)
             return candidate
 
+        LOG.warning('find_space_settings_path: no version dirs found')
         return None
 
     except Exception:
@@ -483,28 +371,26 @@ def apply_environment_via_geometry_mapping(space_name, preset_id):
             return False
 
         env_map = load_geometry_mapping()
-        LOG.info('apply_environment_via_geometry_mapping: geometry map loaded, entries=%s', len(env_map) if env_map else 0)
-
         env_name = env_map.get(space_name)
         if not env_name:
             LOG.warning('apply_environment_via_geometry_mapping: no mapping for space=%s', space_name)
             return False
 
-        preset_guid = PRESET_GUIDS.get(preset_id) if preset_id else None
+        preset_guid = PRESET_GUIDS.get(preset_id)
         LOG.info('apply_environment_via_geometry_mapping: env_name=%s preset_guid=%s', env_name, preset_guid)
 
         target_path = find_space_settings_path(space_name)
         if not target_path:
-            LOG.warning('apply_environment_via_geometry_mapping: space settings path not found for %s', space_name)
+            LOG.warning('apply_environment_via_geometry_mapping: no target path')
             return False
 
         content = build_space_settings_xml(env_name, preset_guid)
         if not content:
-            LOG.warning('apply_environment_via_geometry_mapping: generated empty content')
+            LOG.warning('apply_environment_via_geometry_mapping: empty content')
             return False
 
         ok = write_space_settings_to_res_mods(target_path, content)
-        LOG.info('apply_environment_via_geometry_mapping: write result=%s', ok)
+        LOG.info('apply_environment_via_geometry_mapping: result=%s', ok)
         return ok
 
     except Exception:
@@ -514,19 +400,27 @@ def apply_environment_via_geometry_mapping(space_name, preset_id):
 
 def on_space_entered(space_name):
     try:
-        LOG.info('on_space_entered: raw space_name=%s override=%s', space_name, _current_override_preset)
+        LOG.info('on_space_entered: raw space_name=%s', space_name)
 
         if not space_name:
             LOG.warning('on_space_entered: empty space_name')
             return False
 
-        preset_id = _current_override_preset
-        LOG.info('on_space_entered: chosen preset=%s', preset_id if preset_id else 'standard')
+        forced_preset = FORCED_PRESET
+        LOG.info('on_space_entered: FORCED preset=%s', forced_preset)
 
-        result = apply_environment_via_geometry_mapping(space_name, preset_id)
+        result = apply_environment_via_geometry_mapping(space_name, forced_preset)
 
-        LOG.info('on_space_entered: apply_environment_via_geometry_mapping(space=%s, preset=%s) -> %s',
-                 space_name, preset_id, result)
+        LOG.info(
+            'on_space_entered: apply_environment_via_geometry_mapping(space=%s, preset=%s) -> %s',
+            space_name, forced_preset, result
+        )
+
+        if result:
+            _push_message(u'[Weather] Форсовано preset: %s (наступний бій)' % PRESET_LABELS.get(forced_preset, forced_preset))
+        else:
+            _push_message(u'[Weather] Не вдалося записати preset, дивись python.log')
+
         return result
 
     except Exception:
@@ -534,284 +428,28 @@ def on_space_entered(space_name):
         return False
 
 
-# -----------------------------------------------------------------------------
-# runtime live apply
-# -----------------------------------------------------------------------------
-def _get_player():
-    try:
-        return BigWorld.player()
-    except Exception:
-        return None
-
-
-def _get_current_arena_name():
-    """
-    Try both arena.geometryName and arena.arenaType.geometryName.
-    """
-    try:
-        player = _get_player()
-        if not player:
-            return None
-
-        arena = getattr(player, 'arena', None)
-        if not arena:
-            return None
-
-        geometry_name = getattr(arena, 'geometryName', None)
-        if geometry_name:
-            return geometry_name
-
-        arena_type = getattr(arena, 'arenaType', None)
-        if arena_type:
-            for attr in ('geometryName', 'geometry', 'name'):
-                v = getattr(arena_type, attr, None)
-                if v:
-                    name = v.strip()
-                    if '/' in name:
-                        name = name.rsplit('/', 1)[-1]
-                    return name
-    except Exception:
-        LOG.error('_get_current_arena_name failed\n%s', traceback.format_exc())
-
-    return None
-
-
-def _try_call(obj, method_names, *args):
-    for name in method_names:
-        try:
-            fn = getattr(obj, name, None)
-            if callable(fn):
-                LOG.info('_try_call: calling %s on %s', name, type(obj))
-                return True, fn(*args)
-        except Exception:
-            LOG.error('_try_call: %s failed on %s\n%s', name, type(obj), traceback.format_exc())
-    return False, None
-
-
-def _describe_runtime_targets():
-    try:
-        player = _get_player()
-        arena = getattr(player, 'arena', None) if player else None
-        arena_type = getattr(arena, 'arenaType', None) if arena else None
-        bw_space_id = getattr(player, 'spaceID', None) if player else None
-
-        LOG.info('runtime describe: player=%s', type(player))
-        LOG.info('runtime describe: arena=%s', type(arena))
-        LOG.info('runtime describe: arenaType=%s', type(arena_type))
-        LOG.info('runtime describe: player.spaceID=%s', bw_space_id)
-
-        if player:
-            for attr in ('spaceID', 'guiSessionProvider', 'vehicle', 'arena'):
-                try:
-                    LOG.info('runtime player attr %s=%s', attr, type(getattr(player, attr, None)))
-                except Exception:
-                    pass
-
-        if arena:
-            for attr in ('geometryName', 'arenaType'):
-                try:
-                    LOG.info('runtime arena attr %s=%s', attr, repr(getattr(arena, attr, None)))
-                except Exception:
-                    pass
-    except Exception:
-        LOG.error('_describe_runtime_targets failed\n%s', traceback.format_exc())
-
-
-def _apply_live_via_weather_system(preset_id):
-    """
-    Fallback live approximation using built-in weather systems.
-    This is not the same as environment GUID presets, but may still visibly change weather.
-    """
-    try:
-        import Weather
-    except Exception:
-        LOG.info('_apply_live_via_weather_system: Weather module unavailable')
-        return False
-
-    try:
-        weather_obj = getattr(Weather, 's_weather', None)
-        if weather_obj is None:
-            LOG.info('_apply_live_via_weather_system: Weather.s_weather is None')
-            return False
-
-        mapping = {
-            'standard': 'Clear',
-            'midday': 'Clear',
-            'sunset': 'Cloudy',
-            'overcast': 'Cloudy4',
-            'midnight': 'Stormy',
-        }
-        target_system = mapping.get(preset_id or 'standard', 'Clear')
-
-        ok, _ = _try_call(weather_obj, ['nextWeatherSystem', 'setWeatherSystem', 'changeWeatherSystem'], target_system)
-        if ok:
-            LOG.info('_apply_live_via_weather_system: success target=%s', target_system)
-            return True
-
-        LOG.info('_apply_live_via_weather_system: no callable runtime method found')
-        return False
-
-    except Exception:
-        LOG.error('_apply_live_via_weather_system failed\n%s', traceback.format_exc())
-        return False
-
-
-def _apply_live_via_environment_probes(preset_id):
-    """
-    Experimental probe-based runtime environment switch.
-    We do not assume exact API names. We probe common method names.
-    """
-    try:
-        _describe_runtime_targets()
-
-        player = _get_player()
-        if not player:
-            LOG.info('_apply_live_via_environment_probes: no player')
-            return False
-
-        preset_guid = PRESET_GUIDS.get(preset_id) if preset_id else None
-        arena_name = _get_current_arena_name()
-
-        LOG.info('_apply_live_via_environment_probes: arena_name=%s preset=%s guid=%s',
-                 arena_name, preset_id, preset_guid)
-
-        targets = []
-
-        try:
-            arena = getattr(player, 'arena', None)
-            if arena:
-                targets.append(('arena', arena))
-        except Exception:
-            pass
-
-        try:
-            arena_type = getattr(getattr(player, 'arena', None), 'arenaType', None)
-            if arena_type:
-                targets.append(('arenaType', arena_type))
-        except Exception:
-            pass
-
-        try:
-            gsp = getattr(player, 'guiSessionProvider', None)
-            if gsp:
-                targets.append(('guiSessionProvider', gsp))
-        except Exception:
-            pass
-
-        # Probe methods on likely runtime objects
-        method_groups = [
-            ['setEnvironmentOverride', 'applyEnvironmentOverride', 'changeEnvironmentOverride'],
-            ['setEnvironmentPreset', 'applyEnvironmentPreset', 'changeEnvironmentPreset'],
-            ['setEnvironment', 'applyEnvironment', 'changeEnvironment'],
-        ]
-
-        for label, obj in targets:
-            LOG.info('_apply_live_via_environment_probes: probing target=%s type=%s', label, type(obj))
-
-            # standard = clear override
-            if preset_guid is None:
-                for names in method_groups:
-                    ok, _ = _try_call(obj, names, None)
-                    if ok:
-                        LOG.info('_apply_live_via_environment_probes: standard reset via %s', label)
-                        return True
-                    ok, _ = _try_call(obj, names, '')
-                    if ok:
-                        LOG.info('_apply_live_via_environment_probes: standard reset(empty) via %s', label)
-                        return True
-            else:
-                for names in method_groups:
-                    ok, _ = _try_call(obj, names, preset_guid)
-                    if ok:
-                        LOG.info('_apply_live_via_environment_probes: guid applied via %s', label)
-                        return True
-
-                    if arena_name:
-                        ok, _ = _try_call(obj, names, arena_name, preset_guid)
-                        if ok:
-                            LOG.info('_apply_live_via_environment_probes: arena+guid applied via %s', label)
-                            return True
-
-        LOG.info('_apply_live_via_environment_probes: no runtime probe matched')
-        return False
-
-    except Exception:
-        LOG.error('_apply_live_via_environment_probes failed\n%s', traceback.format_exc())
-        return False
-
-
-def apply_environment_live(space_name, preset_id):
-    """
-    Live apply pipeline:
-    1) true environment/runtime probes
-    2) built-in Weather system approximation
-    """
-    try:
-        LOG.info('apply_environment_live: start space=%s preset=%s', space_name, preset_id)
-
-        # Try exact-ish runtime environment switching first
-        if _apply_live_via_environment_probes(preset_id):
-            LOG.info('apply_environment_live: success via environment probes')
-            return True
-
-        # Fallback: built-in weather system live switch
-        if _apply_live_via_weather_system(preset_id):
-            LOG.info('apply_environment_live: success via Weather system fallback')
-            return True
-
-        LOG.warning('apply_environment_live: no live method succeeded')
-        return False
-
-    except Exception:
-        LOG.error('apply_environment_live failed\n%s', traceback.format_exc())
-        return False
-
-
-# -----------------------------------------------------------------------------
-# weather system old fallback
-# -----------------------------------------------------------------------------
 def cycle_weather_system():
-    try:
-        import Weather
-        if not hasattr(Weather, 's_weather') or Weather.s_weather is None:
-            LOG.warning("Weather.s_weather unavailable")
-            return False
-
-        cur = getattr(Weather.s_weather, 'currentWeatherSystem', None)
-        all_names = list(WEATHER_SYSTEM_LABELS.keys())
-        if cur not in all_names:
-            nxt = all_names[0]
-        else:
-            nxt = all_names[(all_names.index(cur) + 1) % len(all_names)]
-
-        Weather.s_weather.nextWeatherSystem(nxt)
-        LOG.info("fallback weather system changed: %s -> %s", cur, nxt)
-        _push_message(u'[Weather] Системна погода: %s' % WEATHER_SYSTEM_LABELS.get(nxt, nxt))
-        return True
-
-    except Exception:
-        LOG.exception("cycle_weather_system failed")
-        return False
+    LOG.info('cycle_weather_system: disabled in simplified build')
+    return False
 
 
-# -----------------------------------------------------------------------------
-# current preset
-# -----------------------------------------------------------------------------
+def cycle_weather_in_battle():
+    """
+    Тимчасово hotkey нічого live не міняє.
+    Лише повідомляє, що зараз тестуємо forced preset через наступний бій.
+    """
+    LOG.info('cycle_weather_in_battle: simplified build, live switching disabled')
+    _push_message(u'[Weather] Зараз тестуємо лише forced preset через наступний бій')
+    return False
+
+
 def get_current_override_preset():
-    return _current_override_preset or "standard"
+    return FORCED_PRESET
 
 
 def set_override_preset(preset_id):
-    global _current_override_preset, _current_cycle_index
-
-    if preset_id not in PRESET_ORDER:
-        return False
-
-    _current_override_preset = None if preset_id == "standard" else preset_id
-    _current_cycle_index = PRESET_ORDER.index(preset_id)
-    _cfg["currentPreset"] = preset_id
-    save_config()
-    return True
+    LOG.info('set_override_preset: ignored in simplified build, forced=%s', FORCED_PRESET)
+    return False
 
 
 def get_preset_labels():
@@ -819,68 +457,13 @@ def get_preset_labels():
 
 
 def get_weather_system_labels():
-    return dict(WEATHER_SYSTEM_LABELS)
+    return {}
 
 
 def get_preset_order():
     return list(PRESET_ORDER)
 
 
-# -----------------------------------------------------------------------------
-# main hotkey action
-# -----------------------------------------------------------------------------
-def cycle_weather_in_battle():
-    global _current_cycle_index, _current_override_preset
-
-    try:
-        current = _current_override_preset or 'standard'
-        if current not in PRESET_ORDER:
-            current = 'standard'
-
-        idx = PRESET_ORDER.index(current)
-        next_preset = PRESET_ORDER[(idx + 1) % len(PRESET_ORDER)]
-
-        _current_cycle_index = PRESET_ORDER.index(next_preset)
-        _current_override_preset = None if next_preset == 'standard' else next_preset
-        _cfg["currentPreset"] = next_preset
-
-        arena_name = _get_current_arena_name()
-        battle_loaded = arena_name is not None
-
-        LOG.info('cycle_weather_in_battle: current=%s next=%s battle_loaded=%s arena_name=%s',
-                 current, next_preset, battle_loaded, arena_name)
-
-        applied_live = False
-        applied_next = False
-
-        if battle_loaded:
-            applied_live = apply_environment_live(arena_name, _current_override_preset)
-
-            if not applied_live:
-                applied_next = apply_environment_via_geometry_mapping(arena_name, _current_override_preset)
-        else:
-            LOG.warning('cycle_weather_in_battle: battle not ready, storing only for later')
-
-        save_config()
-
-        if applied_live:
-            _push_message(u'[Weather] %s (live)' % PRESET_LABELS.get(next_preset, next_preset))
-        elif applied_next:
-            _push_message(u'[Weather] %s (наступний бій)' % PRESET_LABELS.get(next_preset, next_preset))
-        else:
-            _push_message(u'[Weather] %s (runtime недоступний, дивись python.log)' %
-                          PRESET_LABELS.get(next_preset, next_preset))
-
-        return applied_live or applied_next
-
-    except Exception:
-        LOG.error('cycle_weather_in_battle: fatal error\n%s', traceback.format_exc())
-        return False
-
-
-# -----------------------------------------------------------------------------
-# compatibility wrapper class
-# -----------------------------------------------------------------------------
 class WeatherController(object):
     def __init__(self):
         load_config()
