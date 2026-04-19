@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Точка входу мода.
-Рання спроба застосування погоди:
-1) BattleLoadingMeta.as_setMapBG  (раніше)
-2) Avatar.PlayerAvatar.onEnterWorld (fallback)
+SAFE rollback version:
+- без ранніх GUI hooks
+- тільки Avatar.PlayerAvatar.onEnterWorld
+- hotkey + Mod Settings залишені
 """
 
 try:
@@ -17,7 +18,6 @@ except ImportError:
 from weather_controller import g_controller
 
 
-_EARLY_HOOKS = []         # list of (cls, attr_name, original_func)
 _BATTLE_SPACE_HOOKS = []  # list of (cls, attr_name, original_func)
 _KEY_HOOK_INSTALLED = False
 _INIT_DONE = False
@@ -107,26 +107,11 @@ def _normalize_space_name(raw):
     if name in MAP_IDS:
         return name
 
-    # інколи приходить щось на кшталт spaces/08_ruinberg/map_bg.png
     for map_id in MAP_IDS:
         if map_id and map_id in name:
             return map_id
 
     return name
-
-
-def _apply_space_early(space_name, source):
-    try:
-        name = _normalize_space_name(space_name)
-        if not name:
-            _log().warning('_apply_space_early: empty from source=%s raw=%s', source, space_name)
-            return False
-
-        _log().info('_apply_space_early: source=%s raw=%s normalized=%s', source, space_name, name)
-        return g_controller.onSpaceEntered(name)
-    except Exception:
-        _log().exception('_apply_space_early failed')
-        return False
 
 
 def _load_hotkey_codes():
@@ -152,52 +137,6 @@ def _load_hotkey_codes():
     except Exception:
         _log().exception('_load_hotkey_codes failed')
         _hotkey_codes = []
-
-
-# -----------------------------------------------------------------------------
-# EARLY HOOK: BattleLoadingMeta.as_setMapBG
-# -----------------------------------------------------------------------------
-def _install_early_battle_loading_hook():
-    if not IN_GAME or _EARLY_HOOKS:
-        return
-
-    log = _log()
-
-    try:
-        from gui.Scaleform.daapi.view.meta import BattleLoadingMeta
-
-        cls = BattleLoadingMeta.BattleLoadingMeta
-        if not hasattr(cls, 'as_setMapBG'):
-            log.warning('BattleLoadingMeta.as_setMapBG not found')
-            return
-
-        original = cls.as_setMapBG
-
-        def make_wrapper(orig):
-            def wrapped(self, mapName, *args, **kwargs):
-                try:
-                    log.info('EARLY HOOK as_setMapBG: mapName=%s', mapName)
-                    _apply_space_early(mapName, 'BattleLoadingMeta.as_setMapBG')
-                except Exception:
-                    log.exception('EARLY HOOK as_setMapBG failed')
-                return orig(self, mapName, *args, **kwargs)
-            return wrapped
-
-        cls.as_setMapBG = make_wrapper(original)
-        _EARLY_HOOKS.append((cls, 'as_setMapBG', original))
-        log.info('Installed early hook: BattleLoadingMeta.as_setMapBG')
-
-    except Exception:
-        log.exception('Failed to install early battle loading hook')
-
-
-def _remove_early_battle_loading_hook():
-    while _EARLY_HOOKS:
-        cls, attr, original = _EARLY_HOOKS.pop()
-        try:
-            setattr(cls, attr, original)
-        except Exception:
-            _log().exception('Failed to remove early hook')
 
 
 # -----------------------------------------------------------------------------
@@ -250,16 +189,16 @@ def _install_battle_space_hook():
                 try:
                     space_name = _get_space_name_from_avatar(self)
                     if space_name:
-                        log.info('FALLBACK onEnterWorld hook: space=%s', space_name)
-                        _apply_space_early(space_name, 'Avatar.PlayerAvatar.onEnterWorld')
+                        log.info('onEnterWorld hook: space=%s', space_name)
+                        g_controller.onSpaceEntered(space_name)
                 except Exception:
-                    log.exception('onEnterWorld fallback hook failed')
+                    log.exception('onEnterWorld hook failed')
                 return orig(self, *args, **kwargs)
             return wrapped
 
         cls.onEnterWorld = make_wrapper(original)
         _BATTLE_SPACE_HOOKS.append((cls, 'onEnterWorld', original))
-        log.info('Installed fallback hook: Avatar.PlayerAvatar.onEnterWorld')
+        log.info('Installed hook: Avatar.PlayerAvatar.onEnterWorld')
 
     except Exception:
         log.exception('Failed to install battle space hook')
@@ -327,7 +266,7 @@ def open_weather_window():
     try:
         from gui import SystemMessages
         SystemMessages.pushMessage(
-            u'Відкрити окреме вікно поки не підключено. Налаштування через Mod Settings.',
+            u'Окреме вікно поки не підключене. Користуйся Mod Settings.',
             SystemMessages.SM_TYPE.Information
         )
     except Exception:
@@ -438,8 +377,6 @@ def init(*args, **kwargs):
         return
 
     _load_hotkey_codes()
-
-    _install_early_battle_loading_hook()
     _install_battle_space_hook()
     _install_key_hook()
 
@@ -527,5 +464,4 @@ def fini(*args, **kwargs):
     global _INIT_DONE
     _remove_key_hook()
     _remove_battle_space_hook()
-    _remove_early_battle_loading_hook()
     _INIT_DONE = False
