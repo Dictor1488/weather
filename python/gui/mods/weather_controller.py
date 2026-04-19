@@ -126,21 +126,56 @@ def _safe_listdir(path):
         return []
 
 
+def _has_game_layout(base_path):
+    try:
+        if not base_path or not os.path.isdir(base_path):
+            return False
+        return os.path.isdir(os.path.join(base_path, 'mods')) or os.path.isdir(os.path.join(base_path, 'res_mods'))
+    except Exception:
+        return False
+
+
 def _resolve_game_root():
+    candidates = []
+
+    try:
+        cwd = os.path.abspath(os.getcwd())
+        candidates.append(cwd)
+        candidates.append(os.path.abspath(os.path.join(cwd, '..')))
+    except Exception:
+        pass
+
+    try:
+        exe_path = getattr(os, 'getcwd', None) and os.getcwd()
+        if exe_path:
+            candidates.append(os.path.abspath(exe_path))
+    except Exception:
+        pass
+
     try:
         if IN_GAME:
             prefs = (BigWorld.wg_getPreferencesFilePath()
                      if hasattr(BigWorld, 'wg_getPreferencesFilePath')
                      else BigWorld.getPreferencesFilePath())
             if prefs:
-                return os.path.abspath(os.path.join(os.path.dirname(prefs), '..', '..', '..', '..'))
+                prefs_dir = os.path.dirname(prefs)
+                candidates.append(os.path.abspath(os.path.join(prefs_dir, '..', '..', '..', '..')))
     except Exception:
         LOG.error('_resolve_game_root via prefs failed\n%s', traceback.format_exc())
 
-    try:
-        return os.path.abspath(os.getcwd())
-    except Exception:
-        return os.getcwd()
+    seen = set()
+    for candidate in candidates:
+        candidate = os.path.normpath(candidate)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if _has_game_layout(candidate):
+            LOG.info('Resolved game root: %s', candidate)
+            return candidate
+
+    fallback = os.path.abspath(os.getcwd())
+    LOG.warning('Could not confidently resolve game root, fallback=%s candidates=%s', fallback, candidates)
+    return fallback
 
 
 def _find_latest_version_dir(root_name):
