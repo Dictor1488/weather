@@ -1,21 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v3.0
-======================
-ДВІ НЕЗАЛЕЖНІ СИСТЕМИ:
-
-1. РАНДОМІЗАТОР ENVIRONMENTS (midday/sunset/overcast/midnight)
-   - Спрацьовує при Avatar.onEnterWorld (хук в __init__.py)
-   - Вибирає пресет за вагами з налаштувань
-   - Записує GUID через ResMgr.writeString (патч у пам'яті VFS)
-   - Примітка: WoT читає space.settings ДО Python, тому патч для
-     НАСТУПНОГО бою. Або використати фізичний запис у res_mods/.
-
-2. WEATHER SYSTEMS ХОТКЕЙ (Clear/Cloudy/Stormy/Hail)
-   - F12 у бою → циклічно перемикає Weather system
-   - Використовує Weather._weatherSystemsForCurrentSpace() +
-     Weather.override(system_object)
-   - Це РЕАЛЬНО ПРАЦЮЄ і дає живу зміну атмосфери
+Weather controller v3.1
+Weather hotkey: nextWeatherSystem() + summon(DataSection)
+Environment randomizer: при вході в бій
 """
 import json
 import os
@@ -34,10 +21,6 @@ except ImportError:
 logger = logging.getLogger("weather_mod")
 logger.setLevel(logging.INFO)
 
-# ============================================================================
-# Environment пресети (midday/sunset/overcast/midnight)
-# GUID — папка у environments_*.wotmod
-# ============================================================================
 PRESET_GUIDS = {
     "standard": None,
     "midday":   "BF040BCB-4BE1D04F-7D484589-135E881B",
@@ -57,11 +40,6 @@ PRESET_LABELS = {
 PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
 MAX_WEIGHT = 20
 
-# ============================================================================
-# Weather Systems (Clear/Cloudy/Stormy/Hail)
-# Реальні імена з _weatherSystemsForCurrentSpace() у бою
-# ============================================================================
-# Стандартні імена weather systems у WoT (карта може мати різний підбір)
 WEATHER_SYSTEM_LABELS = {
     "Clear":   u"Ясно",
     "Cloudy":  u"Хмарно",
@@ -73,7 +51,6 @@ WEATHER_SYSTEM_LABELS = {
     "Hail":    u"Град",
 }
 
-
 try:
     _prefs = (BigWorld.wg_getPreferencesFilePath()
               if hasattr(BigWorld, 'wg_getPreferencesFilePath')
@@ -84,9 +61,6 @@ except Exception:
     CONFIG_PATH = os.path.join("mods", "configs", "weather_mod.json")
 
 
-# ============================================================================
-# Config
-# ============================================================================
 class WeatherConfig(object):
 
     def __init__(self):
@@ -150,9 +124,6 @@ class WeatherConfig(object):
         return self.global_weights
 
 
-# ============================================================================
-# Helpers
-# ============================================================================
 def pick_preset(weights):
     total = sum(weights.values())
     if total <= 0:
@@ -222,14 +193,8 @@ def _fmt_exc():
         return ''
 
 
-# ============================================================================
-# Weather Systems API (реально працює у бою)
-# ============================================================================
-def _get_weather_for_space():
-    """
-    Повертає ініціалізований Weather об'єкт для поточного простору.
-    Weather.currentSpaceID має збігатись з player.spaceID.
-    """
+def _get_weather():
+    """Повертає Weather об'єкт ініціалізований для поточного простору."""
     try:
         import Weather
         w = getattr(Weather, 's_weather', None)
@@ -240,14 +205,13 @@ def _get_weather_for_space():
 
         player = BigWorld.player()
         space_id = getattr(player, 'spaceID', None) if player else None
-
         if space_id is not None:
             current = getattr(w, 'currentSpaceID', -1)
             if current != space_id:
-                on_change = getattr(w, 'onChangeSpace', None)
-                if callable(on_change):
+                fn = getattr(w, 'onChangeSpace', None)
+                if callable(fn):
                     try:
-                        on_change(space_id)
+                        fn(space_id)
                     except Exception:
                         pass
         return w
@@ -255,77 +219,87 @@ def _get_weather_for_space():
         return None
 
 
-def get_available_weather_systems():
-    """Повертає список доступних weather systems для поточної карти."""
-    w = _get_weather_for_space()
+def cycle_weather_system():
+    """
+    Перемикає weather system.
+    Стратегія:
+    1. Weather.nextWeatherSystem() — вбудований метод WoT для циклічного перемикання
+    2. Weather.summon(DataSection) — пряма передача DataSection об'єкта
+    3. Weather.summon(name_string) — передача імені як рядка
+
+    Повертає (success, system_name).
+    """
+    w = _get_weather()
     if w is None:
-        return []
-    try:
-        fn = getattr(w, '_weatherSystemsForCurrentSpace', None)
-        if callable(fn):
-            return fn() or []
-    except Exception:
-        pass
-    return []
+        return False, None
+
+    # --- Спроба 1: nextWeatherSystem() ---
+    fn_next = getattr(w, 'nextWeatherSystem', None)
+    if callable(fn_next):
+        try:
+            fn_next()
+            # Після виклику дізнаємось яка система активна
+            current_sys = getattr(w, 'system', None)
+            name = getattr(current_sys, 'name', None) if current_sys else None
+            logger.info("OK: Weather.nextWeatherSystem() -> system=%s", name)
+            return True, name
+        except Exception as e:
+            logger.warning("FAIL: nextWeatherSystem: %s", e)
+
+    # --- Спроба 2: summon(DataSection) ---
+    fn_systems = getattr(w, '_weatherSystemsForCurrentSpace', None)
+    systems = fn_systems() if callable(fn_systems) else []
+    if systems:
+        # Вибираємо наступну в черзі (зберігаємо idx в closure через атрибут)
+        current_idx = getattr(w, '_mod_weather_idx', 0)
+        next_idx = (current_idx + 1) % len(systems)
+        w._mod_weather_idx = next_idx
+        target = systems[next_idx]
+        target_name = getattr(target, 'name', str(next_idx))
+
+        fn_summon = getattr(w, 'summon', None)
+        if callable(fn_summon):
+            try:
+                fn_summon(target)
+                logger.info("OK: Weather.summon(DataSection[%d] name=%s)", next_idx, target_name)
+                return True, target_name
+            except Exception as e:
+                logger.warning("FAIL: summon(DataSection): %s", e)
+
+        # --- Спроба 3: summon(name_string) ---
+        if callable(fn_summon):
+            try:
+                fn_summon(target_name)
+                logger.info("OK: Weather.summon('%s')", target_name)
+                return True, target_name
+            except Exception as e:
+                logger.warning("FAIL: summon(name): %s", e)
+
+    return False, None
 
 
-def apply_weather_system(system_obj):
-    """Застосовує weather system через Weather.override(system_object)."""
-    w = _get_weather_for_space()
-    if w is None or system_obj is None:
-        return False
-    try:
-        override_fn = getattr(w, 'override', None)
-        if callable(override_fn):
-            override_fn(system_obj)
-            name = getattr(system_obj, 'name', repr(system_obj)[:30])
-            logger.info("OK: Weather.override(%s)", name)
-            return True
-    except Exception as e:
-        logger.warning("Weather.override failed: %s", e)
-    return False
-
-
-# ============================================================================
-# Environment preset apply (при вході в бій)
-# ============================================================================
 def apply_environment_preset(space_name, preset_id):
-    """
-    Патчимо space.settings в пам'яті VFS.
-    Спрацьовує при Avatar.onEnterWorld — але WoT вже прочитав space.settings
-    до цього хука. Тому цей патч впливатиме на наступний бій (якщо простір
-    перезавантажується) або не матиме ефекту (якщо VFS кешований).
-
-    TODO для повної роботи: записувати в res_mods/<ver>/spaces/<map>/
-    фізичний файл з потрібним GUID перед боєм.
-    """
+    """Патчимо VFS для environment при вході в бій."""
     guid = PRESET_GUIDS.get(preset_id)
     if not guid or not IN_GAME:
         return
-
     try:
         path = 'spaces/%s/space.settings' % space_name
         section = ResMgr.openSection(path)
         if section is None:
-            logger.warning("space.settings not found for %s", space_name)
             return
         section.writeString('environment/override', guid)
-        logger.info("preset %s applied to %s (guid=%s) — active next battle",
-                    preset_id, space_name, guid)
+        logger.info("env preset: %s -> %s (guid=%s)", space_name, preset_id, guid)
     except Exception:
-        logger.debug("apply_environment_preset failed\n%s", _fmt_exc())
+        pass
 
 
-# ============================================================================
-# Controller
-# ============================================================================
 class WeatherController(object):
 
     def __init__(self):
         self.config = WeatherConfig()
         self._current_space = None
         self._current_preset = None
-        self._current_weather_idx = 0   # індекс у списку weather systems
 
     def on_weight_changed(self, map_id, preset_id, value):
         if not map_id:
@@ -349,60 +323,37 @@ class WeatherController(object):
         pass
 
     def on_space_entered(self, space_name):
-        """
-        Викликається з Avatar.onEnterWorld хука.
-        Вибираємо environment пресет і патчимо VFS.
-        """
+        """Викликається при Avatar.onEnterWorld — вибираємо environment пресет."""
         normalized = normalize_space_name(space_name)
         if not is_battle_map_space(normalized):
             return
-
         self._current_space = normalized
-        self._current_weather_idx = 0  # скидаємо індекс weather при вхді в новий бій
-
         weights = self.config.get_weights_for_map(normalized)
         preset = pick_preset(weights)
         self._current_preset = preset
-
-        logger.info("onEnterWorld: space=%s -> preset=%s", normalized, preset)
+        logger.info("onEnterWorld: %s -> env=%s", normalized, preset)
         apply_environment_preset(normalized, preset)
 
     def cycle_weather_in_battle(self):
-        """
-        Хоткей F12 у бою: перемикаємо WEATHER SYSTEM (Clear/Cloudy/Stormy/Hail).
-        Це реально змінює атмосферні ефекти в реальному часі.
-        """
+        """F12 у бою: циклічно перемикаємо weather system."""
         if not detect_current_battle_space():
             logger.info("cycle_weather: not in battle")
             return
 
-        systems = get_available_weather_systems()
-        if not systems:
-            logger.warning("No weather systems available for current space")
-            return
+        ok, name = cycle_weather_system()
 
-        # Циклічно перемикаємо
-        self._current_weather_idx = (self._current_weather_idx + 1) % len(systems)
-        target = systems[self._current_weather_idx]
-        name = getattr(target, 'name', str(self._current_weather_idx))
-
-        ok = apply_weather_system(target)
-
-        # Показуємо повідомлення
         try:
-            label = WEATHER_SYSTEM_LABELS.get(name, name)
-            msg = u"Атмосфера: %s" % label
+            if name:
+                label = WEATHER_SYSTEM_LABELS.get(name, name)
+                msg = u"Атмосфера: %s" % label
+            else:
+                msg = u"Атмосфера: перемкнуто"
             if not ok:
-                msg += u" (помилка)"
+                msg = u"Атмосфера: помилка (лог)"
             SystemMessages.pushI18nMessage(
-                msg,
-                type=SystemMessages.SM_TYPE.Information,
-            )
+                msg, type=SystemMessages.SM_TYPE.Information)
         except Exception:
             pass
-
-        logger.info("cycle_weather: [%d/%d] %s -> ok=%s",
-                    self._current_weather_idx + 1, len(systems), name, ok)
 
 
 g_controller = WeatherController()
