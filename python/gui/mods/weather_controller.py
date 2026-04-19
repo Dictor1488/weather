@@ -63,12 +63,19 @@ PRESET_PACKAGE_PATTERNS = {
     "overcast": re.compile(r"^environments\.overcast_.*\.wotmod$", re.I),
     "sunset": re.compile(r"^environments\.sunset_.*\.wotmod$", re.I),
 }
+SPACES_WG_PACKAGE_RE = re.compile(r"^environments\.spaces_wg_.*\.wotmod$", re.I)
 
 ENV_XML_RE = re.compile(
     r"^res/spaces/([^/]+)/environments/([A-Fa-f0-9\-]+)/environment\.xml$",
     re.I
 )
 ENV_NAME_RE = re.compile(r"<name>\s*([^<]+?)\s*</name>", re.I | re.S)
+XML_DECL_RE = re.compile(r'^\s*<\?xml[^>]*\?>\s*', re.I)
+ROOT_ENV_RE = re.compile(r'(<environment>)([^<]*)(</environment>)', re.I)
+ROOT_ENV_OVERRIDE_RE = re.compile(r'(<environmentOverride>)([^<]*)(</environmentOverride>)', re.I)
+ACTIVE_ENV_RE = re.compile(r'(<activeEnvironment>)([^<]*)(</activeEnvironment>)', re.I)
+IS_SWITCH_ALLOWED_RE = re.compile(r'(<isEnvironmentSwitchAllowed>)([^<]*)(</isEnvironmentSwitchAllowed>)', re.I)
+ALL_ENV_TAGS_RE = re.compile(r'\s*<environment>[^<]*</environment>\s*', re.I)
 
 try:
     _prefs = (BigWorld.wg_getPreferencesFilePath()
@@ -94,6 +101,8 @@ _current_cycle_index = 0
 _environment_registry = {}
 _registry_loaded = False
 _last_space_name = None
+_spaces_wg_package_path = None
+_spaces_wg_template_cache = {}
 
 
 def _ensure_dir(path):
@@ -223,6 +232,32 @@ def _detect_preset_from_filename(filename):
     return None
 
 
+def _find_spaces_wg_package_path():
+    version_dir = _find_latest_version_dir('mods')
+    if not version_dir:
+        return None
+
+    for folder in (version_dir, os.path.join(version_dir, 'environments')):
+        if not os.path.isdir(folder):
+            continue
+        for name in _safe_listdir(folder):
+            if SPACES_WG_PACKAGE_RE.match(name):
+                path = os.path.normpath(os.path.join(folder, name))
+                LOG.info('Resolved spaces_wg package: %s', path)
+                return path
+
+    LOG.warning('spaces_wg package not found')
+    return None
+
+
+def _get_spaces_wg_package_path():
+    global _spaces_wg_package_path
+    if _spaces_wg_package_path and os.path.isfile(_spaces_wg_package_path):
+        return _spaces_wg_package_path
+    _spaces_wg_package_path = _find_spaces_wg_package_path()
+    return _spaces_wg_package_path
+
+
 def scan_environment_packages():
     packages = []
     version_dir = _find_latest_version_dir('mods')
@@ -314,7 +349,7 @@ def _read_package_registry_entry(package_info):
 
 
 def load_environment_registry(force=False):
-    global _environment_registry, _registry_loaded
+    global _environment_registry, _registry_loaded, _spaces_wg_package_path, _spaces_wg_template_cache
 
     if _registry_loaded and not force:
         return _environment_registry
@@ -335,6 +370,8 @@ def load_environment_registry(force=False):
 
     _environment_registry = registry
     _registry_loaded = True
+    _spaces_wg_package_path = _find_spaces_wg_package_path()
+    _spaces_wg_template_cache = {}
 
     summary = {}
     for preset_id, data in registry.items():
@@ -610,6 +647,117 @@ def build_environments_xml(active_guid, all_guids):
     return u'\r\n'.join(lines)
 
 
+def _decode_xml_bytes(data):
+    if isinstance(data, basestring):
+        return data
+    return data.decode('utf-8', 'ignore')
+
+
+def _get_spaces_wg_templates(space_name):
+    global _spaces_wg_template_cache
+    if space_name in _spaces_wg_template_cache:
+        return _spaces_wg_template_cache[space_name]
+
+    path = _get_spaces_wg_package_path()
+    result = {'space_settings': None, 'environments_xml': None}
+    _spaces_wg_template_cache[space_name] = result
+    if not path:
+        return result
+
+    try:
+        archive = zipfile.ZipFile(path, 'r')
+    except Exception:
+        LOG.error('Failed to open spaces_wg package: %s\n%s', path, traceback.format_exc())
+        return result
+
+    try:
+        ss_member = 'spaces/%s/space.settings' % space_name
+        env_member = 'spaces/%s/environments/environments.xml' % space_name
+        try:
+            result['space_settings'] = _decode_xml_bytes(archive.read(ss_member))
+            LOG.info('Loaded spaces_wg space.settings template: %s from %s', ss_member, os.path.basename(path))
+        except Exception:
+            LOG.warning('spaces_wg template missing: %s', ss_member)
+        try:
+            result['environments_xml'] = _decode_xml_bytes(archive.read(env_member))
+            LOG.info('Loaded spaces_wg environments.xml template: %s from %s', env_member, os.path.basename(path))
+        except Exception:
+            LOG.warning('spaces_wg template missing: %s', env_member)
+    finally:
+        try:
+            archive.close()
+        except Exception:
+            pass
+
+    return result
+
+
+def _patch_space_settings_template(template_text, env_name, preset_guid):
+    if not template_text:
+        return build_space_settings_xml(env_name, preset_guid)
+
+    text = template_text
+    if ROOT_ENV_RE.search(text):
+        text = ROOT_ENV_RE.sub(r'\1%s\3' % env_name, text, count=1)
+    else:
+        text = re.sub(r'</root>', u'    <environment>%s</environment>\n</root>' % env_name, text, count=1, flags=re.I)
+
+    if preset_guid:
+        if ROOT_ENV_OVERRIDE_RE.search(text):
+            text = ROOT_ENV_OVERRIDE_RE.sub(r'\1%s\3' % preset_guid, text, count=1)
+        else:
+            text = re.sub(r'</root>', u'    <environmentOverride>%s</environmentOverride>\n</root>' % preset_guid, text, count=1, flags=re.I)
+    else:
+        text = ROOT_ENV_OVERRIDE_RE.sub(u'', text)
+
+    return text
+
+
+def _patch_environments_template(template_text, active_guid, all_guids):
+    if not active_guid:
+        return template_text
+
+    if not template_text:
+        return build_environments_xml(active_guid, all_guids)
+
+    def _dotted(guid):
+        return guid.replace('-', '.')
+
+    dotted_active = _dotted(active_guid)
+    ordered = []
+    seen = set()
+    for guid in all_guids:
+        if guid and guid not in seen:
+            seen.add(guid)
+            ordered.append(guid)
+    if active_guid not in seen:
+        ordered.append(active_guid)
+
+    env_lines = u'\r\n'.join([u'\t<environment>%s</environment>' % _dotted(g) for g in ordered])
+    text = template_text
+
+    if ACTIVE_ENV_RE.search(text):
+        text = ACTIVE_ENV_RE.sub(r'\1%s\3' % dotted_active, text, count=1)
+    else:
+        text = re.sub(r'<root>', u'<root>\r\n\t<activeEnvironment>%s</activeEnvironment>' % dotted_active, text, count=1, flags=re.I)
+
+    if IS_SWITCH_ALLOWED_RE.search(text):
+        text = IS_SWITCH_ALLOWED_RE.sub(r'\1False\3', text, count=1)
+
+    start = re.search(r'<activeEnvironment>.*?</activeEnvironment>', text, re.I | re.S)
+    end = re.search(r'<isEnvironmentSwitchAllowed>.*?</isEnvironmentSwitchAllowed>', text, re.I | re.S)
+    if start and end:
+        insert_pos = end.end()
+        tail = text[insert_pos:]
+        tail = ALL_ENV_TAGS_RE.sub(u'', tail)
+        text = text[:insert_pos] + u'\r\n' + env_lines + tail
+    else:
+        text = ALL_ENV_TAGS_RE.sub(u'', text)
+        text = re.sub(r'</root>', u'\r\n%s\r\n</root>' % env_lines, text, count=1, flags=re.I)
+
+    return text
+
+
 def find_space_settings_path(space_name):
     try:
         version_dir = _find_latest_version_dir('res_mods')
@@ -684,11 +832,14 @@ def apply_environment_via_packages(space_name, preset_id):
         preset_guid = resolved.get('guid')
         LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s', preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
 
+        templates = _get_spaces_wg_templates(space_name)
+        all_guids = _get_all_known_guids_for_space(space_name)
+
         space_settings_path = find_space_settings_path(space_name)
         if not space_settings_path:
             LOG.warning('apply_environment_via_packages: space_settings path not found for %s', space_name)
             return False
-        settings_content = build_space_settings_xml(env_name, preset_guid)
+        settings_content = _patch_space_settings_template(templates.get('space_settings'), env_name, preset_guid)
         if not settings_content:
             LOG.warning('apply_environment_via_packages: generated empty space.settings')
             return False
@@ -698,14 +849,13 @@ def apply_environment_via_packages(space_name, preset_id):
         if not env_xml_path:
             LOG.warning('apply_environment_via_packages: environments.xml path not found for %s', space_name)
             return ok1
-        all_guids = _get_all_known_guids_for_space(space_name)
-        env_xml_content = build_environments_xml(preset_guid, all_guids)
+        env_xml_content = _patch_environments_template(templates.get('environments_xml'), preset_guid, all_guids)
         if not env_xml_content:
             LOG.warning('apply_environment_via_packages: generated empty environments.xml')
             return ok1
         ok2 = _write_text_file(env_xml_path, env_xml_content)
 
-        LOG.info('apply_environment_via_packages: space.settings=%s environments.xml=%s', ok1, ok2)
+        LOG.info('apply_environment_via_packages: space.settings=%s environments.xml=%s template_ss=%s template_env=%s', ok1, ok2, bool(templates.get('space_settings')), bool(templates.get('environments_xml')))
         return ok1 and ok2
     except Exception:
         LOG.error('apply_environment_via_packages: failed\n%s', traceback.format_exc())
