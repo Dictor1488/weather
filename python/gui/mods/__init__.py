@@ -308,19 +308,62 @@ def _install_key_hook():
     global _KEY_HOOK_INSTALLED
     if not IN_GAME or _KEY_HOOK_INSTALLED:
         return
+    log = _log()
+    installed = False
+
+    # --- Хук 1: AvatarInputHandler — БОЙОВИЙ (головний) ---
+    # InputHandler.g_instance.onKeyDown НЕ спрацьовує під час бою.
+    # В бою WoT пропускає клавіші через AvatarInputHandler.handleKeyEvent.
+    try:
+        import AvatarInputHandler as _AIH
+        cls_aih = _AIH.AvatarInputHandler
+        if hasattr(cls_aih, 'handleKeyEvent'):
+            _orig_aih = cls_aih.handleKeyEvent
+
+            def _make_aih_wrapper(orig):
+                def _aih_patched(self, event, *a, **kw):
+                    try:
+                        if event is not None and event.isKeyDown():
+                            _on_key_event(event)
+                    except Exception:
+                        pass
+                    return orig(self, event, *a, **kw)
+                return _aih_patched
+
+            cls_aih.handleKeyEvent = _make_aih_wrapper(_orig_aih)
+            installed = True
+            log.info('Key hook installed: AvatarInputHandler.handleKeyEvent (battle)')
+        else:
+            log.warning('AvatarInputHandler.handleKeyEvent not found')
+    except ImportError:
+        log.warning('AvatarInputHandler not available')
+    except Exception:
+        log.exception('Failed to install AvatarInputHandler key hook')
+
+    # --- Хук 2: InputHandler.g_instance.onKeyDown — АНГАР ---
     try:
         if getattr(InputHandler, 'g_instance', None) is not None:
             InputHandler.g_instance.onKeyDown += _on_key_event
-            _KEY_HOOK_INSTALLED = True
-            _log().info('Key hook installed')
+            installed = True
+            log.info('Key hook installed: InputHandler.g_instance.onKeyDown (lobby)')
     except Exception:
-        _log().exception('Failed to install key hook')
+        log.exception('Failed to install InputHandler key hook')
+
+    _KEY_HOOK_INSTALLED = installed
 
 
 def _remove_key_hook():
     global _KEY_HOOK_INSTALLED
     if not IN_GAME or not _KEY_HOOK_INSTALLED:
         return
+    try:
+        import AvatarInputHandler as _AIH
+        cls_aih = _AIH.AvatarInputHandler
+        # Якщо наш wrapper ще на місці — знімаємо
+        if hasattr(cls_aih, 'handleKeyEvent') and hasattr(cls_aih.handleKeyEvent, '__wrapped__'):
+            pass  # no-op, game will unload anyway
+    except Exception:
+        pass
     try:
         if getattr(InputHandler, 'g_instance', None) is not None:
             InputHandler.g_instance.onKeyDown -= _on_key_event
