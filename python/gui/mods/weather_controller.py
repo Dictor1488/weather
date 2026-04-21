@@ -89,6 +89,7 @@ DEFAULT_CFG = {
     "mapWeights": {},
     "hotkey": {"enabled": True, "mods": ["LALT"], "key": "KEY_F12"},
     "iconPosition": {"x": 20, "y": 120},
+    "currentOverridePreset": "standard",  # FIX: persist override between sessions
 }
 
 _cfg = {}
@@ -454,7 +455,7 @@ def get_preset_guid(preset_id, space_name=None):
 
 
 def load_config():
-    global _cfg
+    global _cfg, _current_override_preset, _current_cycle_index
     _cfg = json.loads(json.dumps(DEFAULT_CFG))
     try:
         if os.path.isfile(CONFIG_PATH):
@@ -471,6 +472,16 @@ def load_config():
         if isinstance(weights, dict):
             fixed[map_name] = _normalize_weights(weights)
     _cfg['mapWeights'] = fixed
+
+    # FIX: restore _current_override_preset from saved config
+    saved_preset = _cfg.get('currentOverridePreset', 'standard')
+    if saved_preset not in PRESET_ORDER:
+        saved_preset = 'standard'
+    _current_override_preset = None if saved_preset == 'standard' else saved_preset
+    if saved_preset in PRESET_ORDER:
+        _current_cycle_index = PRESET_ORDER.index(saved_preset)
+    logger.info('load_config: restored override preset=%s', saved_preset)
+
     save_config()
     load_environment_registry(force=True)
     logger.info('config loaded from %s', CONFIG_PATH)
@@ -479,6 +490,8 @@ def load_config():
 
 def save_config():
     try:
+        # FIX: always sync override preset into _cfg before writing
+        _cfg['currentOverridePreset'] = _current_override_preset or 'standard'
         _ensure_dir(CONFIG_PATH)
         with open(CONFIG_PATH, 'w') as f:
             json.dump(_cfg, f, indent=2, sort_keys=True)
