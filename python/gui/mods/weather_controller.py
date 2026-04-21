@@ -787,21 +787,10 @@ def _guid_to_bigworld_format(guid):
 
 def apply_environment_live(space_name, preset_id, resolved_data):
     """
-    Спроба застосувати пресет LIVE через BigWorld.addSpaceGeometryMapping +
-    BigWorld.notifySpaceChange.
-
-    Логіка:
-    1. Wotmod-пакет вже змонтовано (з mods/2.2.0.2/).
-       Його вміст доступний у віртуальній файловій системі як res/spaces/MAP/...
-    2. addSpaceGeometryMapping(spaceID, 'spaces/MAP', wotmodPath) додає новий
-       шар геометрії з пакету — включаючи environment.xml.
-    3. notifySpaceChange(spaceID) повідомляє рушій що простір змінився.
-
-    Якщо не вдається — повертає False (файловий fallback через environments.json).
+    Спроба застосувати пресет LIVE.
+    Пробуємо різні комбінації BigWorld API щоб знайти робочий спосіб.
     """
     if not IN_GAME:
-        return False
-    if not resolved_data:
         return False
 
     try:
@@ -809,31 +798,64 @@ def apply_environment_live(space_name, preset_id, resolved_data):
         if space_id is None:
             return False
 
-        package_path = resolved_data.get('package_path', '')
-        if not package_path or not os.path.isfile(package_path):
-            LOG.warning('apply_environment_live: package_path not found: %s', package_path)
-            return False
+        guid = (resolved_data or {}).get('guid', '')
+        env_name = (resolved_data or {}).get('env_name', '')
+        package_path = (resolved_data or {}).get('package_path', '')
 
-        mapping_path = 'spaces/' + space_name
-
-        if hasattr(BigWorld, 'addSpaceGeometryMapping'):
+        # --- Спроба 1: notifySpaceChange після запису файлів ---
+        # Повідомляємо рушій що дані простору змінились
+        # (файли вже записані в apply_environment_via_packages до цього виклику)
+        if hasattr(BigWorld, 'notifySpaceChange'):
             try:
-                handle = BigWorld.addSpaceGeometryMapping(space_id, mapping_path, package_path)
-                LOG.info('apply_environment_live: addSpaceGeometryMapping(%s, %s) handle=%s',
-                         mapping_path, os.path.basename(package_path), handle)
-                # Зберігаємо handle щоб потім видалити при наступній зміні
+                BigWorld.notifySpaceChange(space_id)
+                LOG.info('apply_environment_live: notifySpaceChange(%s) OK', space_id)
+                # Не повертаємо True одразу — це може не дати візуального ефекту
+                # але логуємо щоб знати чи є ефект
+            except Exception as e:
+                LOG.warning('apply_environment_live: notifySpaceChange ERR: %s', e)
+
+        # --- Спроба 2: addSpaceGeometryMapping з різними підписами ---
+        if hasattr(BigWorld, 'addSpaceGeometryMapping') and space_name:
+            env_virtual_path = 'spaces/%s/environments/%s' % (space_name, guid.replace('.', '-')) if guid else ''
+            space_virtual_path = 'spaces/' + space_name
+
+            # 2a: тільки spaceID + virtual path (без wotmod)
+            for vpath in [env_virtual_path, space_virtual_path]:
+                if not vpath:
+                    continue
+                try:
+                    handle = BigWorld.addSpaceGeometryMapping(space_id, vpath)
+                    LOG.info('apply_environment_live: addSpaceGeometryMapping(%s, %s) OK handle=%s',
+                             space_id, vpath, handle)
+                    _store_geometry_handle(space_id, handle)
+                    return True
+                except Exception as e:
+                    LOG.info('apply_environment_live: addSpaceGeometryMapping(%s, %s) ERR: %s',
+                             space_id, vpath, str(e)[:100])
+
+            # 2b: з Matrix (деякі версії BigWorld вимагають матрицю)
+            try:
+                import Math
+                identity = Math.Matrix()
+                identity.setIdentity()
+                handle = BigWorld.addSpaceGeometryMapping(space_id, identity, space_virtual_path)
+                LOG.info('apply_environment_live: addSpaceGeometryMapping(sid, Matrix, path) OK handle=%s', handle)
                 _store_geometry_handle(space_id, handle)
-                # Повідомляємо рушій про зміну
-                if hasattr(BigWorld, 'notifySpaceChange'):
-                    try:
-                        BigWorld.notifySpaceChange(space_id)
-                        LOG.info('apply_environment_live: notifySpaceChange OK')
-                    except Exception as e:
-                        LOG.warning('apply_environment_live: notifySpaceChange ERR: %s', e)
                 return True
             except Exception as e:
-                LOG.warning('apply_environment_live: addSpaceGeometryMapping ERR: %s', e)
+                LOG.info('apply_environment_live: addSpaceGeometryMapping(Matrix) ERR: %s', str(e)[:100])
 
+            # 2c: з wotmod path
+            if package_path and os.path.isfile(package_path):
+                try:
+                    handle = BigWorld.addSpaceGeometryMapping(space_id, space_virtual_path, package_path)
+                    LOG.info('apply_environment_live: addSpaceGeometryMapping(sid, vpath, pkg) OK handle=%s', handle)
+                    _store_geometry_handle(space_id, handle)
+                    return True
+                except Exception as e:
+                    LOG.info('apply_environment_live: addSpaceGeometryMapping(pkg) ERR: %s', str(e)[:100])
+
+        LOG.info('apply_environment_live: all attempts done, live_ok=False (files written to disk)')
         return False
 
     except Exception:
@@ -925,14 +947,24 @@ def apply_environment_via_packages(space_name, preset_id):
 
 
 def on_space_entered(space_name):
-    global _last_space_name
+    global _last_space_name, _current_override_preset, _current_cycle_index
     try:
         LOG.info('on_space_entered: raw space_name=%s override=%s', space_name, _current_override_preset)
         if not space_name:
             LOG.warning('on_space_entered: empty space_name')
             return False
         _last_space_name = space_name
-        preset_id = _current_override_preset or get_preset_for_map(space_name)
+        if _current_override_preset:
+            # Явно встановлений пресет (через F12 або з конфігу)
+            preset_id = _current_override_preset
+        else:
+            # Рандомний вибір по вагах — вибираємо ОДИН раз і зберігаємо
+            # щоб повторний виклик (onEnterWorld після onBecomePlayer) не змінив пресет
+            preset_id = get_preset_for_map(space_name)
+            if preset_id and preset_id != 'standard':
+                _current_override_preset = preset_id
+                _current_cycle_index = PRESET_ORDER.index(preset_id) if preset_id in PRESET_ORDER else 0
+                LOG.info('on_space_entered: random preset chosen=%s, stored as override for this battle', preset_id)
         LOG.info('on_space_entered: chosen preset=%s', preset_id if preset_id else 'standard')
         result = apply_environment_via_packages(space_name, preset_id)
         LOG.info('on_space_entered: apply_environment_via_packages(space=%s, preset=%s) -> %s', space_name, preset_id, result)
