@@ -26,25 +26,13 @@ def _get_input_handler():
 
 from weather_controller import g_controller
 
-try:
-    from battle_hud import open_hud, handle_key as hud_handle_key, is_active as hud_is_active
-    HAS_BATTLE_HUD = True
-except ImportError:
-    HAS_BATTLE_HUD = False
-    def open_hud():
-        pass
-    def hud_handle_key(k):
-        return False
-    def hud_is_active():
-        return False
-
-
 _BATTLE_SPACE_HOOKS = []
 _KEY_HOOK_INSTALLED = False
 _INIT_DONE = False
 _hotkey_codes = []
 _DEFAULT_WEIGHT_VALUE = 20
 _PRESET_IDS = ['standard', 'midnight', 'overcast', 'sunset', 'midday']
+_HARDCODED_TRIGGER_KEY = getattr(Keys, 'KEY_F12', 0) if IN_GAME else 0
 
 ALL_MAPS = [
     ('',                       u'— Оберіть карту —'),
@@ -132,24 +120,11 @@ def _load_hotkey_codes():
     if not IN_GAME:
         _hotkey_codes = []
         return
+    _hotkey_codes = [_HARDCODED_TRIGGER_KEY] if _HARDCODED_TRIGGER_KEY else []
     try:
-        hk = g_controller.getHotkey()
-        if not hk.get('enabled', True):
-            _hotkey_codes = []
-            return
-        codes = []
-        for mod_name in hk.get('mods', []):
-            code = getattr(Keys, mod_name, None)
-            if code is not None:
-                codes.append(code)
-        key_name = hk.get('key', 'KEY_F12')
-        key_code = getattr(Keys, key_name, None)
-        if key_code is not None:
-            codes.append(key_code)
-        _hotkey_codes = codes
+        g_controller.setHotkey(True, [], 'KEY_F12')
     except Exception:
-        _log().exception('_load_hotkey_codes failed')
-        _hotkey_codes = []
+        _log().exception('_load_hotkey_codes failed to persist hardcoded F12')
 
 
 def _extract_space_name_from_arena_type(arena_type):
@@ -279,16 +254,7 @@ def _extract_key_event_data(event_or_key):
 
 
 def _hotkey_matches(key_code):
-    if not _hotkey_codes:
-        return key_code == Keys.KEY_F12 and BigWorld.isKeyDown(Keys.KEY_LALT)
-    trigger_key = _hotkey_codes[-1]
-    modifiers = _hotkey_codes[:-1]
-    if key_code != trigger_key:
-        return False
-    for mod in modifiers:
-        if not BigWorld.isKeyDown(mod):
-            return False
-    return True
+    return bool(_HARDCODED_TRIGGER_KEY) and key_code == _HARDCODED_TRIGGER_KEY
 
 
 def _handle_hotkey_trigger(key_code):
@@ -299,10 +265,8 @@ def _handle_hotkey_trigger(key_code):
     except Exception:
         pass
 
-    _log().info('hotkey matched: key=%s in_battle=%s has_hud=%s', key_code, in_battle, HAS_BATTLE_HUD)
-    if HAS_BATTLE_HUD and in_battle:
-        open_hud()
-    else:
+    _log().info('hotkey matched: key=%s in_battle=%s action=cycle', key_code, in_battle)
+    if in_battle:
         g_controller.cycleWeatherInBattle()
 
 
@@ -313,14 +277,8 @@ def _on_key_event(event_or_key):
     key_code, is_down = _extract_key_event_data(event_or_key)
     if key_code is None or not is_down:
         return
-
-    if HAS_BATTLE_HUD and hud_is_active():
-        if hud_handle_key(key_code):
-            return
-
     if not _hotkey_matches(key_code):
         return
-
     _handle_hotkey_trigger(key_code)
 
 
@@ -424,38 +382,12 @@ def _on_settings_changed(linkage, newSettings):
         if changed_map:
             g_controller.setMapWeights(active_map, current_map)
 
-    if 'hotkey' in newSettings:
-        raw = newSettings['hotkey']
-        if isinstance(raw, (list, tuple)):
-            _update_hotkey_from_codes([int(c) for c in raw])
-
 
 def _update_hotkey_from_codes(int_codes):
     global _hotkey_codes
-    _hotkey_codes = int_codes
-
-    if not IN_GAME:
-        return
+    _hotkey_codes = [_HARDCODED_TRIGGER_KEY] if _HARDCODED_TRIGGER_KEY else []
     try:
-        import Keys as K
-        modifier_map = {
-            K.KEY_LALT: 'LALT', K.KEY_RALT: 'RALT',
-            K.KEY_LCONTROL: 'LCTRL', K.KEY_RCONTROL: 'RCTRL',
-            K.KEY_LSHIFT: 'LSHIFT', K.KEY_RSHIFT: 'RSHIFT',
-        }
-        mods = []
-        for code in int_codes[:-1]:
-            name = modifier_map.get(code)
-            if name:
-                mods.append(name)
-        key_name = 'KEY_F12'
-        if int_codes:
-            last = int_codes[-1]
-            for attr in dir(K):
-                if attr.startswith('KEY_') and getattr(K, attr) == last:
-                    key_name = attr
-                    break
-        g_controller.setHotkey(True, mods, key_name)
+        g_controller.setHotkey(True, [], 'KEY_F12')
     except Exception:
         _log().exception('_update_hotkey_from_codes failed')
 
@@ -487,11 +419,6 @@ def _apply_saved_settings(saved):
         if changed_map:
             g_controller.setMapWeights(active_map, current_map)
 
-    if 'hotkey' in saved:
-        raw = saved['hotkey']
-        if isinstance(raw, (list, tuple)) and raw:
-            _update_hotkey_from_codes([int(c) for c in raw])
-
     _load_hotkey_codes()
 
 
@@ -509,20 +436,7 @@ def init(*args, **kwargs):
         from gui.modsSettingsApi import templates as t
         import Keys as K
 
-        hk = g_controller.getHotkey()
-        mods = hk.get('mods', ['LALT'])
-        key = hk.get('key', 'KEY_F12')
-        current_codes = []
-        for m in mods:
-            code = getattr(K, m, None)
-            if code is not None:
-                current_codes.append(code)
-        key_code = getattr(K, key, None)
-        if key_code is not None:
-            current_codes.append(key_code)
-        if not current_codes:
-            current_codes = [K.KEY_LALT, K.KEY_F12]
-
+        current_codes = [_HARDCODED_TRIGGER_KEY] if _HARDCODED_TRIGGER_KEY else [K.KEY_F12]
         general_weights = _effective_ui_weights(g_controller.getGeneralWeights())
         default_map_weights = _default_weights()
 
