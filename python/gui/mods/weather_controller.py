@@ -45,6 +45,8 @@ PRESET_LABELS = {
 
 PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
 MAX_WEIGHT = 20
+DEFAULT_WEIGHT_VALUE = 20
+DEFAULT_EQUAL_WEIGHTS = dict((k, DEFAULT_WEIGHT_VALUE) for k in PRESET_ORDER)
 
 WEATHER_SYSTEM_LABELS = {
     "Clear":   u"Ясно",
@@ -85,11 +87,11 @@ except Exception:
 DEFAULT_CFG = {
     "enabled": True,
     "show_in_battle": True,
-    "generalWeights": {k: 0 for k in PRESET_ORDER},
+    "generalWeights": dict(DEFAULT_EQUAL_WEIGHTS),
     "mapWeights": {},
     "hotkey": {"enabled": True, "mods": ["LALT"], "key": "KEY_F12"},
     "iconPosition": {"x": 20, "y": 120},
-    "currentOverridePreset": "standard",  # FIX: persist override between sessions
+    "currentOverridePreset": "standard",
 }
 
 _cfg = {}
@@ -124,6 +126,29 @@ def _normalize_weights(dct):
         except Exception:
             out[key] = 0
     return out
+
+
+def _is_zero_weights(dct):
+    if not isinstance(dct, dict):
+        return True
+    for key in PRESET_ORDER:
+        try:
+            if int(dct.get(key, 0)) > 0:
+                return False
+        except Exception:
+            pass
+    return True
+
+
+def _effective_weights(dct, fallback=None):
+    normalized = _normalize_weights(dct or {})
+    if not _is_zero_weights(normalized):
+        return normalized
+    if fallback is not None:
+        fallback_normalized = _normalize_weights(fallback)
+        if not _is_zero_weights(fallback_normalized):
+            return fallback_normalized
+    return dict(DEFAULT_EQUAL_WEIGHTS)
 
 
 def _safe_listdir(path):
@@ -473,7 +498,6 @@ def load_config():
             fixed[map_name] = _normalize_weights(weights)
     _cfg['mapWeights'] = fixed
 
-    # FIX: restore _current_override_preset from saved config
     saved_preset = _cfg.get('currentOverridePreset', 'standard')
     if saved_preset not in PRESET_ORDER:
         saved_preset = 'standard'
@@ -490,7 +514,6 @@ def load_config():
 
 def save_config():
     try:
-        # FIX: always sync override preset into _cfg before writing
         _cfg['currentOverridePreset'] = _current_override_preset or 'standard'
         _ensure_dir(CONFIG_PATH)
         with open(CONFIG_PATH, 'w') as f:
@@ -522,7 +545,7 @@ def set_show_in_battle(flag):
 
 
 def get_general_weights():
-    return dict(_cfg.get('generalWeights', {}))
+    return _effective_weights(_cfg.get('generalWeights', {}))
 
 
 def set_general_weights(weights):
@@ -532,7 +555,10 @@ def set_general_weights(weights):
 
 def get_map_weights(map_name):
     maps = _cfg.setdefault('mapWeights', {})
-    return dict(maps.get(map_name, _cfg.get('generalWeights', {})))
+    map_weights = maps.get(map_name)
+    if map_weights is None:
+        return get_general_weights()
+    return _effective_weights(map_weights, get_general_weights())
 
 
 def set_map_weights(map_name, weights):
@@ -570,32 +596,32 @@ def set_icon_position(x, y):
 
 
 def weighted_choice(weights_dict):
+    effective = _effective_weights(weights_dict)
     pool = []
     for preset in PRESET_ORDER:
-        w = int(weights_dict.get(preset, 0))
+        w = int(effective.get(preset, 0))
         if w > 0:
             pool.extend([preset] * w)
     if not pool:
-        return 'standard'
-    return random.choice(pool)
+        effective = dict(DEFAULT_EQUAL_WEIGHTS)
+        for preset in PRESET_ORDER:
+            pool.extend([preset] * int(effective.get(preset, 0)))
+    return random.choice(pool) if pool else 'standard'
 
 
 def get_preset_for_map(map_name):
-    maps = _cfg.get('mapWeights', {})
-    if map_name in maps:
-        return weighted_choice(maps[map_name])
-    return weighted_choice(_cfg.get('generalWeights', {}))
+    return weighted_choice(get_map_weights(map_name))
 
 
 def get_all_general_for_ui():
     items = []
-    weights = _cfg.get('generalWeights', {})
+    weights = get_general_weights()
     registry = get_environment_registry()
     for preset in PRESET_ORDER:
         label = PRESET_LABELS[preset]
         if preset != 'standard' and preset not in registry:
             label += u' [missing]'
-        items.append({'id': preset, 'label': label, 'weight': int(weights.get(preset, 0))})
+        items.append({'id': preset, 'label': label, 'weight': int(weights.get(preset, DEFAULT_WEIGHT_VALUE))})
     return items
 
 
@@ -609,7 +635,7 @@ def get_all_for_map_ui(map_name):
             has_space = bool(registry.get(preset, {}).get('spaces', {}).get(map_name))
             if not has_space:
                 label += u' [n/a]'
-        items.append({'id': preset, 'label': label, 'weight': int(weights.get(preset, 0))})
+        items.append({'id': preset, 'label': label, 'weight': int(weights.get(preset, DEFAULT_WEIGHT_VALUE))})
     return items
 
 
@@ -677,9 +703,6 @@ def _patch_space_settings_template(template_text, env_name, preset_guid):
         return None
 
     text = template_text
-
-    # FIX: WoT space.settings uses </space.settings> as root tag, NOT </root>
-    # Detect which closing tag is used in this template
     closing_tag = u'</space.settings>' if '</space.settings>' in text else u'</root>'
 
     if ROOT_ENV_RE.search(text):
@@ -722,22 +745,7 @@ def find_space_settings_path(space_name):
         return None
 
 
-# ============================================================================
-# FIX: environments.json runtime switching
-#
-# WoT has a NATIVE environment switcher that reads:
-#   res_mods/<ver>/scripts/client/mods/environments.json
-# It allows real-time environment cycling during battle (like pressing X).
-# The "environments" array = list of active GUID presets to cycle through.
-# "randomizer" = weights for random pick at battle start.
-# "toogleKeyset" = [-1, 88] means: no modifier + key X (code 88).
-#
-# By writing this file with only ONE environment GUID, we force WoT to use
-# exactly that environment — no randomness, no waiting for next battle load.
-# ============================================================================
-
 def _find_environments_json_path():
-    """Returns path to res_mods/.../scripts/client/mods/environments.json"""
     try:
         version_dir = _find_latest_version_dir('res_mods')
         if not version_dir:
@@ -751,18 +759,10 @@ def _find_environments_json_path():
 
 
 def _guid_to_dot(guid):
-    """Convert GUID from dash format (56BA3213-40FF-...) to dot format (56BA3213.40FF...)"""
     return guid.replace('-', '.')
 
 
 def write_environments_json_for_preset(preset_id, space_name=None):
-    """
-    Writes environments.json so WoT's native switcher uses only the chosen preset.
-    This enables REAL-TIME environment switching without reloading the battle.
-
-    For 'standard' preset: removes our override (restores default/random).
-    For any other preset: sets exactly that one GUID in the environments list.
-    """
     try:
         env_json_path = _find_environments_json_path()
         if not env_json_path:
@@ -770,7 +770,6 @@ def write_environments_json_for_preset(preset_id, space_name=None):
             return False
 
         if not preset_id or preset_id == 'standard':
-            # Restore default — remove our override file so WoT uses stock config
             if os.path.isfile(env_json_path):
                 try:
                     os.remove(env_json_path)
@@ -779,7 +778,6 @@ def write_environments_json_for_preset(preset_id, space_name=None):
                     LOG.error('write_environments_json_for_preset: failed to remove file\n%s', traceback.format_exc())
             return True
 
-        # Resolve GUID for this preset (use space_name for exact match, fallback to any)
         registry = get_environment_registry()
         preset_data = registry.get(preset_id)
         if not preset_data:
@@ -792,7 +790,6 @@ def write_environments_json_for_preset(preset_id, space_name=None):
             if space_data:
                 guid = space_data.get('guid')
         if not guid:
-            # Fallback: first available GUID for this preset
             for _sn, sd in preset_data.get('spaces', {}).items():
                 guid = sd.get('guid')
                 if guid:
@@ -802,9 +799,7 @@ def write_environments_json_for_preset(preset_id, space_name=None):
             LOG.warning('write_environments_json_for_preset: no GUID for preset=%s', preset_id)
             return False
 
-        # WoT environments.json uses dot-separated GUIDs
         guid_dot = _guid_to_dot(guid)
-
         payload = {
             "enabled": True,
             "environments": [guid_dot],
@@ -858,7 +853,6 @@ def apply_environment_via_packages(space_name, preset_id):
             LOG.warning('apply_environment_via_packages: no space_name')
             return False
 
-        # Write environments.json for native real-time switching (works for standard too)
         env_json_ok = write_environments_json_for_preset(preset_id, space_name)
         LOG.info('apply_environment_via_packages: environments.json=%s preset=%s', env_json_ok, preset_id)
 
@@ -876,10 +870,9 @@ def apply_environment_via_packages(space_name, preset_id):
                  preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
 
         templates = _get_spaces_wg_templates(space_name)
-
         space_settings_path = find_space_settings_path(space_name)
         if not space_settings_path:
-            LOG.warning('apply_environment_via_packages: space_settings path not found for %s', space_name)
+            LOG.warning('apply_environment_via_packages: space.settings path not found for %s', space_name)
             return env_json_ok
 
         settings_content = _patch_space_settings_template(templates.get('space_settings'), env_name, preset_guid)
@@ -1133,9 +1126,7 @@ class WeatherController(object):
     def getEnvironmentRegistry(self):
         return get_environment_registry()
 
-
     def build_payload(self, map_registry):
-        """Build full payload dict for WeatherWindowMeta / AS3."""
         registry = get_environment_registry()
         general_weights = get_general_weights()
 
@@ -1148,7 +1139,7 @@ class WeatherController(object):
             presets.append({
                 'id': preset_id,
                 'label': label,
-                'weight': int(general_weights.get(preset_id, 0)),
+                'weight': int(general_weights.get(preset_id, DEFAULT_WEIGHT_VALUE)),
                 'guid': guid,
                 'previewSrc': '',
             })
@@ -1156,7 +1147,7 @@ class WeatherController(object):
         maps = []
         for map_id, map_label, thumb_src in map_registry:
             map_weights = get_map_weights(map_id)
-            use_global = map_id not in _cfg.get('mapWeights', {})
+            use_global = map_id not in _cfg.get('mapWeights', {}) or _is_zero_weights(_cfg.get('mapWeights', {}).get(map_id, {}))
             map_presets = []
             for preset_id in PRESET_ORDER:
                 label = PRESET_LABELS.get(preset_id, preset_id)
@@ -1166,7 +1157,7 @@ class WeatherController(object):
                 map_presets.append({
                     'id': preset_id,
                     'label': label,
-                    'weight': int(map_weights.get(preset_id, 0)),
+                    'weight': int(map_weights.get(preset_id, DEFAULT_WEIGHT_VALUE)),
                     'guid': '',
                     'previewSrc': '',
                 })
@@ -1203,11 +1194,11 @@ class WeatherController(object):
         try:
             weight = max(0, min(MAX_WEIGHT, int(value)))
             if map_id:
-                weights = get_map_weights(map_id)
+                weights = _normalize_weights(_cfg.setdefault('mapWeights', {}).get(map_id, {}))
                 weights[preset_id] = weight
                 set_map_weights(map_id, weights)
             else:
-                weights = get_general_weights()
+                weights = _normalize_weights(_cfg.get('generalWeights', {}))
                 weights[preset_id] = weight
                 set_general_weights(weights)
         except Exception:
@@ -1247,7 +1238,6 @@ class WeatherController(object):
             logger.exception('on_hotkey_changed failed')
 
     def select_preset_in_battle(self, preset_id):
-        """Directly select a specific preset in battle (called from battle HUD)."""
         set_override_preset(preset_id)
         arena_name = _resolve_current_arena_name()
         if arena_name:
