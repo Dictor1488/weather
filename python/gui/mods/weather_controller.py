@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v5.5
+Weather controller v5.6
 
 Зміни відносно v5.1:
 - fix: _extract_env_name() — підтримка формату v1.9 wotmod-пакетів:
@@ -786,22 +786,53 @@ def _guid_to_bigworld_format(guid):
     return guid.replace('-', '.').replace('..', '.')
 
 
-def apply_environment_live(space_name, preset_id, resolved_data):
+def _do_space_reload(space_id, preset_id):
+    """Виконує spaceReload з захистом від повторного виклику."""
+    global _space_reload_in_progress
+    if _space_reload_in_progress:
+        LOG.info('_do_space_reload: skipped, already in progress')
+        return
+    try:
+        _space_reload_in_progress = True
+        BigWorld.spaceReload(space_id)
+        LOG.info('_do_space_reload: spaceReload(%s) OK preset=%s', space_id, preset_id)
+    except Exception as e:
+        LOG.warning('_do_space_reload: ERR: %s', e)
+        _space_reload_in_progress = False
+        return
+    # Скидаємо прапор через 0.5 сек — достатньо щоб повторний onEnterWorld прийшов і ігнорувався
+    try:
+        BigWorld.callback(0.5, _clear_reload_flag)
+    except Exception:
+        _space_reload_in_progress = False
+
+
+def _clear_reload_flag():
+    global _space_reload_in_progress
+    _space_reload_in_progress = False
+    LOG.info('_clear_reload_flag: done')
+
+
+def apply_environment_live(space_name, preset_id, resolved_data, from_entry=False):
     """
     Застосовує пресет у поточному бою через BigWorld.spaceReload(spaceID).
 
-    BigWorld.spaceReload змушує рушій перечитати space.settings і
-    environments.json з диску і застосувати нове оточення.
-    Файли повинні бути вже записані на диск до виклику цього методу.
+    from_entry=True: викликається з on_space_entered (бій тільки завантажується).
+        spaceReload НЕ викликається — це призводить до крашу, бо рушій ще не
+        закінчив завантаження. Файли вже записані і будуть використані при
+        наступному завантаженні цієї карти.
 
-    Захист: spaceReload викликає повторний onEnterWorld -> on_space_entered,
-    тому використовуємо _space_reload_in_progress щоб уникнути нескінченної петлі.
+    from_entry=False: викликається з F12. Файли вже записані, викликаємо
+        spaceReload з невеликою затримкою щоб рушій встиг отримати нові файли.
 
-    Повертає True якщо виклик відбувся без помилки.
+    Повертає True якщо виклик запланований/виконаний без помилки.
     """
-    global _space_reload_in_progress
-
     if not IN_GAME:
+        return False
+
+    if from_entry:
+        # Не робимо spaceReload при вході — небезпечно під час завантаження
+        LOG.info('apply_environment_live: skip spaceReload on entry (files written, apply on next load)')
         return False
 
     if _space_reload_in_progress:
@@ -814,39 +845,28 @@ def apply_environment_live(space_name, preset_id, resolved_data):
             LOG.warning('apply_environment_live: no spaceID available')
             return False
 
-        if hasattr(BigWorld, 'spaceReload'):
-            try:
-                _space_reload_in_progress = True
-                BigWorld.spaceReload(space_id)
-                LOG.info('apply_environment_live: spaceReload(%s) OK preset=%s', space_id, preset_id)
-                return True
-            except Exception as e:
-                LOG.warning('apply_environment_live: spaceReload ERR: %s', e)
-                return False
-            finally:
-                # Скидаємо прапор через невеликий таймаут,
-                # щоб повторний onEnterWorld встиг прийти і бути проігнорованим
-                try:
-                    BigWorld.callback(2.0, _clear_reload_flag)
-                except Exception:
-                    _space_reload_in_progress = False
+        if not hasattr(BigWorld, 'spaceReload'):
+            LOG.warning('apply_environment_live: BigWorld.spaceReload not available')
+            return False
 
-        LOG.warning('apply_environment_live: BigWorld.spaceReload not available')
-        return False
+        # Невелика затримка: даємо час рушію завершити поточний фрейм
+        # перед перезавантаженням простору
+        try:
+            BigWorld.callback(0.1, lambda: _do_space_reload(space_id, preset_id))
+            LOG.info('apply_environment_live: spaceReload scheduled (0.1s) preset=%s', preset_id)
+            return True
+        except Exception as e:
+            LOG.warning('apply_environment_live: callback ERR: %s', e)
+            # Пробуємо одразу
+            _do_space_reload(space_id, preset_id)
+            return True
 
     except Exception:
         LOG.error('apply_environment_live: unexpected error\n%s', traceback.format_exc())
-        _space_reload_in_progress = False
         return False
 
 
-def _clear_reload_flag():
-    global _space_reload_in_progress
-    _space_reload_in_progress = False
-    LOG.info('apply_environment_live: reload flag cleared')
-
-
-def apply_environment_via_packages(space_name, preset_id):
+def apply_environment_via_packages(space_name, preset_id, from_entry=False):
     try:
         LOG.info('apply_environment_via_packages: start space=%s preset=%s', space_name, preset_id)
         if not space_name:
@@ -859,13 +879,13 @@ def apply_environment_via_packages(space_name, preset_id):
         if not preset_id or preset_id == 'standard':
             LOG.info('apply_environment_via_packages: preset is standard, environments.json cleared')
             # Для standard теж пробуємо live-reset (повернути дефолт)
-            apply_environment_live(space_name, 'standard', None)
+            apply_environment_live(space_name, 'standard', None, from_entry=from_entry)
             return env_json_ok
 
         actual_preset_id, resolved = resolve_environment_with_fallback(space_name, preset_id)
         if not resolved:
             # Навіть якщо немає space.settings — пробуємо live через будь-який GUID з реєстру
-            apply_environment_live(space_name, preset_id, None)
+            apply_environment_live(space_name, preset_id, None, from_entry=from_entry)
             return env_json_ok
 
         env_name = resolved.get('env_name')
@@ -874,7 +894,7 @@ def apply_environment_via_packages(space_name, preset_id):
                  preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
 
         # --- LIVE APPLY: змінюємо окруження одразу в поточному бою ---
-        live_ok = apply_environment_live(space_name, actual_preset_id, resolved)
+        live_ok = apply_environment_live(space_name, actual_preset_id, resolved, from_entry=from_entry)
         LOG.info('apply_environment_via_packages: live_apply=%s', live_ok)
 
         # --- FILE APPLY: записуємо файли для наступного завантаження (завжди) ---
@@ -908,7 +928,7 @@ def on_space_entered(space_name):
         _last_space_name = space_name
         preset_id = _current_override_preset or get_preset_for_map(space_name)
         LOG.info('on_space_entered: chosen preset=%s', preset_id if preset_id else 'standard')
-        result = apply_environment_via_packages(space_name, preset_id)
+        result = apply_environment_via_packages(space_name, preset_id, from_entry=True)
         LOG.info('on_space_entered: apply_environment_via_packages(space=%s, preset=%s) -> %s', space_name, preset_id, result)
         return result
     except Exception:
