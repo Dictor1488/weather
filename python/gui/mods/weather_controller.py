@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v5.6
+Weather controller v5.9
 
 Зміни відносно v5.1:
 - fix: _extract_env_name() — підтримка формату v1.9 wotmod-пакетів:
@@ -108,9 +108,9 @@ _registry_loaded = False
 _last_space_name = None
 _spaces_wg_package_path = None
 _spaces_wg_template_cache = {}
-# Захист від нескінченної петлі: spaceReload викликає повторний onEnterWorld,
-# тому при повторному виклику ми пропускаємо ще один spaceReload.
-_space_reload_in_progress = False
+# Стан перезавантаження простору
+_space_reload_in_progress = False   # захист від повторного onEnterWorld
+_pending_reload_cb = None            # ID поточного запланованого callback
 
 
 def _ensure_dir(path):
@@ -787,10 +787,14 @@ def _guid_to_bigworld_format(guid):
 
 
 def _do_space_reload(space_id, preset_id):
-    """Виконує spaceReload з захистом від повторного виклику."""
-    global _space_reload_in_progress
+    """
+    Виконує spaceReload. Викликається через BigWorld.callback.
+    Якщо reload вже йде (повторний onEnterWorld) — пропускаємо.
+    """
+    global _space_reload_in_progress, _pending_reload_cb
+    _pending_reload_cb = None
     if _space_reload_in_progress:
-        LOG.info('_do_space_reload: skipped, already in progress')
+        LOG.info('_do_space_reload: skipped (onEnterWorld re-entry)')
         return
     try:
         _space_reload_in_progress = True
@@ -800,9 +804,9 @@ def _do_space_reload(space_id, preset_id):
         LOG.warning('_do_space_reload: ERR: %s', e)
         _space_reload_in_progress = False
         return
-    # Скидаємо прапор через 0.5 сек — достатньо щоб повторний onEnterWorld прийшов і ігнорувався
+    # Скидаємо прапор через 1.0 сек — достатньо щоб повторний onEnterWorld прийшов
     try:
-        BigWorld.callback(0.5, _clear_reload_flag)
+        BigWorld.callback(1.0, _clear_reload_flag)
     except Exception:
         _space_reload_in_progress = False
 
@@ -813,30 +817,87 @@ def _clear_reload_flag():
     LOG.info('_clear_reload_flag: done')
 
 
+def _schedule_entry_reload(space_id, preset_id, attempts):
+    """
+    Retry-callback: перевіряє чи завершилось завантаження танків,
+    і тільки тоді викликає spaceReload.
+    Перевіряє кожні 0.5 сек, максимум 20 спроб (10 секунд).
+    """
+    MAX_ATTEMPTS = 20
+    RETRY_DELAY  = 0.5
+
+    if attempts >= MAX_ATTEMPTS:
+        LOG.warning('_schedule_entry_reload: gave up after %s attempts', attempts)
+        return
+
+    ready = False
+    try:
+        import BigWorld as _BW
+        player = _BW.player()
+        if player is not None:
+            arena = getattr(player, 'arena', None)
+            if arena is not None:
+                # period: 0=IDLE, 1=WAITING, 2=PRE_COUNTDOWN, 3=BATTLE, 4=AFTER_BATTLE
+                # Безпечно починати з period >= 1 (arena ініціалізована)
+                # і vehicles не порожні
+                period = getattr(arena, 'period', 0)
+                vehicles = getattr(arena, 'vehicles', {})
+                if period >= 1 and len(vehicles) > 0:
+                    ready = True
+                    LOG.info('_schedule_entry_reload: arena ready period=%s vehicles=%s attempt=%s',
+                             period, len(vehicles), attempts)
+    except Exception as e:
+        LOG.warning('_schedule_entry_reload: check ERR: %s', e)
+
+    if ready:
+        _do_space_reload(space_id, preset_id)
+    else:
+        try:
+            BigWorld.callback(RETRY_DELAY,
+                              lambda: _schedule_entry_reload(space_id, preset_id, attempts + 1))
+        except Exception:
+            LOG.warning('_schedule_entry_reload: failed to reschedule')
+
+
 def apply_environment_live(space_name, preset_id, resolved_data, from_entry=False):
     """
     Застосовує пресет у поточному бою через BigWorld.spaceReload(spaceID).
 
-    from_entry=True: викликається з on_space_entered (бій тільки завантажується).
-        spaceReload НЕ викликається — це призводить до крашу, бо рушій ще не
-        закінчив завантаження. Файли вже записані і будуть використані при
-        наступному завантаженні цієї карти.
+    from_entry=True  — виклик з on_space_entered під час завантаження карти.
+        spaceReload НЕ викликається (небезпечно під час завантаження).
+        Файли записані, пресет застосується при наступному завантаженні карти.
 
-    from_entry=False: викликається з F12. Файли вже записані, викликаємо
-        spaceReload з невеликою затримкою щоб рушій встиг отримати нові файли.
+    from_entry=False — виклик з F12.
+        Скасовуємо попередній запланований callback (якщо є) і плануємо новий.
+        Таким чином швидкі натискання F12 завжди беруть ОСТАННІЙ обраний пресет.
 
-    Повертає True якщо виклик запланований/виконаний без помилки.
+    Повертає True якщо виклик запланований без помилки.
     """
+    global _pending_reload_cb, _space_reload_in_progress
+
     if not IN_GAME:
         return False
 
     if from_entry:
-        # Не робимо spaceReload при вході — небезпечно під час завантаження
-        LOG.info('apply_environment_live: skip spaceReload on entry (files written, apply on next load)')
+        # При вході в бій: не викликаємо spaceReload одразу — рушій ще завантажує
+        # моделі танків (camouflages.py), і перезавантаження простору під час цього
+        # призводить до краша (NoneType.bindTo).
+        #
+        # Безпечний момент: коли арена перейшла в стан "бій почався" (period >= 2).
+        # Перевіряємо це через retry-callback кожні 0.5 сек.
+        try:
+            space_id = _get_current_space_id()
+            if space_id and hasattr(BigWorld, 'spaceReload'):
+                _schedule_entry_reload(space_id, preset_id, attempts=0)
+                LOG.info('apply_environment_live: entry reload check scheduled preset=%s', preset_id)
+                return True
+        except Exception as e:
+            LOG.warning('apply_environment_live: entry schedule ERR: %s', e)
         return False
 
+    # Під час активного spaceReload (onEnterWorld re-entry) — не плануємо новий
     if _space_reload_in_progress:
-        LOG.info('apply_environment_live: skipped (reload already in progress)')
+        LOG.info('apply_environment_live: skipped (spaceReload in progress)')
         return False
 
     try:
@@ -849,15 +910,22 @@ def apply_environment_live(space_name, preset_id, resolved_data, from_entry=Fals
             LOG.warning('apply_environment_live: BigWorld.spaceReload not available')
             return False
 
-        # Невелика затримка: даємо час рушію завершити поточний фрейм
-        # перед перезавантаженням простору
+        # Скасовуємо попередній запланований callback — беремо лише останній пресет
+        if _pending_reload_cb is not None:
+            try:
+                BigWorld.cancelCallback(_pending_reload_cb)
+                LOG.info('apply_environment_live: cancelled previous pending reload')
+            except Exception:
+                pass
+            _pending_reload_cb = None
+
+        # Плануємо новий reload через 0.15 сек
         try:
-            BigWorld.callback(0.1, lambda: _do_space_reload(space_id, preset_id))
-            LOG.info('apply_environment_live: spaceReload scheduled (0.1s) preset=%s', preset_id)
+            _pending_reload_cb = BigWorld.callback(0.15, lambda: _do_space_reload(space_id, preset_id))
+            LOG.info('apply_environment_live: spaceReload scheduled (0.15s) preset=%s', preset_id)
             return True
         except Exception as e:
             LOG.warning('apply_environment_live: callback ERR: %s', e)
-            # Пробуємо одразу
             _do_space_reload(space_id, preset_id)
             return True
 
