@@ -89,7 +89,7 @@ DEFAULT_CFG = {
     "show_in_battle": True,
     "generalWeights": dict(DEFAULT_EQUAL_WEIGHTS),
     "mapWeights": {},
-    "hotkey": {"enabled": True, "mods": ["LALT"], "key": "KEY_F12"},
+    "hotkey": {"enabled": True, "mods": [], "key": "KEY_F12"},
     "iconPosition": {"x": 20, "y": 120},
     "currentOverridePreset": "standard",
 }
@@ -169,21 +169,18 @@ def _has_game_layout(base_path):
 
 def _resolve_game_root():
     candidates = []
-
     try:
         cwd = os.path.abspath(os.getcwd())
         candidates.append(cwd)
         candidates.append(os.path.abspath(os.path.join(cwd, '..')))
     except Exception:
         pass
-
     try:
         exe_path = getattr(os, 'getcwd', None) and os.getcwd()
         if exe_path:
             candidates.append(os.path.abspath(exe_path))
     except Exception:
         pass
-
     try:
         if IN_GAME:
             prefs = (BigWorld.wg_getPreferencesFilePath()
@@ -216,17 +213,14 @@ def _find_latest_version_dir(root_name):
     if not os.path.isdir(root):
         LOG.warning('%s root not found: %s', root_name, root)
         return None
-
     dirs = []
     for name in _safe_listdir(root):
         full = os.path.join(root, name)
         if os.path.isdir(full):
             dirs.append(full)
-
     if not dirs:
         LOG.warning('No version dirs in %s', root)
         return None
-
     dirs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     LOG.info('Resolved latest %s dir: %s', root_name, dirs[0])
     return dirs[0]
@@ -234,10 +228,7 @@ def _find_latest_version_dir(root_name):
 
 def _extract_env_name(xml_bytes):
     try:
-        if not isinstance(xml_bytes, basestring):
-            xml_text = xml_bytes.decode('utf-8', 'ignore')
-        else:
-            xml_text = xml_bytes
+        xml_text = xml_bytes.decode('utf-8', 'ignore') if not isinstance(xml_bytes, basestring) else xml_bytes
         match = ENV_NAME_RE.search(xml_text)
         if match:
             return match.group(1).strip()
@@ -258,7 +249,6 @@ def _find_spaces_wg_package_path():
     version_dir = _find_latest_version_dir('mods')
     if not version_dir:
         return None
-
     preferred = os.path.join(version_dir, 'environments')
     folders = [preferred, version_dir]
     seen = set()
@@ -271,7 +261,6 @@ def _find_spaces_wg_package_path():
                 path = os.path.normpath(os.path.join(folder, name))
                 LOG.info('Resolved spaces_wg package: %s', path)
                 return path
-
     LOG.warning('spaces_wg package not found')
     return None
 
@@ -289,74 +278,50 @@ def scan_environment_packages():
     version_dir = _find_latest_version_dir('mods')
     if not version_dir:
         return packages
-
     candidates = [version_dir, os.path.join(version_dir, 'environments')]
     seen = set()
-
     for folder in candidates:
         if not os.path.isdir(folder):
             continue
-
         for name in _safe_listdir(folder):
             lower = name.lower()
-            if not lower.endswith('.wotmod'):
+            if not lower.endswith('.wotmod') or not lower.startswith('environments.'):
                 continue
-            if not lower.startswith('environments.'):
-                continue
-
             preset_id = _detect_preset_from_filename(name)
             if not preset_id:
                 continue
-
             full_path = os.path.normpath(os.path.join(folder, name))
             if full_path in seen:
                 continue
-
             seen.add(full_path)
-            packages.append({
-                'preset_id': preset_id,
-                'path': full_path,
-                'name': name,
-            })
-
+            packages.append({'preset_id': preset_id, 'path': full_path, 'name': name})
     LOG.info('scan_environment_packages: found=%s packages=%s', len(packages), [p['name'] for p in packages])
     return packages
 
 
 def _read_package_registry_entry(package_info):
-    result = {
-        'preset_id': package_info['preset_id'],
-        'path': package_info['path'],
-        'name': package_info['name'],
-        'spaces': {},
-    }
-
+    result = {'preset_id': package_info['preset_id'], 'path': package_info['path'], 'name': package_info['name'], 'spaces': {}}
     try:
         archive = zipfile.ZipFile(package_info['path'], 'r')
     except Exception:
         LOG.error('Failed to open package: %s\n%s', package_info['path'], traceback.format_exc())
         return result
-
     try:
         for member in archive.namelist():
             match = ENV_XML_RE.match(member)
             if not match:
                 continue
-
             space_name = match.group(1)
             guid = match.group(2).upper()
-
             try:
                 xml_bytes = archive.read(member)
             except Exception:
                 LOG.error('Failed to read %s from %s\n%s', member, package_info['path'], traceback.format_exc())
                 continue
-
             env_name = _extract_env_name(xml_bytes)
             if not env_name:
                 LOG.warning('No <name> in %s from %s', member, package_info['name'])
                 continue
-
             result['spaces'][space_name] = {
                 'guid': guid,
                 'env_name': env_name,
@@ -369,39 +334,26 @@ def _read_package_registry_entry(package_info):
             archive.close()
         except Exception:
             pass
-
     LOG.info('Loaded package %s preset=%s spaces=%s', package_info['name'], package_info['preset_id'], len(result['spaces']))
     return result
 
 
 def load_environment_registry(force=False):
     global _environment_registry, _registry_loaded, _spaces_wg_package_path, _spaces_wg_template_cache
-
     if _registry_loaded and not force:
         return _environment_registry
-
     registry = {}
-    packages = scan_environment_packages()
-
-    for package_info in packages:
+    for package_info in scan_environment_packages():
         package_data = _read_package_registry_entry(package_info)
         preset_id = package_data['preset_id']
-        entry = registry.setdefault(preset_id, {
-            'package': package_data['name'],
-            'package_path': package_data['path'],
-            'spaces': {},
-        })
+        entry = registry.setdefault(preset_id, {'package': package_data['name'], 'package_path': package_data['path'], 'spaces': {}})
         if package_data['spaces']:
             entry['spaces'].update(package_data['spaces'])
-
     _environment_registry = registry
     _registry_loaded = True
     _spaces_wg_package_path = _find_spaces_wg_package_path()
     _spaces_wg_template_cache = {}
-
-    summary = {}
-    for preset_id, data in registry.items():
-        summary[preset_id] = len(data.get('spaces', {}))
+    summary = dict((preset_id, len(data.get('spaces', {}))) for preset_id, data in registry.items())
     LOG.info('Environment registry loaded: %s', summary)
     return _environment_registry
 
@@ -413,18 +365,15 @@ def get_environment_registry():
 def resolve_environment_for_space(space_name, preset_id):
     if not preset_id or preset_id == 'standard':
         return None
-
     registry = get_environment_registry()
     preset_data = registry.get(preset_id)
     if not preset_data:
         LOG.warning('resolve_environment_for_space: preset not found in registry: %s', preset_id)
         return None
-
     data = preset_data.get('spaces', {}).get(space_name)
     if not data:
         LOG.warning('resolve_environment_for_space: no space=%s in preset=%s package=%s', space_name, preset_id, preset_data.get('package'))
         return None
-
     return data
 
 
@@ -433,9 +382,7 @@ def _get_fallback_preset_order(primary_preset):
     if primary_preset and primary_preset != 'standard':
         order.append(primary_preset)
     for preset_id in PRESET_ORDER:
-        if preset_id == 'standard':
-            continue
-        if preset_id not in order:
+        if preset_id != 'standard' and preset_id not in order:
             order.append(preset_id)
     return order
 
@@ -444,7 +391,6 @@ def resolve_environment_with_fallback(space_name, preset_id):
     candidates = _get_fallback_preset_order(preset_id)
     if not candidates:
         return None, None
-
     for candidate in candidates:
         resolved = resolve_environment_for_space(space_name, candidate)
         if resolved:
@@ -453,7 +399,6 @@ def resolve_environment_with_fallback(space_name, preset_id):
             else:
                 LOG.info('resolve_environment_with_fallback: exact preset selected for space=%s preset=%s package=%s', space_name, candidate, resolved.get('package'))
             return candidate, resolved
-
     LOG.warning('resolve_environment_with_fallback: no available preset for space=%s requested=%s candidates=%s', space_name, preset_id, candidates)
     return None, None
 
@@ -461,18 +406,14 @@ def resolve_environment_with_fallback(space_name, preset_id):
 def get_preset_guid(preset_id, space_name=None):
     if not preset_id or preset_id == 'standard':
         return None
-
     registry = get_environment_registry()
     preset_data = registry.get(preset_id)
     if not preset_data:
         return None
-
     if space_name:
         data = preset_data.get('spaces', {}).get(space_name)
         return data.get('guid') if data else None
-
-    spaces = preset_data.get('spaces', {})
-    for _space_name, data in spaces.items():
+    for _space_name, data in preset_data.get('spaces', {}).items():
         guid = data.get('guid')
         if guid:
             return guid
@@ -489,23 +430,18 @@ def load_config():
             _deep_update(_cfg, user_cfg)
     except Exception:
         logger.exception('load_config failed')
-
     _cfg['generalWeights'] = _normalize_weights(_cfg.get('generalWeights', {}))
-    maps = _cfg.get('mapWeights', {})
     fixed = {}
-    for map_name, weights in maps.items():
+    for map_name, weights in _cfg.get('mapWeights', {}).items():
         if isinstance(weights, dict):
             fixed[map_name] = _normalize_weights(weights)
     _cfg['mapWeights'] = fixed
-
     saved_preset = _cfg.get('currentOverridePreset', 'standard')
     if saved_preset not in PRESET_ORDER:
         saved_preset = 'standard'
     _current_override_preset = None if saved_preset == 'standard' else saved_preset
-    if saved_preset in PRESET_ORDER:
-        _current_cycle_index = PRESET_ORDER.index(saved_preset)
+    _current_cycle_index = PRESET_ORDER.index(saved_preset) if saved_preset in PRESET_ORDER else 0
     logger.info('load_config: restored override preset=%s', saved_preset)
-
     save_config()
     load_environment_registry(force=True)
     logger.info('config loaded from %s', CONFIG_PATH)
@@ -562,26 +498,17 @@ def get_map_weights(map_name):
 
 
 def set_map_weights(map_name, weights):
-    maps = _cfg.setdefault('mapWeights', {})
-    maps[map_name] = _normalize_weights(weights or {})
+    _cfg.setdefault('mapWeights', {})[map_name] = _normalize_weights(weights or {})
     save_config()
 
 
 def get_hotkey():
     hk = _cfg.get('hotkey', {})
-    return {
-        'enabled': bool(hk.get('enabled', True)),
-        'mods': list(hk.get('mods', ['LALT'])),
-        'key': hk.get('key', 'KEY_F12')
-    }
+    return {'enabled': bool(hk.get('enabled', True)), 'mods': list(hk.get('mods', [])), 'key': hk.get('key', 'KEY_F12')}
 
 
 def set_hotkey(enabled, mods, key):
-    _cfg['hotkey'] = {
-        'enabled': bool(enabled),
-        'mods': list(mods or []),
-        'key': key
-    }
+    _cfg['hotkey'] = {'enabled': bool(enabled), 'mods': list(mods or []), 'key': key}
     save_config()
 
 
@@ -603,9 +530,8 @@ def weighted_choice(weights_dict):
         if w > 0:
             pool.extend([preset] * w)
     if not pool:
-        effective = dict(DEFAULT_EQUAL_WEIGHTS)
         for preset in PRESET_ORDER:
-            pool.extend([preset] * int(effective.get(preset, 0)))
+            pool.extend([preset] * DEFAULT_WEIGHT_VALUE)
     return random.choice(pool) if pool else 'standard'
 
 
@@ -631,56 +557,30 @@ def get_all_for_map_ui(map_name):
     registry = get_environment_registry()
     for preset in PRESET_ORDER:
         label = PRESET_LABELS[preset]
-        if preset != 'standard':
-            has_space = bool(registry.get(preset, {}).get('spaces', {}).get(map_name))
-            if not has_space:
-                label += u' [n/a]'
+        if preset != 'standard' and not registry.get(preset, {}).get('spaces', {}).get(map_name):
+            label += u' [n/a]'
         items.append({'id': preset, 'label': label, 'weight': int(weights.get(preset, DEFAULT_WEIGHT_VALUE))})
     return items
 
 
-def build_space_settings_xml(env_name, preset_guid):
-    if not env_name:
-        return None
-
-    if not preset_guid:
-        return u'''<?xml version="1.0" encoding="utf-8"?>
-<root>
-    <environment>{env}</environment>
-</root>
-'''.format(env=env_name)
-
-    return u'''<?xml version="1.0" encoding="utf-8"?>
-<root>
-    <environment>{env}</environment>
-    <environmentOverride>{guid}</environmentOverride>
-</root>
-'''.format(env=env_name, guid=preset_guid)
-
-
 def _decode_xml_bytes(data):
-    if isinstance(data, basestring):
-        return data
-    return data.decode('utf-8', 'ignore')
+    return data if isinstance(data, basestring) else data.decode('utf-8', 'ignore')
 
 
 def _get_spaces_wg_templates(space_name):
     global _spaces_wg_template_cache
     if space_name in _spaces_wg_template_cache:
         return _spaces_wg_template_cache[space_name]
-
     path = _get_spaces_wg_package_path()
     result = {'space_settings': None}
     _spaces_wg_template_cache[space_name] = result
     if not path:
         return result
-
     try:
         archive = zipfile.ZipFile(path, 'r')
     except Exception:
         LOG.error('Failed to open spaces_wg package: %s\n%s', path, traceback.format_exc())
         return result
-
     try:
         ss_member = 'res/spaces/%s/space.settings' % space_name
         try:
@@ -693,7 +593,6 @@ def _get_spaces_wg_templates(space_name):
             archive.close()
         except Exception:
             pass
-
     return result
 
 
@@ -701,33 +600,20 @@ def _patch_space_settings_template(template_text, env_name, preset_guid):
     if not template_text:
         LOG.warning('_patch_space_settings_template: missing WG template, fallback XML generation disabled')
         return None
-
     text = template_text
     closing_tag = u'</space.settings>' if '</space.settings>' in text else u'</root>'
-
     if ROOT_ENV_RE.search(text):
         text = ROOT_ENV_RE.sub(r'\1%s\3' % env_name, text, count=1)
     else:
-        text = text.replace(
-            closing_tag,
-            u'  <environment>%s</environment>\n%s' % (env_name, closing_tag),
-            1
-        )
-
+        text = text.replace(closing_tag, u'  <environment>%s</environment>\n%s' % (env_name, closing_tag), 1)
     if preset_guid:
         if ROOT_ENV_OVERRIDE_RE.search(text):
             text = ROOT_ENV_OVERRIDE_RE.sub(r'\1%s\3' % preset_guid, text, count=1)
         else:
-            text = text.replace(
-                closing_tag,
-                u'  <environmentOverride>%s</environmentOverride>\n%s' % (preset_guid, closing_tag),
-                1
-            )
+            text = text.replace(closing_tag, u'  <environmentOverride>%s</environmentOverride>\n%s' % (preset_guid, closing_tag), 1)
     else:
         text = ROOT_ENV_OVERRIDE_RE.sub(u'', text)
-
-    LOG.info('_patch_space_settings_template: closing_tag=%s env=%s guid=%s result_has_env=%s',
-             closing_tag, env_name, preset_guid, '<environment>' in text)
+    LOG.info('_patch_space_settings_template: closing_tag=%s env=%s guid=%s result_has_env=%s', closing_tag, env_name, preset_guid, '<environment>' in text)
     return text
 
 
@@ -751,8 +637,7 @@ def _find_environments_json_path():
         if not version_dir:
             LOG.warning('_find_environments_json_path: no res_mods version dir')
             return None
-        path = os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json')
-        return os.path.normpath(path)
+        return os.path.normpath(os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json'))
     except Exception:
         LOG.error('_find_environments_json_path: failed\n%s', traceback.format_exc())
         return None
@@ -768,7 +653,6 @@ def write_environments_json_for_preset(preset_id, space_name=None):
         if not env_json_path:
             LOG.warning('write_environments_json_for_preset: path not found')
             return False
-
         if not preset_id or preset_id == 'standard':
             if os.path.isfile(env_json_path):
                 try:
@@ -777,13 +661,11 @@ def write_environments_json_for_preset(preset_id, space_name=None):
                 except Exception:
                     LOG.error('write_environments_json_for_preset: failed to remove file\n%s', traceback.format_exc())
             return True
-
         registry = get_environment_registry()
         preset_data = registry.get(preset_id)
         if not preset_data:
             LOG.warning('write_environments_json_for_preset: preset %s not in registry', preset_id)
             return False
-
         guid = None
         if space_name:
             space_data = preset_data.get('spaces', {}).get(space_name)
@@ -794,34 +676,24 @@ def write_environments_json_for_preset(preset_id, space_name=None):
                 guid = sd.get('guid')
                 if guid:
                     break
-
         if not guid:
             LOG.warning('write_environments_json_for_preset: no GUID for preset=%s', preset_id)
             return False
-
         guid_dot = _guid_to_dot(guid)
         payload = {
             "enabled": True,
             "environments": [guid_dot],
             "labels": {guid_dot: PRESET_LABELS.get(preset_id, preset_id)},
-            "randomizer": {
-                "advanced": {},
-                "common": {guid_dot: 100, "default": 0}
-            },
+            "randomizer": {"advanced": {}, "common": {guid_dot: 100, "default": 0}},
             "toogleKeyset": [-1, 88]
         }
-
         folder = os.path.dirname(env_json_path)
         if not os.path.isdir(folder):
             os.makedirs(folder)
-
         with open(env_json_path, 'w') as f:
             json.dump(payload, f, indent=4, ensure_ascii=False)
-
-        LOG.info('write_environments_json_for_preset: wrote preset=%s guid=%s to %s',
-                 preset_id, guid_dot, env_json_path)
+        LOG.info('write_environments_json_for_preset: wrote preset=%s guid=%s to %s', preset_id, guid_dot, env_json_path)
         return True
-
     except Exception:
         LOG.error('write_environments_json_for_preset: failed\n%s', traceback.format_exc())
         return False
@@ -848,38 +720,29 @@ def write_space_settings_to_res_mods(target_path, content):
 def apply_environment_via_packages(space_name, preset_id):
     try:
         LOG.info('apply_environment_via_packages: start space=%s preset=%s', space_name, preset_id)
-
         if not space_name:
             LOG.warning('apply_environment_via_packages: no space_name')
             return False
-
         env_json_ok = write_environments_json_for_preset(preset_id, space_name)
         LOG.info('apply_environment_via_packages: environments.json=%s preset=%s', env_json_ok, preset_id)
-
         if not preset_id or preset_id == 'standard':
             LOG.info('apply_environment_via_packages: preset is standard, environments.json cleared')
             return env_json_ok
-
         actual_preset_id, resolved = resolve_environment_with_fallback(space_name, preset_id)
         if not resolved:
             return env_json_ok
-
         env_name = resolved.get('env_name')
         preset_guid = resolved.get('guid')
-        LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s',
-                 preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
-
+        LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s', preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
         templates = _get_spaces_wg_templates(space_name)
         space_settings_path = find_space_settings_path(space_name)
         if not space_settings_path:
             LOG.warning('apply_environment_via_packages: space.settings path not found for %s', space_name)
             return env_json_ok
-
         settings_content = _patch_space_settings_template(templates.get('space_settings'), env_name, preset_guid)
         if not settings_content:
             LOG.warning('apply_environment_via_packages: WG space.settings template not found for %s', space_name)
             return env_json_ok
-
         ok1 = _write_text_file(space_settings_path, settings_content)
         LOG.info('apply_environment_via_packages: space.settings=%s environments.json=%s', ok1, env_json_ok)
         return ok1 or env_json_ok
@@ -895,14 +758,9 @@ def on_space_entered(space_name):
         if not space_name:
             LOG.warning('on_space_entered: empty space_name')
             return False
-
         _last_space_name = space_name
-
-        preset_id = _current_override_preset
-        if not preset_id:
-            preset_id = get_preset_for_map(space_name)
+        preset_id = _current_override_preset or get_preset_for_map(space_name)
         LOG.info('on_space_entered: chosen preset=%s', preset_id if preset_id else 'standard')
-
         result = apply_environment_via_packages(space_name, preset_id)
         LOG.info('on_space_entered: apply_environment_via_packages(space=%s, preset=%s) -> %s', space_name, preset_id, result)
         return result
@@ -947,7 +805,6 @@ def _resolve_current_arena_name():
         player = BigWorld.player()
         if player is None:
             return _last_space_name
-
         arena = getattr(player, 'arena', None)
         if arena is not None:
             arena_type = getattr(arena, 'arenaType', None)
@@ -964,27 +821,25 @@ def _resolve_current_arena_name():
     return _last_space_name
 
 
+def get_available_cycle_presets(space_name):
+    available = ['standard']
+    registry = get_environment_registry()
+    for preset_id in PRESET_ORDER:
+        if preset_id == 'standard':
+            continue
+        if registry.get(preset_id, {}).get('spaces', {}).get(space_name):
+            available.append(preset_id)
+    LOG.info('get_available_cycle_presets: space=%s available=%s', space_name, available)
+    return available
+
+
 def cycle_weather_in_battle():
     global _current_cycle_index, _current_override_preset
-
     try:
         from gui import SystemMessages
     except Exception:
         SystemMessages = None
-
     try:
-        preset_order = ['standard', 'midnight', 'overcast', 'sunset', 'midday']
-        current = _current_override_preset or 'standard'
-        if current not in preset_order:
-            current = 'standard'
-
-        idx = preset_order.index(current)
-        next_preset = preset_order[(idx + 1) % len(preset_order)]
-        LOG.info('cycle_weather_in_battle: current=%s next=%s', current, next_preset)
-
-        _current_cycle_index = preset_order.index(next_preset)
-        _current_override_preset = None if next_preset == 'standard' else next_preset
-
         battle_loaded = False
         try:
             import BigWorld
@@ -992,10 +847,17 @@ def cycle_weather_in_battle():
             battle_loaded = player is not None and getattr(player, 'arena', None) is not None
         except Exception:
             LOG.error('cycle_weather_in_battle: failed to inspect BigWorld state\n%s', traceback.format_exc())
-
         arena_name = _resolve_current_arena_name()
+        available = get_available_cycle_presets(arena_name) if arena_name else list(PRESET_ORDER)
+        current = _current_override_preset or 'standard'
+        if current not in available:
+            current = 'standard'
+        idx = available.index(current)
+        next_preset = available[(idx + 1) % len(available)]
+        LOG.info('cycle_weather_in_battle: current=%s next=%s available=%s', current, next_preset, available)
+        _current_cycle_index = PRESET_ORDER.index(next_preset) if next_preset in PRESET_ORDER else 0
+        _current_override_preset = None if next_preset == 'standard' else next_preset
         LOG.info('cycle_weather_in_battle: battle_loaded=%s arena_name=%s override=%s', battle_loaded, arena_name, _current_override_preset)
-
         applied = False
         if arena_name:
             try:
@@ -1005,9 +867,7 @@ def cycle_weather_in_battle():
                 LOG.error('cycle_weather_in_battle: apply failed\n%s', traceback.format_exc())
         else:
             LOG.warning('cycle_weather_in_battle: arena name unknown, preset only stored')
-
         save_config()
-
         msg = '[Weather] preset: %s' % next_preset
         if applied:
             msg += ' (applied)'
@@ -1015,7 +875,6 @@ def cycle_weather_in_battle():
             msg += ' (stored, WG template missing)'
         else:
             msg += ' (stored for next battle)'
-
         if SystemMessages is not None:
             try:
                 SystemMessages.pushMessage(msg, SystemMessages.SM_TYPE.Information)
@@ -1053,204 +912,54 @@ def get_preset_order():
 class WeatherController(object):
     def __init__(self):
         load_config()
-
     def onSpaceEntered(self, space_name):
         return on_space_entered(space_name)
-
     def cycleWeatherInBattle(self):
         return cycle_weather_in_battle()
-
     def cycleWeatherSystem(self):
         return cycle_weather_system()
-
     def getCurrentOverridePreset(self):
         return get_current_override_preset()
-
     def setOverridePreset(self, preset_id):
         return set_override_preset(preset_id)
-
     def getAllGeneralForUI(self):
         return get_all_general_for_ui()
-
     def getAllForMapUI(self, map_name):
         return get_all_for_map_ui(map_name)
-
     def getPresetLabels(self):
         return get_preset_labels()
-
     def getWeatherSystemLabels(self):
         return get_weather_system_labels()
-
     def getPresetOrder(self):
         return get_preset_order()
-
     def getGeneralWeights(self):
         return get_general_weights()
-
     def setGeneralWeights(self, weights):
         return set_general_weights(weights)
-
     def getMapWeights(self, map_name):
         return get_map_weights(map_name)
-
     def setMapWeights(self, map_name, weights):
         return set_map_weights(map_name, weights)
-
     def getHotkey(self):
         return get_hotkey()
-
     def setHotkey(self, enabled, mods, key):
         return set_hotkey(enabled, mods, key)
-
     def isEnabled(self):
         return is_enabled()
-
     def setEnabled(self, flag):
         return set_enabled(flag)
-
     def getShowInBattle(self):
         return get_show_in_battle()
-
     def setShowInBattle(self, flag):
         return set_show_in_battle(flag)
-
     def getIconPosition(self):
         return get_icon_position()
-
     def setIconPosition(self, x, y):
         return set_icon_position(x, y)
-
     def getPresetForMap(self, map_name):
         return get_preset_for_map(map_name)
-
     def getEnvironmentRegistry(self):
         return get_environment_registry()
-
-    def build_payload(self, map_registry):
-        registry = get_environment_registry()
-        general_weights = get_general_weights()
-
-        presets = []
-        for preset_id in PRESET_ORDER:
-            label = PRESET_LABELS.get(preset_id, preset_id)
-            if preset_id != 'standard' and preset_id not in registry:
-                label += u' [missing]'
-            guid = get_preset_guid(preset_id) or ''
-            presets.append({
-                'id': preset_id,
-                'label': label,
-                'weight': int(general_weights.get(preset_id, DEFAULT_WEIGHT_VALUE)),
-                'guid': guid,
-                'previewSrc': '',
-            })
-
-        maps = []
-        for map_id, map_label, thumb_src in map_registry:
-            map_weights = get_map_weights(map_id)
-            use_global = map_id not in _cfg.get('mapWeights', {}) or _is_zero_weights(_cfg.get('mapWeights', {}).get(map_id, {}))
-            map_presets = []
-            for preset_id in PRESET_ORDER:
-                label = PRESET_LABELS.get(preset_id, preset_id)
-                has_space = bool(registry.get(preset_id, {}).get('spaces', {}).get(map_id))
-                if preset_id != 'standard' and not has_space:
-                    label += u' [n/a]'
-                map_presets.append({
-                    'id': preset_id,
-                    'label': label,
-                    'weight': int(map_weights.get(preset_id, DEFAULT_WEIGHT_VALUE)),
-                    'guid': '',
-                    'previewSrc': '',
-                })
-            maps.append({
-                'id': map_id,
-                'label': map_label,
-                'thumbSrc': thumb_src,
-                'useGlobal': use_global,
-                'presets': map_presets,
-            })
-
-        hk = get_hotkey()
-        import Keys as K
-        hk_codes = []
-        for mod_name in hk.get('mods', []):
-            code = getattr(K, mod_name, None)
-            if code is not None:
-                hk_codes.append(code)
-        key_code = getattr(K, hk.get('key', 'KEY_F12'), None)
-        if key_code is not None:
-            hk_codes.append(key_code)
-
-        hotkey_str = '+'.join(hk.get('mods', ['LALT']) + [hk.get('key', 'KEY_F12').replace('KEY_', '')])
-
-        return {
-            'presets': presets,
-            'maps': maps,
-            'hotkey': hotkey_str,
-            'hotkeyKeys': hk_codes,
-            'currentPreset': get_current_override_preset(),
-        }
-
-    def on_weight_changed(self, map_id, preset_id, value):
-        try:
-            weight = max(0, min(MAX_WEIGHT, int(value)))
-            if map_id:
-                weights = _normalize_weights(_cfg.setdefault('mapWeights', {}).get(map_id, {}))
-                weights[preset_id] = weight
-                set_map_weights(map_id, weights)
-            else:
-                weights = _normalize_weights(_cfg.get('generalWeights', {}))
-                weights[preset_id] = weight
-                set_general_weights(weights)
-        except Exception:
-            logger.exception('on_weight_changed failed')
-
-    def on_map_selected(self, map_id):
-        pass
-
-    def on_close_requested(self):
-        pass
-
-    def on_hotkey_changed(self, int_codes, hotkey_str):
-        try:
-            import Keys as K
-            modifier_map = {
-                getattr(K, 'KEY_LALT', 0): 'LALT',
-                getattr(K, 'KEY_RALT', 0): 'RALT',
-                getattr(K, 'KEY_LCONTROL', 0): 'LCTRL',
-                getattr(K, 'KEY_RCONTROL', 0): 'RCTRL',
-                getattr(K, 'KEY_LSHIFT', 0): 'LSHIFT',
-                getattr(K, 'KEY_RSHIFT', 0): 'RSHIFT',
-            }
-            mods = []
-            for code in int_codes[:-1]:
-                name = modifier_map.get(code)
-                if name:
-                    mods.append(name)
-            key_name = 'KEY_F12'
-            if int_codes:
-                last = int_codes[-1]
-                for attr in dir(K):
-                    if attr.startswith('KEY_') and getattr(K, attr) == last:
-                        key_name = attr
-                        break
-            set_hotkey(True, mods, key_name)
-        except Exception:
-            logger.exception('on_hotkey_changed failed')
-
-    def select_preset_in_battle(self, preset_id):
-        set_override_preset(preset_id)
-        arena_name = _resolve_current_arena_name()
-        if arena_name:
-            apply_environment_via_packages(arena_name, _current_override_preset)
-        try:
-            from gui import SystemMessages
-            label = PRESET_LABELS.get(preset_id, preset_id)
-            SystemMessages.pushMessage(
-                u'[Weather] ' + label,
-                SystemMessages.SM_TYPE.Information
-            )
-        except Exception:
-            pass
 
 
 g_controller = WeatherController()
