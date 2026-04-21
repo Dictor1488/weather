@@ -125,30 +125,43 @@ def _load_hotkey_codes():
 
 
 # ============================================================================
-# Hook на Avatar.PlayerAvatar.onEnterWorld
 # ============================================================================
+# FIX: Два хуки — ранній (ClientArena) + пізній (onEnterWorld як fallback)
+#
+# Архітектура WoT читає space.settings у такому порядку:
+#   1. BigWorld отримує arenaTypeID -> знає geometryName
+#   2. Движок читає res_mods/.../spaces/<map>/space.settings  <-- СЮДИ треба записати
+#   3. Тільки потім Avatar.onEnterWorld
+#
+# ClientArena.__init__ викликається ПІСЛЯ того як клієнт отримав arenaType
+# але ДО завантаження простору — це правильний момент для запису space.settings.
+# onEnterWorld залишається як fallback (застосується в НАСТУПНОМУ бою).
+# ============================================================================
+
+def _extract_space_name_from_arena_type(arena_type):
+    """Витягує назву геометрії з arenaType об'єкта."""
+    if not arena_type:
+        return None
+    for attr in ('geometryName', 'geometry', 'name'):
+        v = getattr(arena_type, attr, None)
+        if v and isinstance(v, str):
+            name = v.strip()
+            if '/' in name:
+                name = name.rsplit('/', 1)[-1]
+            if name:
+                return name
+    return None
+
+
 def _get_space_name_from_avatar(avatar):
     """
     Витягує назву карти з Avatar через arena.arenaType.
-    ВИПРАВЛЕНО: прибрано виклики normalize_space_name / is_battle_map_space,
-    яких немає в weather_controller v4.0.
-    Повертає просто назву геометрії (напр. '19_monastery').
+    Повертає назву геометрії (напр. '19_monastery').
     """
     try:
         arena = getattr(avatar, 'arena', None)
         arena_type = getattr(arena, 'arenaType', None) if arena else None
-        if not arena_type:
-            return None
-        for attr in ('geometryName', 'geometry', 'name'):
-            v = getattr(arena_type, attr, None)
-            if v and isinstance(v, str):
-                # geometryName зазвичай виглядає як 'spaces/19_monastery'
-                # або просто '19_monastery'
-                name = v.strip()
-                if '/' in name:
-                    name = name.rsplit('/', 1)[-1]
-                if name:
-                    return name
+        return _extract_space_name_from_arena_type(arena_type)
     except Exception:
         _log().exception('_get_space_name_from_avatar failed')
     return None
@@ -156,51 +169,93 @@ def _get_space_name_from_avatar(avatar):
 
 def _install_battle_space_hook():
     """
-    Хукаємо Avatar.PlayerAvatar.onEnterWorld.
-
-    ВАЖЛИВО: на момент onEnterWorld файл space.settings вже прочитаний рушієм,
-    тому зміна освітлення набере чинності лише в НАСТУПНОМУ бою.
-    Це обмеження архітектури WoT, а не бага мода.
+    Встановлює два хуки:
+    1. ClientArena.__init__ — РАННІЙ, спрацьовує до завантаження простору.
+       space.settings записується вчасно -> пресет застосовується в ПОТОЧНОМУ бою.
+    2. Avatar.PlayerAvatar.onEnterWorld — ПІЗНІЙ fallback на випадок якщо
+       ClientArena недоступна або не спрацювала.
     """
     if not IN_GAME or _BATTLE_SPACE_HOOKS:
         return
 
     log = _log()
+    installed_any = False
 
+    # --- Хук 1: ClientArena (ранній) ---
+    try:
+        import ClientArena
+
+        if hasattr(ClientArena, 'ClientArena'):
+            cls_arena = ClientArena.ClientArena
+
+            # onNewVehicleListReceived — перша подія де arenaType гарантовано є
+            # і до завантаження простору
+            if hasattr(cls_arena, 'onNewVehicleListReceived'):
+                orig_nvlr = cls_arena.onNewVehicleListReceived
+
+                def make_arena_wrapper(orig):
+                    def wrapped(self, *args, **kwargs):
+                        try:
+                            arena_type = getattr(self, 'arenaType', None)
+                            space_name = _extract_space_name_from_arena_type(arena_type)
+                            if space_name:
+                                log.info('ClientArena.onNewVehicleListReceived hook: space=%s', space_name)
+                                g_controller.onSpaceEntered(space_name)
+                        except Exception:
+                            log.exception('ClientArena hook failed')
+                        return orig(self, *args, **kwargs)
+                    return wrapped
+
+                cls_arena.onNewVehicleListReceived = make_arena_wrapper(orig_nvlr)
+                _BATTLE_SPACE_HOOKS.append((cls_arena, 'onNewVehicleListReceived', orig_nvlr))
+                log.info('Installed EARLY hook: ClientArena.onNewVehicleListReceived')
+                installed_any = True
+            else:
+                log.warning('ClientArena.onNewVehicleListReceived not found')
+        else:
+            log.warning('ClientArena.ClientArena class not found')
+    except ImportError:
+        log.warning('ClientArena module not available, skipping early hook')
+    except Exception:
+        log.exception('Failed to install ClientArena hook')
+
+    # --- Хук 2: Avatar.onEnterWorld (пізній fallback) ---
     try:
         import Avatar
 
         if not hasattr(Avatar, 'PlayerAvatar'):
             log.warning('Avatar.PlayerAvatar not found')
-            return
+        else:
+            cls = Avatar.PlayerAvatar
 
-        cls = Avatar.PlayerAvatar
+            if not hasattr(cls, 'onEnterWorld'):
+                log.warning('PlayerAvatar.onEnterWorld not found')
+            else:
+                original = cls.onEnterWorld
 
-        if not hasattr(cls, 'onEnterWorld'):
-            log.warning('PlayerAvatar.onEnterWorld not found')
-            return
+                def make_wrapper(orig, early_installed):
+                    def wrapped(self, *args, **kwargs):
+                        try:
+                            space_name = _get_space_name_from_avatar(self)
+                            if space_name:
+                                if early_installed:
+                                    # Ранній хук вже відпрацював — тут тільки логуємо
+                                    log.info('onEnterWorld fallback: space=%s (early hook already ran)', space_name)
+                                else:
+                                    # Ранній хук недоступний — записуємо тут (наступний бій)
+                                    log.info('onEnterWorld fallback: space=%s (writing space.settings)', space_name)
+                                    g_controller.onSpaceEntered(space_name)
+                        except Exception:
+                            log.exception('onEnterWorld hook failed')
+                        return orig(self, *args, **kwargs)
+                    return wrapped
 
-        original = cls.onEnterWorld
-
-        def make_wrapper(orig):
-            def wrapped(self, *args, **kwargs):
-                try:
-                    space_name = _get_space_name_from_avatar(self)
-                    if space_name:
-                        log.info('onEnterWorld pre-hook: space=%s', space_name)
-                        # Записуємо space.settings для НАСТУПНОГО бою
-                        g_controller.onSpaceEntered(space_name)
-                except Exception:
-                    log.exception('onEnterWorld pre-hook failed')
-                return orig(self, *args, **kwargs)
-            return wrapped
-
-        cls.onEnterWorld = make_wrapper(original)
-        _BATTLE_SPACE_HOOKS.append((cls, 'onEnterWorld', original))
-        log.info('Installed hook: Avatar.PlayerAvatar.onEnterWorld')
+                cls.onEnterWorld = make_wrapper(original, installed_any)
+                _BATTLE_SPACE_HOOKS.append((cls, 'onEnterWorld', original))
+                log.info('Installed FALLBACK hook: Avatar.PlayerAvatar.onEnterWorld (early_installed=%s)', installed_any)
 
     except Exception:
-        log.exception('Failed to install battle space hook')
+        log.exception('Failed to install Avatar hook')
 
 
 def _remove_battle_space_hook():
