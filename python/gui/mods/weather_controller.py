@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v5.1
+Weather controller v5.2
 
-Зміни відносно v5.0:
-- apply_environment_live(): live-смена через BigWorld.setSpaceEnvironmentMap()
-  та BigWorld.setSpaceEnvironmentMap2() (якщо доступний)
-- apply_environment_via_packages() тепер після запису файлів одразу викликає
-  live-apply, щоб зміна була видима в поточному бою/реплеї
-- select_preset_in_battle() — новий метод WeatherController для battle_hud
-- fix: load_config не скидає currentOverridePreset на standard при старті
+Зміни відносно v5.1:
+- fix: _extract_env_name() — підтримка формату v1.9 wotmod-пакетів:
+  тег <name>TABvalue TAB</name> замість старого <n>value</n>
+  Тепер розпізнає обидва формати одночасно.
+- fix: ENV_NAME_RE оновлено для коректного парсингу нових пакетів
 """
 import json
 import os
@@ -71,7 +69,12 @@ ENV_XML_RE = re.compile(
     r"^res/spaces/([^/]+)/environments/([A-Fa-f0-9\-]+)/environment\.xml$",
     re.I
 )
-ENV_NAME_RE = re.compile(r"<n>\s*([^<]+?)\s*</n>", re.I | re.S)
+# v1.8 формат: <n>value</n>
+# v1.9 формат: <name>TABvalue TAB</name>  (тег <name>, значення в табах)
+# Обидва шаблони перевіряються, перший що дає валідний результат — використовується
+ENV_NAME_RE_OLD = re.compile(r"<n>\s*([^<]+?)\s*</n>", re.I | re.S)
+ENV_NAME_RE_NEW = re.compile(r"<name>\t([^\t<]+)\t</name>", re.I)
+_ENV_NAME_SKIP = frozenset(['RexpTM', 'FilmicTM', 'LinearExpTM'])
 ROOT_ENV_RE = re.compile(r'(<environment>)([^<]*)(</environment>)', re.I)
 ROOT_ENV_OVERRIDE_RE = re.compile(r'(<environmentOverride>)([^<]*)(</environmentOverride>)', re.I)
 
@@ -227,11 +230,28 @@ def _find_latest_version_dir(root_name):
 
 
 def _extract_env_name(xml_bytes):
+    """
+    Витягує ім'я оточення з environment.xml.
+
+    Підтримує два формати пакетів:
+    - v1.8 та раніше: <n>envName</n>
+    - v1.9+:          <name>\tenvName\t</name>
+    """
     try:
         xml_text = xml_bytes.decode('utf-8', 'ignore') if not isinstance(xml_bytes, basestring) else xml_bytes
-        match = ENV_NAME_RE.search(xml_text)
-        if match:
-            return match.group(1).strip()
+
+        # --- Спроба 1: новий формат v1.9 (<name>\tvalue\t</name>) ---
+        for m in ENV_NAME_RE_NEW.finditer(xml_text):
+            val = m.group(1).strip()
+            if val and val not in _ENV_NAME_SKIP and '/' not in val:
+                return val
+
+        # --- Спроба 2: старий формат v1.8 (<n>value</n>) ---
+        for m in ENV_NAME_RE_OLD.finditer(xml_text):
+            val = m.group(1).strip()
+            if val and val not in _ENV_NAME_SKIP and '/' not in val:
+                return val
+
     except Exception:
         LOG.error('_extract_env_name failed\n%s', traceback.format_exc())
     return None
