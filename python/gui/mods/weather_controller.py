@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v5.4
+Weather controller v5.5
 
 Зміни відносно v5.1:
 - fix: _extract_env_name() — підтримка формату v1.9 wotmod-пакетів:
@@ -108,6 +108,9 @@ _registry_loaded = False
 _last_space_name = None
 _spaces_wg_package_path = None
 _spaces_wg_template_cache = {}
+# Захист від нескінченної петлі: spaceReload викликає повторний onEnterWorld,
+# тому при повторному виклику ми пропускаємо ще один spaceReload.
+_space_reload_in_progress = False
 
 
 def _ensure_dir(path):
@@ -783,37 +786,26 @@ def _guid_to_bigworld_format(guid):
     return guid.replace('-', '.').replace('..', '.')
 
 
-def _log_bigworld_env_api():
-    """Один раз логує доступні BigWorld методи для діагностики."""
-    try:
-        env_methods = [m for m in dir(BigWorld) if 'nvironment' in m or 'Space' in m or 'space' in m]
-        LOG.info('BigWorld env/space API available: %s', env_methods)
-    except Exception:
-        pass
-
-
 def apply_environment_live(space_name, preset_id, resolved_data):
     """
-    Застосовує пресет у поточному бою через BigWorld API (без перезавантаження).
+    Застосовує пресет у поточному бою через BigWorld.spaceReload(spaceID).
 
-    Порядок спроб (всі методи пробуються з логуванням результату):
-    1. BigWorld.setSpaceEnvironmentMap(spaceID, envName)
-    2. BigWorld.setSpaceEnvironmentMap(spaceID, guidDot)
-    3. BigWorld.setSpaceEnvironmentMap2(spaceID, guidDot)
-    4. BigWorld.setSpaceEnvironmentPreset(spaceID, guidDot)
-    5. BigWorld.reloadSpace(spaceID) після запису space.settings
-    6. BigWorld.setWatcher — НЕ використовується (не має ефекту)
+    BigWorld.spaceReload змушує рушій перечитати space.settings і
+    environments.json з диску і застосувати нове оточення.
+    Файли повинні бути вже записані на диск до виклику цього методу.
 
-    Повертає True якщо live-apply дав ефект, False — якщо ні.
+    Захист: spaceReload викликає повторний onEnterWorld -> on_space_entered,
+    тому використовуємо _space_reload_in_progress щоб уникнути нескінченної петлі.
+
+    Повертає True якщо виклик відбувся без помилки.
     """
-    if not IN_GAME or not resolved_data:
+    global _space_reload_in_progress
+
+    if not IN_GAME:
         return False
 
-    env_name = resolved_data.get('env_name', '')
-    guid     = resolved_data.get('guid', '')
-    guid_dot = _guid_to_bigworld_format(guid) if guid else ''
-
-    if not env_name and not guid_dot:
+    if _space_reload_in_progress:
+        LOG.info('apply_environment_live: skipped (reload already in progress)')
         return False
 
     try:
@@ -822,62 +814,36 @@ def apply_environment_live(space_name, preset_id, resolved_data):
             LOG.warning('apply_environment_live: no spaceID available')
             return False
 
-        LOG.info('apply_environment_live: spaceID=%s env_name=%s guid=%s', space_id, env_name, guid_dot)
-
-        # --- 1: setSpaceEnvironmentMap(spaceID, envName) ---
-        if env_name and hasattr(BigWorld, 'setSpaceEnvironmentMap'):
+        if hasattr(BigWorld, 'spaceReload'):
             try:
-                BigWorld.setSpaceEnvironmentMap(space_id, env_name)
-                LOG.info('apply_environment_live: setSpaceEnvironmentMap(sid, envName) OK')
+                _space_reload_in_progress = True
+                BigWorld.spaceReload(space_id)
+                LOG.info('apply_environment_live: spaceReload(%s) OK preset=%s', space_id, preset_id)
                 return True
             except Exception as e:
-                LOG.warning('apply_environment_live: setSpaceEnvironmentMap(sid, envName) ERR: %s', e)
+                LOG.warning('apply_environment_live: spaceReload ERR: %s', e)
+                return False
+            finally:
+                # Скидаємо прапор через невеликий таймаут,
+                # щоб повторний onEnterWorld встиг прийти і бути проігнорованим
+                try:
+                    BigWorld.callback(2.0, _clear_reload_flag)
+                except Exception:
+                    _space_reload_in_progress = False
 
-        # --- 2: setSpaceEnvironmentMap(spaceID, guidDot) ---
-        if guid_dot and hasattr(BigWorld, 'setSpaceEnvironmentMap'):
-            try:
-                BigWorld.setSpaceEnvironmentMap(space_id, guid_dot)
-                LOG.info('apply_environment_live: setSpaceEnvironmentMap(sid, guid) OK')
-                return True
-            except Exception as e:
-                LOG.warning('apply_environment_live: setSpaceEnvironmentMap(sid, guid) ERR: %s', e)
-
-        # --- 3: setSpaceEnvironmentMap2(spaceID, guidDot) ---
-        if guid_dot and hasattr(BigWorld, 'setSpaceEnvironmentMap2'):
-            try:
-                BigWorld.setSpaceEnvironmentMap2(space_id, guid_dot)
-                LOG.info('apply_environment_live: setSpaceEnvironmentMap2 OK')
-                return True
-            except Exception as e:
-                LOG.warning('apply_environment_live: setSpaceEnvironmentMap2 ERR: %s', e)
-
-        # --- 4: setSpaceEnvironmentPreset(spaceID, guidDot) — WoT 2.x новий ---
-        if guid_dot and hasattr(BigWorld, 'setSpaceEnvironmentPreset'):
-            try:
-                BigWorld.setSpaceEnvironmentPreset(space_id, guid_dot)
-                LOG.info('apply_environment_live: setSpaceEnvironmentPreset OK')
-                return True
-            except Exception as e:
-                LOG.warning('apply_environment_live: setSpaceEnvironmentPreset ERR: %s', e)
-
-        # --- 5: setSpaceEnvironmentPreset з envName ---
-        if env_name and hasattr(BigWorld, 'setSpaceEnvironmentPreset'):
-            try:
-                BigWorld.setSpaceEnvironmentPreset(space_id, env_name)
-                LOG.info('apply_environment_live: setSpaceEnvironmentPreset(envName) OK')
-                return True
-            except Exception as e:
-                LOG.warning('apply_environment_live: setSpaceEnvironmentPreset(envName) ERR: %s', e)
-
-        # --- Діагностика: що взагалі є в BigWorld? ---
-        _log_bigworld_env_api()
-
-        LOG.info('apply_environment_live: no working API for preset=%s space=%s', preset_id, space_name)
+        LOG.warning('apply_environment_live: BigWorld.spaceReload not available')
         return False
 
     except Exception:
         LOG.error('apply_environment_live: unexpected error\n%s', traceback.format_exc())
+        _space_reload_in_progress = False
         return False
+
+
+def _clear_reload_flag():
+    global _space_reload_in_progress
+    _space_reload_in_progress = False
+    LOG.info('apply_environment_live: reload flag cleared')
 
 
 def apply_environment_via_packages(space_name, preset_id):
