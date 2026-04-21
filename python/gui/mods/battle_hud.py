@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-battle_hud.py — бойовий HUD для вибору присету погоди.
+battle_hud.py — бойовий HUD для вибору пресету погоди.
 
 Логіка:
-  - Перше натискання F12 → відкривається HUD-меню (5 кнопок-присетів).
-  - Клавіші 1–5 або повторний F12 → вибір присету і закриття HUD.
+  - Перше натискання F12 → відкривається HUD-меню (5 кнопок-пресетів).
+  - Клавіші 1–5 або повторний F12 → вибір пресету і закриття HUD.
   - ESC або повторний F12 без вибору → закриття без змін.
   - HUD автоматично закривається через MENU_TIMEOUT секунд.
-
-HUD реалізований через BigWorld.callback + SystemMessages для відображення
-(без Flash SWF — сумісно з будь-якою версією клієнта).
 """
 
 import BigWorld
@@ -25,9 +22,8 @@ from weather_controller import (
 import logging
 logger = logging.getLogger('weather_mod')
 
-# ── Налаштування ────────────────────────────────────────────────────────────
-MENU_TIMEOUT = 6.0   # секунд до авто-закриття
-PRESET_KEYS = [      # клавіші 1–5 для вибору присету
+MENU_TIMEOUT = 6.0
+PRESET_KEYS = [
     Keys.KEY_1,
     Keys.KEY_2,
     Keys.KEY_3,
@@ -35,7 +31,6 @@ PRESET_KEYS = [      # клавіші 1–5 для вибору присету
     Keys.KEY_5,
 ]
 
-# ── Стан HUD ─────────────────────────────────────────────────────────────────
 _hud_active = False
 _timeout_callback = None
 
@@ -51,9 +46,8 @@ def _cancel_timeout():
 
 
 def _show_menu():
-    """Показати список присетів через SystemMessages."""
     current = g_controller.getCurrentOverridePreset()
-    lines = [u'[Weather] Оберіть присет:']
+    lines = [u'[Weather] Оберіть пресет:']
     for i, preset_id in enumerate(PRESET_ORDER):
         label = PRESET_LABELS.get(preset_id, preset_id)
         marker = u' ◀' if preset_id == current else u''
@@ -67,7 +61,6 @@ def _show_menu():
 
 
 def open_hud():
-    """Відкрити бойовий HUD (викликається при першому натисканні F12)."""
     global _hud_active, _timeout_callback
     if _hud_active:
         close_hud()
@@ -80,7 +73,6 @@ def open_hud():
 
 
 def close_hud():
-    """Закрити HUD без вибору."""
     global _hud_active
     _cancel_timeout()
     _hud_active = False
@@ -112,22 +104,20 @@ def handle_key(key_code):
     if not _hud_active:
         return False
 
-    # ESC → закрити
     if key_code == Keys.KEY_ESCAPE:
         close_hud()
         return True
 
-    # F12 повторно → закрити
     if key_code == Keys.KEY_F12:
         close_hud()
         return True
 
-    # 1–5 → вибір присету
     if key_code in PRESET_KEYS:
         idx = PRESET_KEYS.index(key_code)
         if idx < len(PRESET_ORDER):
             preset_id = PRESET_ORDER[idx]
             close_hud()
+            # select_preset_in_battle існує в WeatherController v5.1
             g_controller.select_preset_in_battle(preset_id)
             return True
 
