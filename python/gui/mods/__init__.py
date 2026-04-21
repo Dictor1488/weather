@@ -151,6 +151,58 @@ def _get_space_name_from_avatar(avatar):
     return None
 
 
+def _get_space_name_for_become_player(avatar):
+    """
+    Отримує назву карти в момент onBecomePlayer.
+    В цей момент avatar.arena.arenaType може не мати geometryName,
+    але arenaTypeID + ArenaType.g_cache завжди доступні.
+    """
+    log = _log()
+    
+    # Спосіб 1: через стандартний _get_space_name_from_avatar
+    name = _get_space_name_from_avatar(avatar)
+    if name:
+        log.info('_get_space_name_for_become_player: via arena.arenaType.geometryName = %s', name)
+        return name
+
+    # Спосіб 2: через arenaTypeID + ArenaType.g_cache
+    try:
+        arena_type_id = getattr(avatar, 'arenaTypeID', None)
+        if arena_type_id:
+            try:
+                from ArenaType import g_cache
+                arena_type = g_cache.get(arena_type_id)
+                if arena_type:
+                    for attr in ('geometryName', 'geometry', 'name'):
+                        v = getattr(arena_type, attr, None)
+                        if v and isinstance(v, str):
+                            name = v.strip()
+                            if '/' in name:
+                                name = name.rsplit('/', 1)[-1]
+                            if name:
+                                log.info('_get_space_name_for_become_player: via ArenaType.g_cache[%s].%s = %s',
+                                         arena_type_id, attr, name)
+                                return name
+            except Exception as e:
+                log.warning('_get_space_name_for_become_player: ArenaType.g_cache ERR: %s', e)
+    except Exception as e:
+        log.warning('_get_space_name_for_become_player: arenaTypeID ERR: %s', e)
+
+    # Спосіб 3: через arena.arenaType напряму (якщо відрізняється від спроби 1)
+    try:
+        arena = getattr(avatar, 'arena', None)
+        if arena:
+            arena_type = getattr(arena, 'arenaType', None)
+            if arena_type:
+                log.info('_get_space_name_for_become_player: arenaType attrs: %s',
+                         [a for a in dir(arena_type) if not a.startswith('_')][:20])
+    except Exception:
+        pass
+
+    log.warning('_get_space_name_for_become_player: all methods failed, space_name=None')
+    return None
+
+
 def _install_battle_space_hook():
     if not IN_GAME or _BATTLE_SPACE_HOOKS:
         return
@@ -210,10 +262,12 @@ def _install_battle_space_hook():
                 def make_bp_wrapper(orig):
                     def wrapped_bp(self, *a, **kw):
                         try:
-                            space_name = _get_space_name_from_avatar(self)
+                            space_name = _get_space_name_for_become_player(self)
                             if space_name:
                                 log.info('onBecomePlayer hook: space=%s (writing files BEFORE space load)', space_name)
                                 g_controller.onSpaceEntered(space_name)
+                            else:
+                                log.warning('onBecomePlayer hook: could not get space name, files will be written in onEnterWorld')
                         except Exception:
                             log.exception('onBecomePlayer hook failed')
                         return orig(self, *a, **kw)
@@ -236,7 +290,13 @@ def _install_battle_space_hook():
                             space_name = _get_space_name_from_avatar(self)
                             if space_name:
                                 if early_installed:
-                                    log.info('onEnterWorld: space=%s (early hook already ran, skipping)', space_name)
+                                    # onBecomePlayer ran - but did it successfully write files?
+                                    # Check by seeing if files were written (log shows 'wrote')
+                                    # For safety: always write in onEnterWorld too
+                                    # (writing twice is harmless, missing once breaks everything)
+                                    log.info('onEnterWorld: space=%s (writing files, early hook was=%s)',
+                                             space_name, early_installed)
+                                    g_controller.onSpaceEntered(space_name)
                                 else:
                                     log.info('onEnterWorld fallback: space=%s (writing space.settings)', space_name)
                                     g_controller.onSpaceEntered(space_name)
