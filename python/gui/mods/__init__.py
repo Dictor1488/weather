@@ -199,9 +199,35 @@ def _install_battle_space_hook():
             log.warning('Avatar.PlayerAvatar not found')
         else:
             cls = Avatar.PlayerAvatar
-            if not hasattr(cls, 'onEnterWorld'):
-                log.warning('PlayerAvatar.onEnterWorld not found')
+
+            # --- Хук onBecomePlayer: найраніший момент, ДО завантаження простору ---
+            # Лог підтверджує: Avatar.onBecomePlayer → [SPACE] Loading space → Avatar.onEnterWorld
+            # Тут ми вже знаємо arena_type і можемо записати файли ДО того як рушій
+            # починає завантажувати простір. Тоді перезавантаження не потрібне взагалі.
+            if hasattr(cls, 'onBecomePlayer'):
+                orig_bp = cls.onBecomePlayer
+
+                def make_bp_wrapper(orig):
+                    def wrapped_bp(self, *a, **kw):
+                        try:
+                            space_name = _get_space_name_from_avatar(self)
+                            if space_name:
+                                log.info('onBecomePlayer hook: space=%s (writing files BEFORE space load)', space_name)
+                                g_controller.onSpaceEntered(space_name)
+                        except Exception:
+                            log.exception('onBecomePlayer hook failed')
+                        return orig(self, *a, **kw)
+                    return wrapped_bp
+
+                cls.onBecomePlayer = make_bp_wrapper(orig_bp)
+                _BATTLE_SPACE_HOOKS.append((cls, 'onBecomePlayer', orig_bp))
+                installed_any = True
+                log.info('Installed EARLY hook: Avatar.PlayerAvatar.onBecomePlayer')
             else:
+                log.warning('Avatar.PlayerAvatar.onBecomePlayer not found')
+
+            # --- Хук onEnterWorld: запасний, якщо onBecomePlayer не спрацював ---
+            if hasattr(cls, 'onEnterWorld'):
                 original = cls.onEnterWorld
 
                 def make_wrapper(orig, early_installed):
@@ -210,7 +236,7 @@ def _install_battle_space_hook():
                             space_name = _get_space_name_from_avatar(self)
                             if space_name:
                                 if early_installed:
-                                    log.info('onEnterWorld fallback: space=%s (early hook already ran)', space_name)
+                                    log.info('onEnterWorld: space=%s (early hook already ran, skipping)', space_name)
                                 else:
                                     log.info('onEnterWorld fallback: space=%s (writing space.settings)', space_name)
                                     g_controller.onSpaceEntered(space_name)
@@ -222,6 +248,8 @@ def _install_battle_space_hook():
                 cls.onEnterWorld = make_wrapper(original, installed_any)
                 _BATTLE_SPACE_HOOKS.append((cls, 'onEnterWorld', original))
                 log.info('Installed FALLBACK hook: Avatar.PlayerAvatar.onEnterWorld (early_installed=%s)', installed_any)
+            else:
+                log.warning('PlayerAvatar.onEnterWorld not found')
 
     except Exception:
         log.exception('Failed to install Avatar hook')
