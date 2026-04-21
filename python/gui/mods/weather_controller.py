@@ -677,19 +677,34 @@ def _patch_space_settings_template(template_text, env_name, preset_guid):
         return None
 
     text = template_text
+
+    # FIX: WoT space.settings uses </space.settings> as root tag, NOT </root>
+    # Detect which closing tag is used in this template
+    closing_tag = u'</space.settings>' if '</space.settings>' in text else u'</root>'
+
     if ROOT_ENV_RE.search(text):
         text = ROOT_ENV_RE.sub(r'\1%s\3' % env_name, text, count=1)
     else:
-        text = re.sub(r'</root>', u'    <environment>%s</environment>\n</root>' % env_name, text, count=1, flags=re.I)
+        text = text.replace(
+            closing_tag,
+            u'  <environment>%s</environment>\n%s' % (env_name, closing_tag),
+            1
+        )
 
     if preset_guid:
         if ROOT_ENV_OVERRIDE_RE.search(text):
             text = ROOT_ENV_OVERRIDE_RE.sub(r'\1%s\3' % preset_guid, text, count=1)
         else:
-            text = re.sub(r'</root>', u'    <environmentOverride>%s</environmentOverride>\n</root>' % preset_guid, text, count=1, flags=re.I)
+            text = text.replace(
+                closing_tag,
+                u'  <environmentOverride>%s</environmentOverride>\n%s' % (preset_guid, closing_tag),
+                1
+            )
     else:
         text = ROOT_ENV_OVERRIDE_RE.sub(u'', text)
 
+    LOG.info('_patch_space_settings_template: closing_tag=%s env=%s guid=%s result_has_env=%s',
+             closing_tag, env_name, preset_guid, '<environment>' in text)
     return text
 
 
@@ -705,6 +720,116 @@ def find_space_settings_path(space_name):
     except Exception:
         LOG.error('find_space_settings_path: failed\n%s', traceback.format_exc())
         return None
+
+
+# ============================================================================
+# FIX: environments.json runtime switching
+#
+# WoT has a NATIVE environment switcher that reads:
+#   res_mods/<ver>/scripts/client/mods/environments.json
+# It allows real-time environment cycling during battle (like pressing X).
+# The "environments" array = list of active GUID presets to cycle through.
+# "randomizer" = weights for random pick at battle start.
+# "toogleKeyset" = [-1, 88] means: no modifier + key X (code 88).
+#
+# By writing this file with only ONE environment GUID, we force WoT to use
+# exactly that environment — no randomness, no waiting for next battle load.
+# ============================================================================
+
+def _find_environments_json_path():
+    """Returns path to res_mods/.../scripts/client/mods/environments.json"""
+    try:
+        version_dir = _find_latest_version_dir('res_mods')
+        if not version_dir:
+            LOG.warning('_find_environments_json_path: no res_mods version dir')
+            return None
+        path = os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json')
+        return os.path.normpath(path)
+    except Exception:
+        LOG.error('_find_environments_json_path: failed\n%s', traceback.format_exc())
+        return None
+
+
+def _guid_to_dot(guid):
+    """Convert GUID from dash format (56BA3213-40FF-...) to dot format (56BA3213.40FF...)"""
+    return guid.replace('-', '.')
+
+
+def write_environments_json_for_preset(preset_id, space_name=None):
+    """
+    Writes environments.json so WoT's native switcher uses only the chosen preset.
+    This enables REAL-TIME environment switching without reloading the battle.
+
+    For 'standard' preset: removes our override (restores default/random).
+    For any other preset: sets exactly that one GUID in the environments list.
+    """
+    try:
+        env_json_path = _find_environments_json_path()
+        if not env_json_path:
+            LOG.warning('write_environments_json_for_preset: path not found')
+            return False
+
+        if not preset_id or preset_id == 'standard':
+            # Restore default — remove our override file so WoT uses stock config
+            if os.path.isfile(env_json_path):
+                try:
+                    os.remove(env_json_path)
+                    LOG.info('write_environments_json_for_preset: removed override for standard preset')
+                except Exception:
+                    LOG.error('write_environments_json_for_preset: failed to remove file\n%s', traceback.format_exc())
+            return True
+
+        # Resolve GUID for this preset (use space_name for exact match, fallback to any)
+        registry = get_environment_registry()
+        preset_data = registry.get(preset_id)
+        if not preset_data:
+            LOG.warning('write_environments_json_for_preset: preset %s not in registry', preset_id)
+            return False
+
+        guid = None
+        if space_name:
+            space_data = preset_data.get('spaces', {}).get(space_name)
+            if space_data:
+                guid = space_data.get('guid')
+        if not guid:
+            # Fallback: first available GUID for this preset
+            for _sn, sd in preset_data.get('spaces', {}).items():
+                guid = sd.get('guid')
+                if guid:
+                    break
+
+        if not guid:
+            LOG.warning('write_environments_json_for_preset: no GUID for preset=%s', preset_id)
+            return False
+
+        # WoT environments.json uses dot-separated GUIDs
+        guid_dot = _guid_to_dot(guid)
+
+        payload = {
+            "enabled": True,
+            "environments": [guid_dot],
+            "labels": {guid_dot: PRESET_LABELS.get(preset_id, preset_id)},
+            "randomizer": {
+                "advanced": {},
+                "common": {guid_dot: 100, "default": 0}
+            },
+            "toogleKeyset": [-1, 88]
+        }
+
+        folder = os.path.dirname(env_json_path)
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+
+        with open(env_json_path, 'w') as f:
+            json.dump(payload, f, indent=4, ensure_ascii=False)
+
+        LOG.info('write_environments_json_for_preset: wrote preset=%s guid=%s to %s',
+                 preset_id, guid_dot, env_json_path)
+        return True
+
+    except Exception:
+        LOG.error('write_environments_json_for_preset: failed\n%s', traceback.format_exc())
+        return False
 
 
 def _write_text_file(target_path, content):
@@ -732,33 +857,39 @@ def apply_environment_via_packages(space_name, preset_id):
         if not space_name:
             LOG.warning('apply_environment_via_packages: no space_name')
             return False
+
+        # Write environments.json for native real-time switching (works for standard too)
+        env_json_ok = write_environments_json_for_preset(preset_id, space_name)
+        LOG.info('apply_environment_via_packages: environments.json=%s preset=%s', env_json_ok, preset_id)
+
         if not preset_id or preset_id == 'standard':
-            LOG.info('apply_environment_via_packages: preset is standard, skipping override')
-            return False
+            LOG.info('apply_environment_via_packages: preset is standard, environments.json cleared')
+            return env_json_ok
 
         actual_preset_id, resolved = resolve_environment_with_fallback(space_name, preset_id)
         if not resolved:
-            return False
+            return env_json_ok
 
         env_name = resolved.get('env_name')
         preset_guid = resolved.get('guid')
-        LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s', preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
+        LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s',
+                 preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
 
         templates = _get_spaces_wg_templates(space_name)
 
         space_settings_path = find_space_settings_path(space_name)
         if not space_settings_path:
             LOG.warning('apply_environment_via_packages: space_settings path not found for %s', space_name)
-            return False
+            return env_json_ok
 
         settings_content = _patch_space_settings_template(templates.get('space_settings'), env_name, preset_guid)
         if not settings_content:
-            LOG.warning('apply_environment_via_packages: WG space.settings template not found for %s, apply skipped', space_name)
-            return False
+            LOG.warning('apply_environment_via_packages: WG space.settings template not found for %s', space_name)
+            return env_json_ok
 
         ok1 = _write_text_file(space_settings_path, settings_content)
-        LOG.info('apply_environment_via_packages: space.settings=%s template_ss=%s', ok1, bool(templates.get('space_settings')))
-        return ok1
+        LOG.info('apply_environment_via_packages: space.settings=%s environments.json=%s', ok1, env_json_ok)
+        return ok1 or env_json_ok
     except Exception:
         LOG.error('apply_environment_via_packages: failed\n%s', traceback.format_exc())
         return False
