@@ -990,4 +990,133 @@ class WeatherController(object):
         return get_environment_registry()
 
 
+    def build_payload(self, map_registry):
+        """Build full payload dict for WeatherWindowMeta / AS3."""
+        registry = get_environment_registry()
+        general_weights = get_general_weights()
+
+        presets = []
+        for preset_id in PRESET_ORDER:
+            label = PRESET_LABELS.get(preset_id, preset_id)
+            if preset_id != 'standard' and preset_id not in registry:
+                label += u' [missing]'
+            guid = get_preset_guid(preset_id) or ''
+            presets.append({
+                'id': preset_id,
+                'label': label,
+                'weight': int(general_weights.get(preset_id, 0)),
+                'guid': guid,
+                'previewSrc': '',
+            })
+
+        maps = []
+        for map_id, map_label, thumb_src in map_registry:
+            map_weights = get_map_weights(map_id)
+            use_global = map_id not in _cfg.get('mapWeights', {})
+            map_presets = []
+            for preset_id in PRESET_ORDER:
+                label = PRESET_LABELS.get(preset_id, preset_id)
+                has_space = bool(registry.get(preset_id, {}).get('spaces', {}).get(map_id))
+                if preset_id != 'standard' and not has_space:
+                    label += u' [n/a]'
+                map_presets.append({
+                    'id': preset_id,
+                    'label': label,
+                    'weight': int(map_weights.get(preset_id, 0)),
+                    'guid': '',
+                    'previewSrc': '',
+                })
+            maps.append({
+                'id': map_id,
+                'label': map_label,
+                'thumbSrc': thumb_src,
+                'useGlobal': use_global,
+                'presets': map_presets,
+            })
+
+        hk = get_hotkey()
+        import Keys as K
+        hk_codes = []
+        for mod_name in hk.get('mods', []):
+            code = getattr(K, mod_name, None)
+            if code is not None:
+                hk_codes.append(code)
+        key_code = getattr(K, hk.get('key', 'KEY_F12'), None)
+        if key_code is not None:
+            hk_codes.append(key_code)
+
+        hotkey_str = '+'.join(hk.get('mods', ['LALT']) + [hk.get('key', 'KEY_F12').replace('KEY_', '')])
+
+        return {
+            'presets': presets,
+            'maps': maps,
+            'hotkey': hotkey_str,
+            'hotkeyKeys': hk_codes,
+            'currentPreset': get_current_override_preset(),
+        }
+
+    def on_weight_changed(self, map_id, preset_id, value):
+        try:
+            weight = max(0, min(MAX_WEIGHT, int(value)))
+            if map_id:
+                weights = get_map_weights(map_id)
+                weights[preset_id] = weight
+                set_map_weights(map_id, weights)
+            else:
+                weights = get_general_weights()
+                weights[preset_id] = weight
+                set_general_weights(weights)
+        except Exception:
+            logger.exception('on_weight_changed failed')
+
+    def on_map_selected(self, map_id):
+        pass
+
+    def on_close_requested(self):
+        pass
+
+    def on_hotkey_changed(self, int_codes, hotkey_str):
+        try:
+            import Keys as K
+            modifier_map = {
+                getattr(K, 'KEY_LALT', 0): 'LALT',
+                getattr(K, 'KEY_RALT', 0): 'RALT',
+                getattr(K, 'KEY_LCONTROL', 0): 'LCTRL',
+                getattr(K, 'KEY_RCONTROL', 0): 'RCTRL',
+                getattr(K, 'KEY_LSHIFT', 0): 'LSHIFT',
+                getattr(K, 'KEY_RSHIFT', 0): 'RSHIFT',
+            }
+            mods = []
+            for code in int_codes[:-1]:
+                name = modifier_map.get(code)
+                if name:
+                    mods.append(name)
+            key_name = 'KEY_F12'
+            if int_codes:
+                last = int_codes[-1]
+                for attr in dir(K):
+                    if attr.startswith('KEY_') and getattr(K, attr) == last:
+                        key_name = attr
+                        break
+            set_hotkey(True, mods, key_name)
+        except Exception:
+            logger.exception('on_hotkey_changed failed')
+
+    def select_preset_in_battle(self, preset_id):
+        """Directly select a specific preset in battle (called from battle HUD)."""
+        set_override_preset(preset_id)
+        arena_name = _resolve_current_arena_name()
+        if arena_name:
+            apply_environment_via_packages(arena_name, _current_override_preset)
+        try:
+            from gui import SystemMessages
+            label = PRESET_LABELS.get(preset_id, preset_id)
+            SystemMessages.pushMessage(
+                u'[Weather] ' + label,
+                SystemMessages.SM_TYPE.Information
+            )
+        except Exception:
+            pass
+
+
 g_controller = WeatherController()
