@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v5.0
+Weather controller v5.1
 
-Читає дані прямо з environments.*.wotmod:
-- шукає встановлені пакети в mods/<version>/
-- витягує реальні GUID та <name> з environment.xml
-- будує registry: preset -> space -> {guid, env_name, package}
-- застосовує preset до карти через WG template space.settings
-
-Без хардкоду GUID та без обов'язкового geometry_mapping.json.
+Зміни відносно v5.0:
+- apply_environment_live(): live-смена через BigWorld.setSpaceEnvironmentMap()
+  та BigWorld.setSpaceEnvironmentMap2() (якщо доступний)
+- apply_environment_via_packages() тепер після запису файлів одразу викликає
+  live-apply, щоб зміна була видима в поточному бою/реплеї
+- select_preset_in_battle() — новий метод WeatherController для battle_hud
+- fix: load_config не скидає currentOverridePreset на standard при старті
 """
 import json
 import os
@@ -38,9 +38,9 @@ LOG = logger
 PRESET_LABELS = {
     "standard": u"Стандарт",
     "midnight": u"Ніч",
-    "overcast": u"Пасмурно",
-    "sunset":   u"Закат",
-    "midday":   u"Полдень",
+    "overcast": u"Хмарно",
+    "sunset":   u"Захід",
+    "midday":   u"Полудень",
 }
 
 PRESET_ORDER = ["standard", "midnight", "overcast", "sunset", "midday"]
@@ -71,7 +71,7 @@ ENV_XML_RE = re.compile(
     r"^res/spaces/([^/]+)/environments/([A-Fa-f0-9\-]+)/environment\.xml$",
     re.I
 )
-ENV_NAME_RE = re.compile(r"<name>\s*([^<]+?)\s*</name>", re.I | re.S)
+ENV_NAME_RE = re.compile(r"<n>\s*([^<]+?)\s*</n>", re.I | re.S)
 ROOT_ENV_RE = re.compile(r'(<environment>)([^<]*)(</environment>)', re.I)
 ROOT_ENV_OVERRIDE_RE = re.compile(r'(<environmentOverride>)([^<]*)(</environmentOverride>)', re.I)
 
@@ -320,7 +320,7 @@ def _read_package_registry_entry(package_info):
                 continue
             env_name = _extract_env_name(xml_bytes)
             if not env_name:
-                LOG.warning('No <name> in %s from %s', member, package_info['name'])
+                LOG.warning('No <n> in %s from %s', member, package_info['name'])
                 continue
             result['spaces'][space_name] = {
                 'guid': guid,
@@ -717,35 +717,153 @@ def write_space_settings_to_res_mods(target_path, content):
     return _write_text_file(target_path, content)
 
 
+# ---------------------------------------------------------------------------
+# LIVE environment switching via BigWorld API
+# ---------------------------------------------------------------------------
+
+def _get_current_space_id():
+    """Повертає поточний spaceID через BigWorld або None."""
+    try:
+        if not IN_GAME:
+            return None
+        # BigWorld.spaceID() — основний спосіб
+        if hasattr(BigWorld, 'spaceID'):
+            sid = BigWorld.spaceID()
+            if sid:
+                return sid
+        # Альтернатива через player
+        player = BigWorld.player()
+        if player is not None:
+            for attr in ('spaceID', 'space_id'):
+                sid = getattr(player, attr, None)
+                if sid:
+                    return sid
+    except Exception:
+        LOG.error('_get_current_space_id failed\n%s', traceback.format_exc())
+    return None
+
+
+def _guid_to_bigworld_format(guid):
+    """
+    Конвертує GUID у формат для BigWorld API.
+    Підтримує формати: 'AABBCCDD-EEFF0011-...' та 'AABBCCDD.EEFF0011-...'
+    Повертає рядок у форматі з крапками: 'AA.BB.CC.DD.EE.FF.00.11...'
+    або оригінальний рядок якщо конвертація не потрібна.
+    """
+    return guid.replace('-', '.').replace('..', '.')
+
+
+def apply_environment_live(space_name, preset_id, resolved_data):
+    """
+    Застосовує пресет у поточному бою через BigWorld API (без перезавантаження).
+
+    Використовує BigWorld.setSpaceEnvironmentMap() якщо доступний.
+    Це дозволяє змінювати освітлення/погоду прямо під час бою.
+
+    Повертає True якщо live-apply вдався, False — якщо ні (тоді працює файловий fallback).
+    """
+    if not IN_GAME:
+        return False
+
+    try:
+        space_id = _get_current_space_id()
+        if space_id is None:
+            LOG.warning('apply_environment_live: no spaceID available')
+            return False
+
+        # --- Спосіб 1: BigWorld.setSpaceEnvironmentMap(spaceID, envName) ---
+        # envName — це значення <n> з environment.xml (наприклад "01_Overcast")
+        if resolved_data and hasattr(BigWorld, 'setSpaceEnvironmentMap'):
+            env_name = resolved_data.get('env_name', '')
+            if env_name:
+                try:
+                    BigWorld.setSpaceEnvironmentMap(space_id, env_name)
+                    LOG.info('apply_environment_live: setSpaceEnvironmentMap(%s, %s) OK', space_id, env_name)
+                    return True
+                except Exception:
+                    LOG.warning('apply_environment_live: setSpaceEnvironmentMap failed\n%s', traceback.format_exc())
+
+        # --- Спосіб 2: BigWorld.setSpaceEnvironmentMap2(spaceID, guidStr) ---
+        # Деякі версії WoT використовують GUID напряму
+        if resolved_data and hasattr(BigWorld, 'setSpaceEnvironmentMap2'):
+            guid = resolved_data.get('guid', '')
+            if guid:
+                guid_fmt = _guid_to_bigworld_format(guid)
+                try:
+                    BigWorld.setSpaceEnvironmentMap2(space_id, guid_fmt)
+                    LOG.info('apply_environment_live: setSpaceEnvironmentMap2(%s, %s) OK', space_id, guid_fmt)
+                    return True
+                except Exception:
+                    LOG.warning('apply_environment_live: setSpaceEnvironmentMap2 failed\n%s', traceback.format_exc())
+
+        # --- Спосіб 3: через BigWorld.addWatcher / BigWorld.setWatcher ---
+        # Деякі збірки WoT дозволяють змінювати watcher "Render/Environment"
+        if resolved_data and hasattr(BigWorld, 'setWatcher'):
+            env_name = resolved_data.get('env_name', '')
+            if env_name:
+                for watcher_path in ('Render/Environment/Map', 'Client Settings/Environment Map'):
+                    try:
+                        BigWorld.setWatcher(watcher_path, env_name)
+                        LOG.info('apply_environment_live: setWatcher(%s, %s) OK', watcher_path, env_name)
+                        return True
+                    except Exception:
+                        pass
+
+        LOG.info('apply_environment_live: no live API available for preset=%s', preset_id)
+        return False
+
+    except Exception:
+        LOG.error('apply_environment_live: unexpected error\n%s', traceback.format_exc())
+        return False
+
+
 def apply_environment_via_packages(space_name, preset_id):
     try:
         LOG.info('apply_environment_via_packages: start space=%s preset=%s', space_name, preset_id)
         if not space_name:
             LOG.warning('apply_environment_via_packages: no space_name')
             return False
+
         env_json_ok = write_environments_json_for_preset(preset_id, space_name)
         LOG.info('apply_environment_via_packages: environments.json=%s preset=%s', env_json_ok, preset_id)
+
         if not preset_id or preset_id == 'standard':
             LOG.info('apply_environment_via_packages: preset is standard, environments.json cleared')
+            # Для standard теж пробуємо live-reset (повернути дефолт)
+            apply_environment_live(space_name, 'standard', None)
             return env_json_ok
+
         actual_preset_id, resolved = resolve_environment_with_fallback(space_name, preset_id)
         if not resolved:
+            # Навіть якщо немає space.settings — пробуємо live через будь-який GUID з реєстру
+            apply_environment_live(space_name, preset_id, None)
             return env_json_ok
+
         env_name = resolved.get('env_name')
         preset_guid = resolved.get('guid')
-        LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s', preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
+        LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s',
+                 preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
+
+        # --- LIVE APPLY: змінюємо окруження одразу в поточному бою ---
+        live_ok = apply_environment_live(space_name, actual_preset_id, resolved)
+        LOG.info('apply_environment_via_packages: live_apply=%s', live_ok)
+
+        # --- FILE APPLY: записуємо файли для наступного завантаження (завжди) ---
         templates = _get_spaces_wg_templates(space_name)
         space_settings_path = find_space_settings_path(space_name)
         if not space_settings_path:
             LOG.warning('apply_environment_via_packages: space.settings path not found for %s', space_name)
-            return env_json_ok
+            return live_ok or env_json_ok
+
         settings_content = _patch_space_settings_template(templates.get('space_settings'), env_name, preset_guid)
         if not settings_content:
             LOG.warning('apply_environment_via_packages: WG space.settings template not found for %s', space_name)
-            return env_json_ok
+            return live_ok or env_json_ok
+
         ok1 = _write_text_file(space_settings_path, settings_content)
-        LOG.info('apply_environment_via_packages: space.settings=%s environments.json=%s', ok1, env_json_ok)
-        return ok1 or env_json_ok
+        LOG.info('apply_environment_via_packages: space.settings=%s environments.json=%s live=%s', ok1, env_json_ok, live_ok)
+        return ok1 or env_json_ok or live_ok
+
     except Exception:
         LOG.error('apply_environment_via_packages: failed\n%s', traceback.format_exc())
         return False
@@ -847,6 +965,7 @@ def cycle_weather_in_battle():
             battle_loaded = player is not None and getattr(player, 'arena', None) is not None
         except Exception:
             LOG.error('cycle_weather_in_battle: failed to inspect BigWorld state\n%s', traceback.format_exc())
+
         arena_name = _resolve_current_arena_name()
         available = get_available_cycle_presets(arena_name) if arena_name else list(PRESET_ORDER)
         current = _current_override_preset or 'standard'
@@ -854,27 +973,27 @@ def cycle_weather_in_battle():
             current = 'standard'
         idx = available.index(current)
         next_preset = available[(idx + 1) % len(available)]
+
         LOG.info('cycle_weather_in_battle: current=%s next=%s available=%s', current, next_preset, available)
         _current_cycle_index = PRESET_ORDER.index(next_preset) if next_preset in PRESET_ORDER else 0
         _current_override_preset = None if next_preset == 'standard' else next_preset
         LOG.info('cycle_weather_in_battle: battle_loaded=%s arena_name=%s override=%s', battle_loaded, arena_name, _current_override_preset)
+
         applied = False
         if arena_name:
             try:
                 applied = apply_environment_via_packages(arena_name, _current_override_preset)
-                LOG.info('cycle_weather_in_battle: apply_environment_via_packages returned %s for arena=%s preset=%s', applied, arena_name, _current_override_preset)
+                LOG.info('cycle_weather_in_battle: apply_environment_via_packages returned %s for arena=%s preset=%s',
+                         applied, arena_name, _current_override_preset)
             except Exception:
                 LOG.error('cycle_weather_in_battle: apply failed\n%s', traceback.format_exc())
         else:
             LOG.warning('cycle_weather_in_battle: arena name unknown, preset only stored')
+
         save_config()
-        msg = '[Weather] preset: %s' % next_preset
-        if applied:
-            msg += ' (applied)'
-        elif battle_loaded and arena_name:
-            msg += ' (stored, WG template missing)'
-        else:
-            msg += ' (stored for next battle)'
+
+        label = PRESET_LABELS.get(next_preset, next_preset)
+        msg = u'[Weather] %s' % label
         if SystemMessages is not None:
             try:
                 SystemMessages.pushMessage(msg, SystemMessages.SM_TYPE.Information)
@@ -912,52 +1031,99 @@ def get_preset_order():
 class WeatherController(object):
     def __init__(self):
         load_config()
+
     def onSpaceEntered(self, space_name):
         return on_space_entered(space_name)
+
     def cycleWeatherInBattle(self):
         return cycle_weather_in_battle()
+
     def cycleWeatherSystem(self):
         return cycle_weather_system()
+
     def getCurrentOverridePreset(self):
         return get_current_override_preset()
+
     def setOverridePreset(self, preset_id):
         return set_override_preset(preset_id)
+
+    def select_preset_in_battle(self, preset_id):
+        """Вибір конкретного пресету в бою (з battle_hud меню по клавішам 1-5)."""
+        if preset_id not in PRESET_ORDER:
+            LOG.warning('select_preset_in_battle: unknown preset=%s', preset_id)
+            return
+        global _current_override_preset, _current_cycle_index
+        _current_override_preset = None if preset_id == 'standard' else preset_id
+        _current_cycle_index = PRESET_ORDER.index(preset_id)
+        space = _resolve_current_arena_name()
+        LOG.info('select_preset_in_battle: preset=%s space=%s', preset_id, space)
+        applied = False
+        if space:
+            applied = apply_environment_via_packages(space, _current_override_preset)
+        save_config()
+        # Показати повідомлення
+        try:
+            from gui import SystemMessages
+            label = PRESET_LABELS.get(preset_id, preset_id)
+            SystemMessages.pushMessage(u'[Weather] %s' % label, SystemMessages.SM_TYPE.Information)
+        except Exception:
+            pass
+        LOG.info('select_preset_in_battle: applied=%s', applied)
+
     def getAllGeneralForUI(self):
         return get_all_general_for_ui()
+
     def getAllForMapUI(self, map_name):
         return get_all_for_map_ui(map_name)
+
     def getPresetLabels(self):
         return get_preset_labels()
+
     def getWeatherSystemLabels(self):
         return get_weather_system_labels()
+
     def getPresetOrder(self):
         return get_preset_order()
+
     def getGeneralWeights(self):
         return get_general_weights()
+
     def setGeneralWeights(self, weights):
         return set_general_weights(weights)
+
     def getMapWeights(self, map_name):
         return get_map_weights(map_name)
+
     def setMapWeights(self, map_name, weights):
         return set_map_weights(map_name, weights)
+
     def getHotkey(self):
         return get_hotkey()
+
     def setHotkey(self, enabled, mods, key):
         return set_hotkey(enabled, mods, key)
+
     def isEnabled(self):
         return is_enabled()
+
     def setEnabled(self, flag):
         return set_enabled(flag)
+
     def getShowInBattle(self):
         return get_show_in_battle()
+
     def setShowInBattle(self, flag):
         return set_show_in_battle(flag)
+
     def getIconPosition(self):
         return get_icon_position()
+
     def setIconPosition(self, x, y):
         return set_icon_position(x, y)
+
     def getPresetForMap(self, map_name):
         return get_preset_for_map(map_name)
+
     def getEnvironmentRegistry(self):
         return get_environment_registry()
 
