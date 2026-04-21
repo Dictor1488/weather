@@ -151,6 +151,17 @@ def _get_space_name_from_avatar(avatar):
     return None
 
 
+# Відстежує для яких карт onBecomePlayer вже записав файли в поточній сесії
+_become_player_wrote_spaces = set()
+
+def _mark_become_player_wrote(space_name):
+    global _become_player_wrote_spaces
+    _become_player_wrote_spaces.add(space_name)
+
+def _become_player_wrote_for_space(space_name):
+    return space_name in _become_player_wrote_spaces
+
+
 def _get_space_name_for_become_player(avatar):
     """
     Отримує назву карти в момент onBecomePlayer.
@@ -265,6 +276,7 @@ def _install_battle_space_hook():
                             space_name = _get_space_name_for_become_player(self)
                             if space_name:
                                 log.info('onBecomePlayer hook: space=%s (writing files BEFORE space load)', space_name)
+                                _mark_become_player_wrote(space_name)
                                 g_controller.onSpaceEntered(space_name)
                             else:
                                 log.warning('onBecomePlayer hook: could not get space name, files will be written in onEnterWorld')
@@ -289,16 +301,13 @@ def _install_battle_space_hook():
                         try:
                             space_name = _get_space_name_from_avatar(self)
                             if space_name:
-                                if early_installed:
-                                    # onBecomePlayer ran - but did it successfully write files?
-                                    # Check by seeing if files were written (log shows 'wrote')
-                                    # For safety: always write in onEnterWorld too
-                                    # (writing twice is harmless, missing once breaks everything)
-                                    log.info('onEnterWorld: space=%s (writing files, early hook was=%s)',
-                                             space_name, early_installed)
-                                    g_controller.onSpaceEntered(space_name)
+                                if early_installed and _become_player_wrote_for_space(space_name):
+                                    # onBecomePlayer вже записав файли для цієї карти
+                                    # onEnterWorld не перезаписує — щоб не змінити пресет
+                                    log.info('onEnterWorld: space=%s (skipping, onBecomePlayer already wrote files)', space_name)
                                 else:
-                                    log.info('onEnterWorld fallback: space=%s (writing space.settings)', space_name)
+                                    log.info('onEnterWorld: space=%s (writing files, become_player_wrote=%s)',
+                                             space_name, early_installed)
                                     g_controller.onSpaceEntered(space_name)
                         except Exception:
                             log.exception('onEnterWorld hook failed')
@@ -580,6 +589,29 @@ def fini(*args, **kwargs):
     _remove_key_hook()
     _remove_battle_space_hook()
     _INIT_DONE = False
+
+
+def onBecomeNonPlayer(*args, **kwargs):
+    """Викликається при виході з бою. Скидаємо рандомний пресет."""
+    global _become_player_wrote_spaces
+    try:
+        # Скидаємо список записаних карт щоб наступний бій отримав свіжий рандом
+        _become_player_wrote_spaces = set()
+        # Скидаємо збережений рандомний пресет в контролері
+        # (якщо override був встановлений рандомно - не через F12)
+        from weather_controller import g_controller
+        # Перевіряємо чи override був рандомним (збережений в конфігу як standard)
+        # Якщо currentOverridePreset в конфізі = standard, то override рандомний
+        cfg = g_controller.get_config()
+        saved_preset = cfg.get('currentOverridePreset', 'standard')
+        if saved_preset == 'standard':
+            # Рандомний пресет - скидаємо щоб наступний бій вибрав новий
+            from weather_controller import set_override_preset
+            set_override_preset('standard')
+            _log().info('onBecomeNonPlayer: reset random override preset for next battle')
+    except Exception:
+        _log().exception('onBecomeNonPlayer failed')
+    return None
 
 
 def sendEvent(*args, **kwargs):
