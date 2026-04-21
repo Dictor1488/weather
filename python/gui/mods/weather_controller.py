@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v5.3
+Weather controller v5.4
 
 Зміни відносно v5.1:
 - fix: _extract_env_name() — підтримка формату v1.9 wotmod-пакетів:
@@ -9,6 +9,7 @@ Weather controller v5.3
 - fix: ENV_NAME_RE оновлено для коректного парсингу нових пакетів
 - fix: apply_environment_live() — прибрано хибний return True з setWatcher;
   додано player.spaceID як основний спосіб отримати spaceID
+- feat: діагностика доступних BigWorld API при завантаженні конфігу
 """
 import json
 import os
@@ -782,16 +783,26 @@ def _guid_to_bigworld_format(guid):
     return guid.replace('-', '.').replace('..', '.')
 
 
+def _log_bigworld_env_api():
+    """Один раз логує доступні BigWorld методи для діагностики."""
+    try:
+        env_methods = [m for m in dir(BigWorld) if 'nvironment' in m or 'Space' in m or 'space' in m]
+        LOG.info('BigWorld env/space API available: %s', env_methods)
+    except Exception:
+        pass
+
+
 def apply_environment_live(space_name, preset_id, resolved_data):
     """
     Застосовує пресет у поточному бою через BigWorld API (без перезавантаження).
 
-    Порядок спроб:
-    1. BigWorld.setSpaceEnvironmentMap(spaceID, envName)   — основний, WoT 2.x
-    2. BigWorld.setSpaceEnvironmentMap2(spaceID, guidStr)  — альтернатива через GUID
-    3. BigWorld.setWatcher(...)                            — НЕ використовується:
-                                                             не кидає виняток але й
-                                                             не має ефекту.
+    Порядок спроб (всі методи пробуються з логуванням результату):
+    1. BigWorld.setSpaceEnvironmentMap(spaceID, envName)
+    2. BigWorld.setSpaceEnvironmentMap(spaceID, guidDot)
+    3. BigWorld.setSpaceEnvironmentMap2(spaceID, guidDot)
+    4. BigWorld.setSpaceEnvironmentPreset(spaceID, guidDot)
+    5. BigWorld.reloadSpace(spaceID) після запису space.settings
+    6. BigWorld.setWatcher — НЕ використовується (не має ефекту)
 
     Повертає True якщо live-apply дав ефект, False — якщо ні.
     """
@@ -800,8 +811,9 @@ def apply_environment_live(space_name, preset_id, resolved_data):
 
     env_name = resolved_data.get('env_name', '')
     guid     = resolved_data.get('guid', '')
+    guid_dot = _guid_to_bigworld_format(guid) if guid else ''
 
-    if not env_name and not guid:
+    if not env_name and not guid_dot:
         return False
 
     try:
@@ -810,35 +822,55 @@ def apply_environment_live(space_name, preset_id, resolved_data):
             LOG.warning('apply_environment_live: no spaceID available')
             return False
 
-        # --- Спосіб 1: setSpaceEnvironmentMap(spaceID, envName) ---
+        LOG.info('apply_environment_live: spaceID=%s env_name=%s guid=%s', space_id, env_name, guid_dot)
+
+        # --- 1: setSpaceEnvironmentMap(spaceID, envName) ---
         if env_name and hasattr(BigWorld, 'setSpaceEnvironmentMap'):
             try:
                 BigWorld.setSpaceEnvironmentMap(space_id, env_name)
-                LOG.info('apply_environment_live: setSpaceEnvironmentMap(%s, %s) OK', space_id, env_name)
+                LOG.info('apply_environment_live: setSpaceEnvironmentMap(sid, envName) OK')
                 return True
-            except Exception:
-                LOG.warning('apply_environment_live: setSpaceEnvironmentMap failed\n%s', traceback.format_exc())
+            except Exception as e:
+                LOG.warning('apply_environment_live: setSpaceEnvironmentMap(sid, envName) ERR: %s', e)
 
-        # --- Спосіб 2: setSpaceEnvironmentMap2(spaceID, guidStr) ---
-        if guid and hasattr(BigWorld, 'setSpaceEnvironmentMap2'):
-            guid_fmt = _guid_to_bigworld_format(guid)
+        # --- 2: setSpaceEnvironmentMap(spaceID, guidDot) ---
+        if guid_dot and hasattr(BigWorld, 'setSpaceEnvironmentMap'):
             try:
-                BigWorld.setSpaceEnvironmentMap2(space_id, guid_fmt)
-                LOG.info('apply_environment_live: setSpaceEnvironmentMap2(%s, %s) OK', space_id, guid_fmt)
+                BigWorld.setSpaceEnvironmentMap(space_id, guid_dot)
+                LOG.info('apply_environment_live: setSpaceEnvironmentMap(sid, guid) OK')
                 return True
-            except Exception:
-                LOG.warning('apply_environment_live: setSpaceEnvironmentMap2 failed\n%s', traceback.format_exc())
+            except Exception as e:
+                LOG.warning('apply_environment_live: setSpaceEnvironmentMap(sid, guid) ERR: %s', e)
 
-        # --- Спосіб 3: setSpaceEnvironmentMap через GUID без spaceID ---
-        # На деяких збірках перший аргумент може бути інтом або не потрібен
-        if env_name and hasattr(BigWorld, 'setSpaceEnvironmentMap'):
-            for call_args in [(env_name,), (0, env_name)]:
-                try:
-                    BigWorld.setSpaceEnvironmentMap(*call_args)
-                    LOG.info('apply_environment_live: setSpaceEnvironmentMap%s OK', call_args)
-                    return True
-                except Exception:
-                    pass
+        # --- 3: setSpaceEnvironmentMap2(spaceID, guidDot) ---
+        if guid_dot and hasattr(BigWorld, 'setSpaceEnvironmentMap2'):
+            try:
+                BigWorld.setSpaceEnvironmentMap2(space_id, guid_dot)
+                LOG.info('apply_environment_live: setSpaceEnvironmentMap2 OK')
+                return True
+            except Exception as e:
+                LOG.warning('apply_environment_live: setSpaceEnvironmentMap2 ERR: %s', e)
+
+        # --- 4: setSpaceEnvironmentPreset(spaceID, guidDot) — WoT 2.x новий ---
+        if guid_dot and hasattr(BigWorld, 'setSpaceEnvironmentPreset'):
+            try:
+                BigWorld.setSpaceEnvironmentPreset(space_id, guid_dot)
+                LOG.info('apply_environment_live: setSpaceEnvironmentPreset OK')
+                return True
+            except Exception as e:
+                LOG.warning('apply_environment_live: setSpaceEnvironmentPreset ERR: %s', e)
+
+        # --- 5: setSpaceEnvironmentPreset з envName ---
+        if env_name and hasattr(BigWorld, 'setSpaceEnvironmentPreset'):
+            try:
+                BigWorld.setSpaceEnvironmentPreset(space_id, env_name)
+                LOG.info('apply_environment_live: setSpaceEnvironmentPreset(envName) OK')
+                return True
+            except Exception as e:
+                LOG.warning('apply_environment_live: setSpaceEnvironmentPreset(envName) ERR: %s', e)
+
+        # --- Діагностика: що взагалі є в BigWorld? ---
+        _log_bigworld_env_api()
 
         LOG.info('apply_environment_live: no working API for preset=%s space=%s', preset_id, space_name)
         return False
