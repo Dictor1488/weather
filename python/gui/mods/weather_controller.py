@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v5.11
+Weather controller v5.12
 
 Зміни відносно v5.1:
 - fix: _extract_env_name() — підтримка формату v1.9 wotmod-пакетів:
@@ -785,6 +785,89 @@ def _guid_to_bigworld_format(guid):
     return guid.replace('-', '.').replace('..', '.')
 
 
+def apply_environment_live(space_name, preset_id, resolved_data):
+    """
+    Спроба застосувати пресет LIVE через BigWorld.addSpaceGeometryMapping +
+    BigWorld.notifySpaceChange.
+
+    Логіка:
+    1. Wotmod-пакет вже змонтовано (з mods/2.2.0.2/).
+       Його вміст доступний у віртуальній файловій системі як res/spaces/MAP/...
+    2. addSpaceGeometryMapping(spaceID, 'spaces/MAP', wotmodPath) додає новий
+       шар геометрії з пакету — включаючи environment.xml.
+    3. notifySpaceChange(spaceID) повідомляє рушій що простір змінився.
+
+    Якщо не вдається — повертає False (файловий fallback через environments.json).
+    """
+    if not IN_GAME:
+        return False
+    if not resolved_data:
+        return False
+
+    try:
+        space_id = _get_current_space_id()
+        if space_id is None:
+            return False
+
+        package_path = resolved_data.get('package_path', '')
+        if not package_path or not os.path.isfile(package_path):
+            LOG.warning('apply_environment_live: package_path not found: %s', package_path)
+            return False
+
+        mapping_path = 'spaces/' + space_name
+
+        if hasattr(BigWorld, 'addSpaceGeometryMapping'):
+            try:
+                handle = BigWorld.addSpaceGeometryMapping(space_id, mapping_path, package_path)
+                LOG.info('apply_environment_live: addSpaceGeometryMapping(%s, %s) handle=%s',
+                         mapping_path, os.path.basename(package_path), handle)
+                # Зберігаємо handle щоб потім видалити при наступній зміні
+                _store_geometry_handle(space_id, handle)
+                # Повідомляємо рушій про зміну
+                if hasattr(BigWorld, 'notifySpaceChange'):
+                    try:
+                        BigWorld.notifySpaceChange(space_id)
+                        LOG.info('apply_environment_live: notifySpaceChange OK')
+                    except Exception as e:
+                        LOG.warning('apply_environment_live: notifySpaceChange ERR: %s', e)
+                return True
+            except Exception as e:
+                LOG.warning('apply_environment_live: addSpaceGeometryMapping ERR: %s', e)
+
+        return False
+
+    except Exception:
+        LOG.error('apply_environment_live: unexpected error\n%s', traceback.format_exc())
+        return False
+
+
+# Зберігаємо handles попередніх mappings щоб видаляти при наступній зміні
+_geometry_handles = {}  # spaceID -> [handle1, handle2, ...]
+
+def _store_geometry_handle(space_id, handle):
+    global _geometry_handles
+    if handle is None:
+        return
+    if space_id not in _geometry_handles:
+        _geometry_handles[space_id] = []
+    _geometry_handles[space_id].append(handle)
+
+def _remove_old_geometry_handles(space_id):
+    """Видаляємо попередні маппінги перед додаванням нового."""
+    global _geometry_handles
+    handles = _geometry_handles.pop(space_id, [])
+    if not handles:
+        return
+    if not hasattr(BigWorld, 'delSpaceGeometryMapping'):
+        return
+    for handle in handles:
+        try:
+            BigWorld.delSpaceGeometryMapping(space_id, handle)
+            LOG.info('_remove_old_geometry_handles: removed handle=%s', handle)
+        except Exception as e:
+            LOG.warning('_remove_old_geometry_handles: ERR handle=%s: %s', handle, e)
+
+
 def apply_environment_via_packages(space_name, preset_id):
     """
     Записує space.settings та environments.json на диск.
@@ -812,6 +895,14 @@ def apply_environment_via_packages(space_name, preset_id):
         preset_guid = resolved.get('guid')
         LOG.info('apply_environment_via_packages: resolved requested=%s actual=%s env_name=%s guid=%s package=%s',
                  preset_id, actual_preset_id, env_name, preset_guid, resolved.get('package'))
+
+        # Спроба live-зміни через addSpaceGeometryMapping (тільки в бою)
+        player = BigWorld.player() if IN_GAME else None
+        in_battle = player is not None and getattr(player, 'arena', None) is not None
+        if in_battle:
+            _remove_old_geometry_handles(_get_current_space_id() or 0)
+            live_ok = apply_environment_live(space_name, actual_preset_id, resolved)
+            LOG.info('apply_environment_via_packages: live_apply=%s', live_ok)
 
         templates = _get_spaces_wg_templates(space_name)
         space_settings_path = find_space_settings_path(space_name)
