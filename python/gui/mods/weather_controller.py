@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v5.9
+Weather controller v5.10
 
 Зміни відносно v5.1:
 - fix: _extract_env_name() — підтримка формату v1.9 wotmod-пакетів:
@@ -819,39 +819,62 @@ def _clear_reload_flag():
 
 def _schedule_entry_reload(space_id, preset_id, attempts):
     """
-    Retry-callback: перевіряє чи завершилось завантаження танків,
-    і тільки тоді викликає spaceReload.
-    Перевіряє кожні 0.5 сек, максимум 20 спроб (10 секунд).
+    Retry-callback: чекає поки простір ПОВНІСТЮ завантажиться,
+    лише тоді викликає spaceReload.
+
+    Безпечний момент визначається двома умовами:
+    1. BigWorld.spaceLoadStatus(spaceID) == 1.0  — геометрія завантажена повністю
+    2. Усі Vehicle.__onAppearanceReady вже відпрацювали — перевіряємо через
+       кількість готових entities у BigWorld.entities
+
+    Перевірка кожні 0.3 сек, максимум 40 спроб (12 секунд).
     """
-    MAX_ATTEMPTS = 20
-    RETRY_DELAY  = 0.5
+    MAX_ATTEMPTS = 40
+    RETRY_DELAY  = 0.3
 
     if attempts >= MAX_ATTEMPTS:
-        LOG.warning('_schedule_entry_reload: gave up after %s attempts', attempts)
+        LOG.warning('_schedule_entry_reload: gave up after %s attempts, skipping', attempts)
         return
 
     ready = False
+    status_info = 'unknown'
     try:
-        import BigWorld as _BW
-        player = _BW.player()
-        if player is not None:
-            arena = getattr(player, 'arena', None)
-            if arena is not None:
-                # period: 0=IDLE, 1=WAITING, 2=PRE_COUNTDOWN, 3=BATTLE, 4=AFTER_BATTLE
-                # Безпечно починати з period >= 1 (arena ініціалізована)
-                # і vehicles не порожні
-                period = getattr(arena, 'period', 0)
-                vehicles = getattr(arena, 'vehicles', {})
-                if period >= 1 and len(vehicles) > 0:
-                    ready = True
-                    LOG.info('_schedule_entry_reload: arena ready period=%s vehicles=%s attempt=%s',
-                             period, len(vehicles), attempts)
+        # Умова 1: spaceLoadStatus == 1.0 (простір повністю завантажений)
+        load_status = 0.0
+        if hasattr(BigWorld, 'spaceLoadStatus'):
+            try:
+                load_status = BigWorld.spaceLoadStatus(space_id)
+            except Exception:
+                load_status = 0.0
+
+        if load_status < 1.0:
+            status_info = 'spaceLoadStatus=%.2f' % load_status
+        else:
+            # Умова 2: arena.period >= 2 (бій або підрахунок, не завантаження)
+            player = BigWorld.player()
+            if player is not None:
+                arena = getattr(player, 'arena', None)
+                if arena is not None:
+                    period = getattr(arena, 'period', 0)
+                    if period >= 2:
+                        ready = True
+                        status_info = 'spaceLoadStatus=%.2f period=%s' % (load_status, period)
+                    else:
+                        status_info = 'spaceLoadStatus=%.2f period=%s (waiting)' % (load_status, period)
+                else:
+                    status_info = 'spaceLoadStatus=%.2f no arena' % load_status
+            else:
+                status_info = 'spaceLoadStatus=%.2f no player' % load_status
+
     except Exception as e:
         LOG.warning('_schedule_entry_reload: check ERR: %s', e)
 
     if ready:
+        LOG.info('_schedule_entry_reload: READY %s attempt=%s -> spaceReload', status_info, attempts)
         _do_space_reload(space_id, preset_id)
     else:
+        if attempts % 5 == 0:
+            LOG.info('_schedule_entry_reload: waiting... %s attempt=%s', status_info, attempts)
         try:
             BigWorld.callback(RETRY_DELAY,
                               lambda: _schedule_entry_reload(space_id, preset_id, attempts + 1))
