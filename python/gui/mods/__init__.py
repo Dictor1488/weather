@@ -16,6 +16,15 @@ except ImportError:
 
 from weather_controller import g_controller
 
+try:
+    from battle_hud import open_hud, handle_key as hud_handle_key, is_active as hud_is_active
+    HAS_BATTLE_HUD = True
+except ImportError:
+    HAS_BATTLE_HUD = False
+    def open_hud(): pass
+    def hud_handle_key(k): return False
+    def hud_is_active(): return False
+
 
 _BATTLE_SPACE_HOOKS = []  # list of (cls, attr_name, original_func)
 _KEY_HOOK_INSTALLED = False
@@ -207,19 +216,23 @@ def _remove_battle_space_hook():
 # Key hook
 # ============================================================================
 def _on_key_event(event):
-    """
-    ВИПРАВЛЕНО: прибрано g_controller.config.hotkey_codes,
-    тепер використовується локальний _hotkey_codes.
-    """
     if not IN_GAME:
         return
     if not hasattr(event, 'isKeyDown') or not event.isKeyDown():
         return
 
+    # Якщо HUD активний — він першим обробляє будь-яку клавішу
+    if HAS_BATTLE_HUD and hud_is_active():
+        if hud_handle_key(event.key):
+            return
+
+    # Перевірка hotkey для відкриття HUD (або циклінгу якщо HUD недоступний)
     if not _hotkey_codes:
-        # Fallback: Alt+F12 якщо hotkey не налаштований
         if event.key == Keys.KEY_F12 and BigWorld.isKeyDown(Keys.KEY_LALT):
-            g_controller.cycleWeatherInBattle()
+            if HAS_BATTLE_HUD:
+                open_hud()
+            else:
+                g_controller.cycleWeatherInBattle()
         return
 
     trigger_key = _hotkey_codes[-1]
@@ -229,7 +242,11 @@ def _on_key_event(event):
     for mod in modifiers:
         if not BigWorld.isKeyDown(mod):
             return
-    g_controller.cycleWeatherInBattle()
+
+    if HAS_BATTLE_HUD:
+        open_hud()
+    else:
+        g_controller.cycleWeatherInBattle()
 
 
 def _install_key_hook():
@@ -353,11 +370,11 @@ def _update_hotkey_from_codes(int_codes):
 
 def _apply_saved_settings(saved):
     """
-    ВИПРАВЛЕНО: замість g_controller.config.global_weights[pid] = ...
-    читаємо поточні ваги і встановлюємо через setGeneralWeights.
+    Відновлює загальні ваги, map-специфічні ваги і hotkey із збереженого стану.
     """
     preset_order = ['standard', 'midnight', 'overcast', 'sunset', 'midday']
 
+    # --- Загальні ваги ---
     current_general = g_controller.getGeneralWeights()
     changed = False
     for pid in preset_order:
@@ -368,12 +385,29 @@ def _apply_saved_settings(saved):
     if changed:
         g_controller.setGeneralWeights(current_general)
 
+    # --- Map-специфічні ваги ---
+    map_idx = saved.get('active_map', 0)
+    try:
+        active_map = MAP_IDS[int(map_idx)]
+    except (IndexError, TypeError, ValueError):
+        active_map = ''
+    if active_map:
+        current_map = g_controller.getMapWeights(active_map)
+        changed_map = False
+        for pid in preset_order:
+            key = 'map_' + pid
+            if key in saved:
+                current_map[pid] = int(saved[key])
+                changed_map = True
+        if changed_map:
+            g_controller.setMapWeights(active_map, current_map)
+
+    # --- Hotkey ---
     if 'hotkey' in saved:
         raw = saved['hotkey']
         if isinstance(raw, (list, tuple)) and raw:
             _update_hotkey_from_codes([int(c) for c in raw])
 
-    # Оновлюємо локальний кеш hotkey-кодів
     _load_hotkey_codes()
 
 
