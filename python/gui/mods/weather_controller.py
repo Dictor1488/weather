@@ -600,15 +600,48 @@ def find_space_settings_path(space_name):
         return None
 
 def _find_environments_json_path():
+    """
+    Повертає список шляхів куди писати environments.json.
+    Протанки кладуть в configs/protanki/ - це і є правильний шлях.
+    Також пишемо в scripts/client/mods/ як запасний варіант.
+    """
     try:
+        game_root = _resolve_game_root()
         version_dir = _find_latest_version_dir('res_mods')
-        if not version_dir:
-            return None
-        return os.path.normpath(
-            os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json'))
+        paths = []
+        # Основний шлях - configs/protanki/ (де WoT шукає environments.json)
+        if game_root:
+            version_name = os.path.basename(_find_latest_version_dir('mods') or '')
+            configs_path = os.path.normpath(
+                os.path.join(game_root, 'mods', version_name, 'configs', 'protanki', 'environments.json'))
+            paths.append(configs_path)
+        # Запасний - scripts/client/mods/
+        if version_dir:
+            paths.append(os.path.normpath(
+                os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json')))
+        return paths[0] if paths else None
     except Exception:
         LOG.error('_find_environments_json_path failed\n%s', traceback.format_exc())
         return None
+
+
+def _get_all_environments_json_paths():
+    """Повертає всі шляхи для запису environments.json."""
+    try:
+        game_root = _resolve_game_root()
+        version_dir = _find_latest_version_dir('res_mods')
+        mods_dir = _find_latest_version_dir('mods')
+        paths = []
+        if game_root and mods_dir:
+            version_name = os.path.basename(mods_dir)
+            paths.append(os.path.normpath(
+                os.path.join(game_root, 'mods', version_name, 'configs', 'protanki', 'environments.json')))
+        if version_dir:
+            paths.append(os.path.normpath(
+                os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json')))
+        return paths
+    except Exception:
+        return []
 
 def _guid_to_dot(guid):
     return guid.replace('-', '.')
@@ -688,14 +721,22 @@ def write_environments_json_for_preset(preset_id, space_name=None):
             'toogleKeyset': [-1, 88],
         }
 
-        folder = os.path.dirname(env_json_path)
-        if not os.path.isdir(folder):
-            os.makedirs(folder)
-        with open(env_json_path, 'w') as f:
-            json.dump(payload, f, indent=4, ensure_ascii=False)
+        # Пишемо в всі можливі шляхи
+        written = False
+        for path in _get_all_environments_json_paths():
+            try:
+                folder = os.path.dirname(path)
+                if not os.path.isdir(folder):
+                    os.makedirs(folder)
+                with open(path, 'w') as f:
+                    json.dump(payload, f, indent=4, ensure_ascii=False)
+                LOG.info('write_environments_json: written to %s', path)
+                written = True
+            except Exception as e:
+                LOG.warning('write_environments_json: failed to write %s: %s', path, e)
         LOG.info('write_environments_json: preset=%s guids=%s selected=%s',
                  preset_id, all_guids, selected_guid)
-        return True
+        return written
     except Exception:
         LOG.error('write_environments_json failed\n%s', traceback.format_exc())
         return False
