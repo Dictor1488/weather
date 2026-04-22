@@ -973,10 +973,8 @@ def _push_environments_to_flash(all_guids, selected_guid, space_name):
 
 def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     """
-    Live-застосування environment:
-    1. wg_prefetchSpaceZip(wotmod_path) - завантажує всі пресет-wotmod в простір
-    2. _switchEnvironment(guid) - перемикає на потрібний environment
-    Сигнатура підтверджена логом: wg_prefetchSpaceZip(path) без space_id.
+    Live-застосування environment через game.onChangeEnvironments.
+    З логу відомо: game.onChangeEnvironments, helpers.LightingGenerationMode._startLightingGeneration
     """
     if not IN_GAME:
         return False
@@ -993,43 +991,74 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     except Exception as e:
         LOG.warning('live_apply: spaceID ERR: %s', e)
 
-    if not space_id:
-        LOG.warning('live_apply: no spaceID')
-        return False
+    # Спроба 1: game.onChangeEnvironments
+    try:
+        import game as _game
+        fn = getattr(_game, 'onChangeEnvironments', None)
+        if fn:
+            LOG.info('live_apply: game.onChangeEnvironments found, trying...')
+            # Пробуємо різні аргументи
+            for args in [(guid_dot,), (preset_guid,), (env_name,),
+                         ([guid_dot],), ({guid_dot: 100},),
+                         (space_id, guid_dot), (space_name, guid_dot)]:
+                try:
+                    fn(*args)
+                    LOG.info('live_apply: game.onChangeEnvironments%s OK', args)
+                    return True
+                except Exception as e:
+                    LOG.info('live_apply: game.onChangeEnvironments%s ERR: %s', args, str(e)[:100])
+    except ImportError:
+        LOG.info('live_apply: game module not available')
+    except Exception as e:
+        LOG.warning('live_apply: game.onChangeEnvironments ERR: %s', e)
 
-    # Крок 1: завантажуємо ВСІ пресет-wotmod в простір через wg_prefetchSpaceZip
-    prefetch_fn = getattr(BigWorld, 'wg_prefetchSpaceZip', None)
-    if prefetch_fn:
-        mods_dir = _find_latest_version_dir('mods')
-        if mods_dir:
-            for pattern in PRESET_PACKAGE_PATTERNS:
-                import os as _os
-                for name in _safe_listdir(mods_dir):
-                    if PRESET_PACKAGE_PATTERNS[pattern].match(name):
-                        pkg_path = _os.path.join(mods_dir, name)
-                        try:
-                            prefetch_fn(pkg_path)
-                            LOG.info('live_apply: wg_prefetchSpaceZip(%s) OK', name)
-                        except Exception as e:
-                            LOG.info('live_apply: wg_prefetchSpaceZip(%s) ERR: %s', name, str(e)[:80])
+    # Спроба 2: helpers.LightingGenerationMode._startLightingGeneration
+    try:
+        import helpers.LightingGenerationMode as _lgm
+        fn = getattr(_lgm, '_startLightingGeneration', None)
+        if fn:
+            LOG.info('live_apply: _startLightingGeneration found, trying...')
+            for args in [(guid_dot,), (preset_guid,), (env_name,),
+                         (space_id, guid_dot), (space_name, env_name)]:
+                try:
+                    fn(*args)
+                    LOG.info('live_apply: _startLightingGeneration%s OK', args)
+                    return True
+                except Exception as e:
+                    LOG.info('live_apply: _startLightingGeneration%s ERR: %s', args, str(e)[:100])
+    except ImportError:
+        LOG.info('live_apply: helpers.LightingGenerationMode not available')
+    except Exception as e:
+        LOG.warning('live_apply: _startLightingGeneration ERR: %s', e)
 
-    # Крок 2: перемикаємо environment
+    # Спроба 3: helpers.game_mode_emulator.environment
+    try:
+        import helpers.game_mode_emulator as _gme
+        env_attr = getattr(_gme, 'environment', None)
+        if env_attr is not None:
+            LOG.info('live_apply: game_mode_emulator.environment type=%s dir=%s',
+                     type(env_attr), [a for a in dir(env_attr) if not a.startswith('_')][:15])
+    except ImportError:
+        pass
+    except Exception as e:
+        LOG.info('live_apply: game_mode_emulator ERR: %s', e)
+
+    # Спроба 4: LSEnvironmentSwitcher як запасний
     try:
         import LSArenaPhasesComponent as _ls
         sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
-        if sw_class is None:
-            return False
+        if sw_class and space_id:
+            inst = sw_class.__new__(sw_class)
+            inst._spaceID = space_id
+            inst._callbackDelayer = None
+            inst._switchEnvironment(guid_dot)
+            LOG.info('live_apply: _switchEnvironment(%s) OK', guid_dot)
+            return True
+    except Exception as e:
+        LOG.warning('live_apply: LSEnvironmentSwitcher ERR: %s', e)
 
-        inst = sw_class.__new__(sw_class)
-        inst._spaceID = space_id
-        inst._callbackDelayer = None
-        inst._switchEnvironment(guid_dot)
-        LOG.info('live_apply: _switchEnvironment(%s) OK', guid_dot)
-        return True
-
-    except Exception:
-        LOG.warning('live_apply: ERR: %s', traceback.format_exc())
-        return False
+    LOG.info('live_apply: no method worked')
+    return False
 
 
 # ---------------------------------------------------------------------------
