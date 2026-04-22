@@ -763,10 +763,153 @@ def _write_text_file(target_path, content):
 # Діагностика ArenaType і Weather — для пошуку live API
 # ---------------------------------------------------------------------------
 
+def _find_env_settings_view():
+    """Шукає Flash view EnvironmentsSettingsUI через app container."""
+    try:
+        from gui.app_loader import g_appLoader
+        app = g_appLoader.getApp()
+        if app is None:
+            return None
+        for mgr_name in ('containerManager', 'viewsManager'):
+            mgr = getattr(app, mgr_name, None)
+            if mgr is None:
+                continue
+            for alias in ('EnvironmentsSettingsUI', 'environmentsSettings',
+                          'protanki-components-environment', 'EnvironmentsBackground'):
+                try:
+                    view = (mgr.getViewByAlias(alias)
+                            if hasattr(mgr, 'getViewByAlias') else None)
+                    if view is not None:
+                        return view
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return None
+
+
+def _push_environments_to_flash(all_guids, selected_guid, space_name):
+    """
+    Передає список environment guid-ів у Flash компонент EnvironmentsSettingsUI
+    через as_setStaticData або as_setDynamicData.
+
+    Flash потім передає їх движку для завантаження в поточний простір.
+    """
+    if not IN_GAME:
+        return False
+
+    try:
+        registry = get_environment_registry()
+
+        # Будуємо StaticVO — список пресетів для відображення і завантаження
+        content_tabs = []
+        for pid in PRESET_ORDER:
+            if pid == 'standard':
+                continue
+            preset_data = registry.get(pid)
+            if not preset_data:
+                continue
+            guid = None
+            if space_name:
+                sd = preset_data.get('spaces', {}).get(space_name)
+                if sd:
+                    guid = _guid_to_dot(sd.get('guid', ''))
+            if not guid:
+                for _, sd in preset_data.get('spaces', {}).items():
+                    g = sd.get('guid')
+                    if g:
+                        guid = _guid_to_dot(g)
+                        break
+            if not guid:
+                continue
+            content_tabs.append({
+                'envName':        PRESET_LABELS.get(pid, pid),
+                'formattedValue': guid,
+                'envImage':       'res/gui/maps/icons/pro.environment/%s.png' % guid,
+                'selected':       guid == selected_guid,
+            })
+
+        static_data = {
+            'titleLabel':  u'Weather',
+            'buttonClose': u'X',
+            'buttonApply': u'Apply',
+            'buttonBack':  u'Back',
+            'contentTabs': content_tabs,
+            'environments': all_guids,
+            'selected':     selected_guid,
+            'spaceName':    space_name or '',
+        }
+
+        # Спроба 1: через Flash view as_setStaticData / as_setDynamicData
+        view = _find_env_settings_view()
+        if view is not None:
+            flash = getattr(view, 'flashObject', None)
+            if flash is not None:
+                for method in ('as_setStaticData', 'as_setDynamicData'):
+                    fn = getattr(flash, method, None)
+                    if fn:
+                        try:
+                            fn(static_data)
+                            LOG.info('_push_to_flash: %s OK', method)
+                            return True
+                        except Exception as e:
+                            LOG.info('_push_to_flash: %s ERR: %s', method, str(e)[:100])
+
+        # Спроба 2: через DAAPI напряму
+        try:
+            from gui.Scaleform.daapi.view.battle import EnvironmentsSettingsUI as _env_ui
+            inst = getattr(_env_ui, 'g_instance', None) or getattr(_env_ui, 'instance', None)
+            if inst:
+                for method in ('as_setStaticData', 'as_setDynamicData', 'setStaticData'):
+                    fn = getattr(inst, method, None)
+                    if fn:
+                        try:
+                            fn(static_data)
+                            LOG.info('_push_to_flash: DAAPI %s OK', method)
+                            return True
+                        except Exception as e:
+                            LOG.info('_push_to_flash: DAAPI %s ERR: %s', method, str(e)[:100])
+        except ImportError:
+            pass
+
+        # Спроба 3: шукаємо в sys.modules
+        try:
+            import sys
+            for mod_name, mod in list(sys.modules.items()):
+                if 'environment' not in mod_name.lower():
+                    continue
+                if mod is None:
+                    continue
+                for attr in ('g_instance', 'instance', 'g_environmentSettings'):
+                    inst = getattr(mod, attr, None)
+                    if inst is None:
+                        continue
+                    for method in ('as_setStaticData', 'as_setDynamicData'):
+                        fn = getattr(inst, method, None)
+                        if fn:
+                            try:
+                                fn(static_data)
+                                LOG.info('_push_to_flash: %s.%s.%s OK', mod_name, attr, method)
+                                return True
+                            except Exception as e:
+                                LOG.info('_push_to_flash: %s.%s.%s ERR: %s',
+                                         mod_name, attr, method, str(e)[:80])
+        except Exception as e:
+            LOG.info('_push_to_flash: sys.modules scan ERR: %s', e)
+
+        LOG.info('_push_to_flash: no Flash view found')
+        return False
+
+    except Exception:
+        LOG.error('_push_environments_to_flash failed\n%s', traceback.format_exc())
+        return False
+
+
 def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     """
-    Live-застосування environment через LSEnvironmentSwitcher._switchEnvironment
-    + spaceTimeOfDay як тригер оновлення рендеру.
+    Live-застосування environment:
+    1. _push_environments_to_flash — передає всі guid-и у Flash → движок завантажує їх
+    2. _switchEnvironment(guid) — перемикає на потрібний environment
     """
     if not IN_GAME:
         return False
@@ -789,6 +932,34 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         LOG.warning('live_apply: no spaceID')
         return False
 
+    # Збираємо всі guid-и для Flash
+    registry = get_environment_registry()
+    all_guids = []
+    for pid in PRESET_ORDER:
+        if pid == 'standard':
+            continue
+        preset_data = registry.get(pid)
+        if not preset_data:
+            continue
+        g = None
+        if space_name:
+            sd = preset_data.get('spaces', {}).get(space_name)
+            if sd:
+                g = _guid_to_dot(sd.get('guid', ''))
+        if not g:
+            for _, sd in preset_data.get('spaces', {}).items():
+                raw = sd.get('guid')
+                if raw:
+                    g = _guid_to_dot(raw)
+                    break
+        if g:
+            all_guids.append(g)
+
+    # Крок 1: передаємо всі guid-и у Flash (щоб завантажити в простір)
+    flash_ok = _push_environments_to_flash(all_guids, guid_dot, space_name)
+    LOG.info('live_apply: push_to_flash=%s', flash_ok)
+
+    # Крок 2: перемикаємо через LSEnvironmentSwitcher
     try:
         import LSArenaPhasesComponent as _ls
         sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
@@ -801,23 +972,19 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         inst._switchEnvironment(guid_dot)
         LOG.info('live_apply: _switchEnvironment(%s) OK', guid_dot)
 
-        # Тригеримо оновлення рендеру через spaceTimeOfDay
-        # Читаємо поточний час і записуємо назад — це змушує рендер
-        # перечитати поточний environment
+        # Тригер оновлення рендеру
         try:
             fn_tod = getattr(BigWorld, 'spaceTimeOfDay', None)
-            if fn_tod is not None:
+            if fn_tod:
                 current_time = fn_tod(space_id, '')
-                LOG.info('live_apply: spaceTimeOfDay current=%r', current_time)
-                # Записуємо той самий час — тригер refresh
                 fn_tod(space_id, current_time)
-                LOG.info('live_apply: spaceTimeOfDay refresh called')
+                LOG.info('live_apply: spaceTimeOfDay refresh OK')
         except Exception as e:
-            LOG.info('live_apply: spaceTimeOfDay ERR: %s', str(e)[:100])
+            LOG.info('live_apply: spaceTimeOfDay ERR: %s', str(e)[:80])
 
         return True
 
-    except Exception as e:
+    except Exception:
         LOG.warning('live_apply: ERR: %s', traceback.format_exc())
         return False
 
