@@ -554,11 +554,41 @@ def _apply_saved_settings(saved):
 # init / fini
 # ---------------------------------------------------------------------------
 
+def _patch_ls_env_switcher():
+    """Перехоплює _switchEnvironment щоб побачити як його викликає чужий мод."""
+    try:
+        import LSArenaPhasesComponent as _ls
+        sw = _ls.LSEnvironmentSwitcher
+        orig_switch = sw._switchEnvironment
+        orig_setup  = sw.setupEnvironment
+
+        def patched_switch(self, *args, **kwargs):
+            _log().info('INTERCEPT _switchEnvironment: args=%s _spaceID=%s _callbackDelayer=%s',
+                        args,
+                        getattr(self, '_spaceID', 'MISSING'),
+                        type(getattr(self, '_callbackDelayer', 'MISSING')).__name__)
+            return orig_switch(self, *args, **kwargs)
+
+        def patched_setup(self, *args, **kwargs):
+            _log().info('INTERCEPT setupEnvironment: args=%s _spaceID=%s _callbackDelayer=%s',
+                        args,
+                        getattr(self, '_spaceID', 'MISSING'),
+                        type(getattr(self, '_callbackDelayer', 'MISSING')).__name__)
+            return orig_setup(self, *args, **kwargs)
+
+        sw._switchEnvironment = patched_switch
+        sw.setupEnvironment   = patched_setup
+        _log().info('LSEnvironmentSwitcher patched for interception OK')
+    except Exception as e:
+        _log().warning('patch LSEnvSwitcher ERR: %s', e)
+
+
 def init(*args, **kwargs):
     global _INIT_DONE
     if _INIT_DONE:
         return
 
+    _patch_ls_env_switcher()
     _load_hotkey_codes()
     _install_battle_space_hook()
     _install_key_hook()
