@@ -76,8 +76,11 @@ ENV_XML_RE = re.compile(
     r"^res/spaces/([^/]+)/environments/([A-Fa-f0-9\-]+)/environment\.xml$",
     re.I
 )
-ENV_NAME_RE_OLD = re.compile(r"<n>\s*([^<]+?)\s*</n>",  re.I | re.S)
-ENV_NAME_RE_NEW = re.compile(r"<n>\t([^\t<]+)\t</n>",   re.I)
+# v1.9+: env name stored in <name>value</name>
+# legacy: env name stored in <n>value</n>
+# Tonemapping names (RexpTM, FilmicTM, LinearExpTM) are in <n> tags - ignored
+ENV_NAME_RE_FULL = re.compile('<name>\\t([^\\t<]+)\\t</name>', re.I)
+ENV_NAME_RE_OLD  = re.compile('<n>\\s*([^<]+?)\\s*</n>', re.I | re.S)
 _ENV_NAME_SKIP  = frozenset(['RexpTM', 'FilmicTM', 'LinearExpTM'])
 ROOT_ENV_RE          = re.compile(r'(<environment>)([^<]*)(</environment>)',                 re.I)
 ROOT_ENV_OVERRIDE_RE = re.compile(r'(<environmentOverride>)([^<]*)(</environmentOverride>)', re.I)
@@ -225,13 +228,20 @@ def _find_latest_version_dir(root_name):
 # ---------------------------------------------------------------------------
 
 def _extract_env_name(xml_bytes):
+    """
+    Витягує назву environment з environment.xml.
+    v1.9+: назва в <name>value</name>  (наприклад Night_01, 02_Sunset)
+    legacy: назва в <n>value</n>
+    """
     try:
         xml_text = (xml_bytes.decode('utf-8', 'ignore')
                     if not isinstance(xml_bytes, basestring) else xml_bytes)
-        for m in ENV_NAME_RE_NEW.finditer(xml_text):
+        # Спроба 1: v1.9 — <name>\tvalue\t</name>
+        for m in ENV_NAME_RE_FULL.finditer(xml_text):
             val = m.group(1).strip()
             if val and val not in _ENV_NAME_SKIP and '/' not in val:
                 return val
+        # Спроба 2: legacy — <n>value</n>
         for m in ENV_NAME_RE_OLD.finditer(xml_text):
             val = m.group(1).strip()
             if val and val not in _ENV_NAME_SKIP and '/' not in val:
