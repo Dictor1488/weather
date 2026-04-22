@@ -787,20 +787,16 @@ def _diagnose_arena_type_once(space_name, preset_guid):
 
 def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     """
-    Спробує застосувати environment LIVE в бою.
+    Live-застосування environment через LSEnvironmentSwitcher.
 
+    LSEnvironmentSwitcher — клас WoT для перемикання environment/освітлення в бою.
     З логу відомо:
-    - Weather.s_weather — живий singleton Weather системи
-    - Weather.weather() — callable, можливо приймає guid/env_name
-    - LSEnvironmentSwitcher.setupEnvironment — unbound method (потрібен instance)
-    - LSEnvironmentSwitcher._switchEnvironment — unbound method (потрібен instance)
+    - _switchEnvironment(self, guid) — приймає рівно 1 аргумент (guid з крапками)
+    - setupEnvironment(self, ...) — потребує _callbackDelayer
+    - Обидва потребують _spaceID і _callbackDelayer в instance
 
-    Порядок спроб:
-    1. Weather.s_weather — пряме звернення до живого Weather instance
-    2. Weather.weather() — callable функція
-    3. WeatherSystem() — клас системи погоди
-    4. LSEnvironmentSwitcher через entity components в поточному просторі
-    5. BigWorld.spaceTimeOfDay як тригер refresh (читання поточного часу і запис назад)
+    Стратегія: створюємо instance через __new__, встановлюємо _spaceID вручну,
+    для _callbackDelayer пробуємо None і реальний delayer з BigWorld.
     """
     if not IN_GAME:
         return False
@@ -808,141 +804,83 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     _diagnose_arena_type_once(space_name, preset_guid)
 
     guid_dot = _guid_to_dot(preset_guid) if preset_guid else None
+    if not guid_dot:
+        return False
 
-    # --- Спроба 1: Weather.s_weather singleton ---
+    # Отримуємо spaceID
+    space_id = None
     try:
-        import Weather as _w
-        s_weather = getattr(_w, 's_weather', None)
-        if s_weather is not None:
-            LOG.info('live_apply: Weather.s_weather type=%s dir=%s',
-                     type(s_weather), [a for a in dir(s_weather) if not a.startswith('_')])
-            for method_name in ('setEnvironment', 'setPreset', 'overrideEnvironment',
-                                'applyEnvironment', 'setGUID', 'setWeatherGUID',
-                                'overrideGUID', 'switchTo', 'forceEnvironment',
-                                'setEnvironmentGUID', 'setup', 'init'):
-                method = getattr(s_weather, method_name, None)
-                if method is None:
-                    continue
-                for args in [(guid_dot,), (preset_guid,), (env_name,),
-                             (space_name, guid_dot), (guid_dot, env_name)]:
-                    try:
-                        method(*args)
-                        LOG.info('live_apply: s_weather.%s%s OK', method_name, args)
-                        return True
-                    except Exception as e:
-                        LOG.info('live_apply: s_weather.%s%s ERR: %s', method_name, args, str(e)[:80])
-    except ImportError:
-        pass
+        player = BigWorld.player()
+        if player:
+            space_id = getattr(player, 'spaceID', None)
+        if not space_id and hasattr(BigWorld, 'spaceID'):
+            space_id = BigWorld.spaceID()
     except Exception as e:
-        LOG.warning('live_apply: s_weather ERR: %s', e)
+        LOG.info('live_apply: spaceID ERR: %s', e)
 
-    # --- Спроба 2: Weather.weather() функція ---
-    try:
-        import Weather as _w
-        weather_fn = getattr(_w, 'weather', None)
-        if callable(weather_fn):
-            # Спробуємо отримати instance через функцію
-            try:
-                inst = weather_fn()
-                LOG.info('live_apply: Weather.weather() returned type=%s', type(inst))
-                if inst is not None:
-                    for method_name in ('setEnvironment', 'setPreset', 'overrideEnvironment',
-                                        'applyEnvironment', 'setGUID', 'setup'):
-                        method = getattr(inst, method_name, None)
-                        if method is None:
-                            continue
-                        for args in [(guid_dot,), (preset_guid,), (env_name,)]:
-                            try:
-                                method(*args)
-                                LOG.info('live_apply: weather().%s%s OK', method_name, args)
-                                return True
-                            except Exception as e:
-                                LOG.info('live_apply: weather().%s%s ERR: %s', method_name, args, str(e)[:80])
-            except Exception as e:
-                LOG.info('live_apply: Weather.weather() call ERR: %s', e)
-    except ImportError:
-        pass
-    except Exception as e:
-        LOG.warning('live_apply: Weather.weather ERR: %s', e)
+    if not space_id:
+        LOG.warning('live_apply: no spaceID available')
+        return False
 
-    # --- Спроба 3: WeatherSystem ---
-    try:
-        import Weather as _w
-        ws_class = getattr(_w, 'WeatherSystem', None)
-        if ws_class is not None:
-            LOG.info('live_apply: WeatherSystem type=%s dir=%s',
-                     type(ws_class), [a for a in dir(ws_class) if not a.startswith('_')])
-    except Exception as e:
-        LOG.info('live_apply: WeatherSystem scan ERR: %s', e)
-
-    # --- Спроба 4: LSEnvironmentSwitcher через BigWorld entities ---
-    # LSEnvironmentSwitcher - unbound method, потрібен живий instance
-    # Шукаємо його серед entity components поточного простору
+    # --- LSEnvironmentSwitcher ---
     try:
         import LSArenaPhasesComponent as _ls
         sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
-        if sw_class is not None:
-            # Спробуємо знайти instance в поточних entities
-            try:
-                entities = BigWorld.entities.values() if hasattr(BigWorld, 'entities') else []
-                for entity in entities:
-                    components = getattr(entity, 'components', None) or []
-                    for comp in components:
-                        if isinstance(comp, sw_class):
-                            LOG.info('live_apply: found LSEnvironmentSwitcher instance in entity')
-                            for method_name in ('setupEnvironment', '_switchEnvironment'):
-                                method = getattr(comp, method_name, None)
-                                if method:
-                                    try:
-                                        method(guid_dot or preset_guid)
-                                        LOG.info('live_apply: LSEnvSwitcher instance.%s OK', method_name)
-                                        return True
-                                    except Exception as e:
-                                        LOG.info('live_apply: LSEnvSwitcher instance.%s ERR: %s', method_name, e)
-            except Exception as e:
-                LOG.info('live_apply: LSEnvSwitcher entity search ERR: %s', e)
+        if sw_class is None:
+            LOG.warning('live_apply: LSEnvironmentSwitcher not found')
+            return False
 
-            # Спробуємо напряму як unbound зі створенням instance
+        inst = sw_class.__new__(sw_class)
+        inst._spaceID = space_id
+
+        # Пробуємо різні варіанти _callbackDelayer
+        delayer_candidates = [None]
+        # Спробуємо отримати реальний CallbackDelayer з BigWorld
+        try:
+            if hasattr(BigWorld, 'CallbackDelayer'):
+                delayer_candidates.append(BigWorld.CallbackDelayer())
+        except Exception:
+            pass
+        try:
+            import CallbackDelayer
+            delayer_candidates.append(CallbackDelayer.CallbackDelayer())
+        except Exception:
+            pass
+
+        for delayer in delayer_candidates:
             try:
-                inst = sw_class.__new__(sw_class)
-                for method_name in ('setupEnvironment', '_switchEnvironment'):
-                    method = getattr(inst, method_name, None)
-                    if method:
-                        for args in [(guid_dot,), (preset_guid,), (env_name,),
-                                     (space_name, guid_dot)]:
-                            try:
-                                method(*args)
-                                LOG.info('live_apply: LSEnvSwitcher.__new__.%s%s OK', method_name, args)
-                                return True
-                            except Exception as e:
-                                LOG.info('live_apply: LSEnvSwitcher.__new__.%s%s ERR: %s',
-                                         method_name, args, str(e)[:80])
+                inst._callbackDelayer = delayer
+                inst._switchEnvironment(guid_dot)
+                LOG.info('live_apply: LSEnvSwitcher._switchEnvironment(%s) OK with delayer=%s',
+                         guid_dot, delayer)
+                return True
             except Exception as e:
-                LOG.info('live_apply: LSEnvSwitcher __new__ ERR: %s', e)
+                err = str(e)[:120]
+                LOG.info('live_apply: LSEnvSwitcher._switchEnvironment ERR (delayer=%s): %s',
+                         delayer, err)
+                # Якщо помилка вже не про атрибут — більше спроб не потрібно
+                if '_callbackDelayer' not in err and '_spaceID' not in err:
+                    LOG.info('live_apply: got new error type, stopping: %s', err)
+                    break
+
+        # Спроба setupEnvironment з тим самим підходом
+        for delayer in delayer_candidates:
+            try:
+                inst._callbackDelayer = delayer
+                inst.setupEnvironment(guid_dot)
+                LOG.info('live_apply: LSEnvSwitcher.setupEnvironment(%s) OK', guid_dot)
+                return True
+            except Exception as e:
+                err = str(e)[:120]
+                LOG.info('live_apply: LSEnvSwitcher.setupEnvironment ERR (delayer=%s): %s',
+                         delayer, err)
+                if '_callbackDelayer' not in err and '_spaceID' not in err:
+                    break
+
     except ImportError:
-        pass
+        LOG.warning('live_apply: LSArenaPhasesComponent not available')
     except Exception as e:
-        LOG.warning('live_apply: LSEnvSwitcher ERR: %s', e)
-
-    # --- Спроба 5: BigWorld.spaceTimeOfDay як тригер ---
-    # Читаємо поточний час і записуємо назад — можливо тригерить refresh environment
-    try:
-        space_id = _get_current_space_id()
-        if space_id:
-            fn_tod = getattr(BigWorld, 'spaceTimeOfDay', None)
-            if fn_tod is not None:
-                try:
-                    # Спочатку логуємо сигнатуру
-                    current = fn_tod(space_id, '')
-                    LOG.info('live_apply: spaceTimeOfDay(%s, "") = %s type=%s',
-                             space_id, current, type(current))
-                    # Записуємо назад той самий час — якщо це тригерить рендер-refresh
-                    fn_tod(space_id, current)
-                    LOG.info('live_apply: spaceTimeOfDay refresh called')
-                except Exception as e:
-                    LOG.info('live_apply: spaceTimeOfDay ERR: %s', str(e)[:120])
-    except Exception as e:
-        LOG.info('live_apply: spaceTimeOfDay block ERR: %s', e)
+        LOG.error('live_apply: LSEnvironmentSwitcher block ERR: %s', traceback.format_exc())
 
     LOG.info('live_apply: no live method worked for preset=%s', preset_id)
     return False
