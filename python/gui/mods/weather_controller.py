@@ -985,11 +985,28 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         pkg_path = preset_data.get('package_path', '')
         prefetch_fn = getattr(BigWorld, 'wg_prefetchSpaceZip', None)
         if prefetch_fn and pkg_path and os.path.isfile(pkg_path):
+            # Пробуємо всі варіанти сигнатури
+            for args in [(space_id, pkg_path),
+                         (pkg_path,),
+                         (space_id, pkg_path, True),
+                         (space_id, pkg_path, False),
+                         (space_id, pkg_path, 0),
+                         (space_id, pkg_path, 1)]:
+                try:
+                    prefetch_fn(*args)
+                    LOG.info('live_apply: wg_prefetchSpaceZip%s OK', args)
+                    break
+                except Exception as e:
+                    LOG.info('live_apply: wg_prefetchSpaceZip%s ERR: %s', args, str(e)[:200])
+
+        # Також пробуємо notifySpaceChange
+        notify_fn = getattr(BigWorld, 'notifySpaceChange', None)
+        if notify_fn:
             try:
-                prefetch_fn(space_id, pkg_path)
-                LOG.info('live_apply: wg_prefetchSpaceZip(%s) called', pkg_path)
+                notify_fn(space_id)
+                LOG.info('live_apply: notifySpaceChange(%s) OK', space_id)
             except Exception as e:
-                LOG.info('live_apply: wg_prefetchSpaceZip ERR: %s', str(e)[:100])
+                LOG.info('live_apply: notifySpaceChange ERR: %s', str(e)[:100])
 
     # Спроба 2: LSEnvironmentSwitcher
     try:
