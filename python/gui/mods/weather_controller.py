@@ -438,26 +438,30 @@ def load_config():
     load_environment_registry(force=True)
     logger.info('config loaded from %s, preset=%s', CONFIG_PATH, saved_preset)
 
-    # Діагностика ResMgr - шукаємо метод для монтування res_mods/spaces/
+    # Пробуємо змінити space.settings через ResMgr.openSection + save
     if IN_GAME:
         try:
-            resmgr_methods = [a for a in dir(ResMgr) if not a.startswith('_')]
-            logger.info('ResMgr methods: %s', resmgr_methods)
-            # Спробуємо примонтувати spaces/ з вищим пріоритетом
-            version_dir = _find_latest_version_dir('res_mods')
-            if version_dir:
-                spaces_path = os.path.join(version_dir, 'spaces')
-                for method_name in ('addPath', 'appendPath', 'mount',
-                                    'addZipFile', 'addResPath', 'pushPath'):
-                    fn = getattr(ResMgr, method_name, None)
-                    if fn:
-                        try:
-                            fn(spaces_path)
-                            logger.info('ResMgr.%s(%s) OK', method_name, spaces_path)
-                        except Exception as e:
-                            logger.info('ResMgr.%s ERR: %s', method_name, str(e)[:100])
+            # Тест: читаємо і зберігаємо space.settings через VFS
+            test_space = 'spaces/01_karelia/space.settings'
+            section = ResMgr.openSection(test_space)
+            if section is not None:
+                logger.info('ResMgr.openSection OK: %s, keys=%s',
+                            test_space, list(section.keys())[:10])
+                # Перевіримо чи є environment тег
+                env = section.get('environment')
+                env_override = section.get('environmentOverride')
+                logger.info('ResMgr space.settings: environment=%s, environmentOverride=%s',
+                            env, env_override)
+                # Спробуємо записати через ResMgr.save
+                try:
+                    result = ResMgr.save(section, test_space)
+                    logger.info('ResMgr.save result=%s', result)
+                except Exception as e:
+                    logger.info('ResMgr.save ERR: %s', str(e)[:100])
+            else:
+                logger.warning('ResMgr.openSection returned None for %s', test_space)
         except Exception as e:
-            logger.warning('ResMgr check ERR: %s', e)
+            logger.warning('ResMgr openSection ERR: %s', e)
 
     return _cfg
 
