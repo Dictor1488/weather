@@ -840,18 +840,24 @@ def apply_environment_wg_api(space_id, env_name, preset_guid, space_name=None):
 
     _log_bigworld_env_api_once()
 
-    # Спроба 1: notifySpaceChange(unicode) — перечитує space.settings live
-    # Сигнатура: (arg0: unicode) -> None  — передаємо space_name або str(spaceID)
+    # Спроба 1: notifySpaceChange(unicode) — різні формати аргументу
+    # Сигнатура: (arg0: unicode) -> None
     fn1 = getattr(BigWorld, 'notifySpaceChange', None)
     if fn1 is not None:
-        # Пробуємо space_name спочатку, потім str(spaceID)
-        for arg in filter(None, [space_name, str(space_id)]):
+        # Пробуємо всі можливі формати: space_name, virtual path, str(spaceID)
+        candidates = []
+        if space_name:
+            candidates.append(space_name)                        # '14_siegfried_line'
+            candidates.append('spaces/' + space_name)            # 'spaces/14_siegfried_line'
+            candidates.append('res/spaces/' + space_name)        # 'res/spaces/14_siegfried_line'
+        candidates.append(str(space_id))                         # '20'
+        for arg in candidates:
             try:
                 fn1(arg)
                 LOG.info('apply_env_wg: notifySpaceChange(%r) OK', arg)
                 return True
             except Exception as e:
-                LOG.info('apply_env_wg: notifySpaceChange(%r) ERR: %s', arg, str(e)[:200])
+                LOG.info('apply_env_wg: notifySpaceChange(%r) ERR: %s', arg, str(e)[:120])
 
     # Спроба 2: spaceTimeOfDay(int, unicode) → читаємо поточний час, потім тригеримо refresh
     fn_tod = getattr(BigWorld, 'spaceTimeOfDay', None)
@@ -864,6 +870,58 @@ def apply_environment_wg_api(space_id, env_name, preset_guid, space_name=None):
             return True
         except Exception as e:
             LOG.info('apply_env_wg: wg_setHourOfDay ERR: %s', str(e)[:200])
+
+    # Спроба 3: пряме звернення до вбудованого EnvironmentsSettings Python модуля
+    # Він має прямий доступ до C++ EnvironmentManager без файлових операцій
+    try:
+        import sys
+        guid_dot = _guid_to_dot(preset_guid) if preset_guid else None
+
+        # Крок 1: знаходимо всі environment-related модулі (один раз логуємо)
+        if not getattr(apply_environment_wg_api, '_modules_logged', False):
+            apply_environment_wg_api._modules_logged = True
+            env_mods = [n for n in sys.modules if 'environ' in n.lower() or 'weather' in n.lower()]
+            LOG.info('apply_env_wg: environment modules in sys.modules: %s', env_mods)
+
+        # Крок 2: пробуємо відомі шляхи до EnvironmentsSettings
+        candidates = [
+            'EnvironmentsSettings',
+            'mods.EnvironmentsSettings',
+            'gui.Scaleform.daapi.view.battle.EnvironmentsSettingsUI',
+            'gui.Scaleform.daapi.view.lobby.EnvironmentsSettingsUI',
+        ]
+        for mod_name in candidates:
+            mod = sys.modules.get(mod_name)
+            if mod is None:
+                try:
+                    mod = __import__(mod_name)
+                except Exception:
+                    continue
+            if mod is None:
+                continue
+            # Шукаємо singleton або функцію зміни environment
+            for attr_name in ('g_instance', 'g_environmentsSettings', 'instance'):
+                instance = getattr(mod, attr_name, None)
+                if instance is None:
+                    continue
+                LOG.info('apply_env_wg: found %s.%s = %s', mod_name, attr_name, type(instance))
+                # Пробуємо методи зміни
+                for method_name in ('setOverride', 'setEnvironmentOverride',
+                                    'overrideEnvironment', 'applyPreset',
+                                    'setPreset', 'selectEnvironment'):
+                    method = getattr(instance, method_name, None)
+                    if method is None:
+                        continue
+                    try:
+                        method(guid_dot or preset_guid)
+                        LOG.info('apply_env_wg: %s.%s.%s(%s) OK',
+                                 mod_name, attr_name, method_name, guid_dot)
+                        return True
+                    except Exception as e:
+                        LOG.info('apply_env_wg: %s.%s.%s ERR: %s',
+                                 mod_name, attr_name, method_name, str(e)[:120])
+    except Exception as e:
+        LOG.warning('apply_env_wg: module scan ERR: %s', e)
 
     LOG.warning('apply_env_wg: no working WG API found')
     return False
@@ -995,9 +1053,12 @@ def apply_environment_via_packages(space_name, preset_id):
             settings_content = _patch_space_settings_template(
                 templates.get('space_settings'), env_name, preset_guid)
             if settings_content:
-                _write_text_file(space_settings_path, settings_content)
+                ok = _write_text_file(space_settings_path, settings_content)
+                LOG.info('apply_env: space.settings write=%s path=%s', ok, space_settings_path)
             else:
                 LOG.warning('apply_env: WG template not found for %s', space_name)
+        else:
+            LOG.warning('apply_env: space_settings_path is None for %s', space_name)
 
         # --- Live зміна (тільки в бою) ---
         space_id = _get_current_space_id()
