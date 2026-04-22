@@ -682,126 +682,16 @@ def _write_text_file(target_path, content):
 # Діагностика ArenaType і Weather — для пошуку live API
 # ---------------------------------------------------------------------------
 
-def _diagnose_arena_type_once(space_name, preset_guid):
-    """
-    Одноразово логує все що є в ArenaType і Weather модулях.
-    Результат логу покаже правильний метод для live-зміни environment.
-    """
-    if getattr(_diagnose_arena_type_once, '_done', False):
-        return
-    _diagnose_arena_type_once._done = True
-
-    # --- ArenaType ---
-    try:
-        import ArenaType as _at
-        LOG.info('DIAG ArenaType: dir=%s', [a for a in dir(_at) if not a.startswith('__')])
-
-        g_cache = getattr(_at, 'g_cache', None)
-        if g_cache is not None:
-            LOG.info('DIAG ArenaType.g_cache type=%s len=%s', type(g_cache),
-                     len(g_cache) if hasattr(g_cache, '__len__') else '?')
-            for key, val in list(g_cache.items())[:2]:
-                attrs = [a for a in dir(val) if not a.startswith('__')]
-                LOG.info('DIAG ArenaType cache[%s] type=%s attrs=%s', key, type(val), attrs)
-                # Всі атрибути що пов'язані з environment/weather/preset
-                for attr in attrs:
-                    if any(k in attr.lower() for k in ('weather', 'environ', 'preset',
-                                                        'override', 'lighting', 'skybox')):
-                        try:
-                            v = getattr(val, attr)
-                            LOG.info('DIAG ArenaType.%s = %s (type=%s)', attr, v, type(v))
-                        except Exception as e:
-                            LOG.info('DIAG ArenaType.%s ERR: %s', attr, e)
-    except Exception as e:
-        LOG.info('DIAG ArenaType scan ERR: %s', e)
-
-    # --- Weather модуль ---
-    try:
-        import Weather as _w
-        LOG.info('DIAG Weather: dir=%s', [a for a in dir(_w) if not a.startswith('__')])
-        for attr in dir(_w):
-            if not attr.startswith('__'):
-                try:
-                    v = getattr(_w, attr)
-                    if callable(v):
-                        LOG.info('DIAG Weather.%s (callable)', attr)
-                    else:
-                        LOG.info('DIAG Weather.%s = %s', attr, v)
-                except Exception:
-                    pass
-
-        # Детально логуємо s_weather instance
-        s_weather = getattr(_w, 's_weather', None)
-        if s_weather is not None:
-            sw_attrs = [a for a in dir(s_weather) if not a.startswith('_')]
-            LOG.info('DIAG s_weather attrs: %s', sw_attrs)
-            for attr in sw_attrs:
-                try:
-                    v = getattr(s_weather, attr)
-                    LOG.info('DIAG s_weather.%s = %s (callable=%s)', attr, v, callable(v))
-                except Exception as e:
-                    LOG.info('DIAG s_weather.%s ERR: %s', attr, e)
-
-        # Детально WeatherSystem
-        ws = getattr(_w, 'WeatherSystem', None)
-        if ws is not None:
-            ws_attrs = [a for a in dir(ws) if not a.startswith('_')]
-            LOG.info('DIAG WeatherSystem attrs: %s', ws_attrs)
-
-    except ImportError:
-        LOG.info('DIAG Weather: module not available')
-    except Exception as e:
-        LOG.info('DIAG Weather scan ERR: %s', e)
-
-    # --- LSEnvironmentSwitcher ---
-    try:
-        import LSArenaPhasesComponent as _ls
-        sw = getattr(_ls, 'LSEnvironmentSwitcher', None)
-        if sw is not None:
-            LOG.info('DIAG LSEnvironmentSwitcher type=%s', type(sw))
-            attrs = [a for a in dir(sw) if not a.startswith('__')]
-            LOG.info('DIAG LSEnvironmentSwitcher attrs=%s', attrs)
-            for attr in attrs:
-                try:
-                    v = getattr(sw, attr)
-                    LOG.info('DIAG LSEnvironmentSwitcher.%s = %s (callable=%s)',
-                             attr, v, callable(v))
-                except Exception as e:
-                    LOG.info('DIAG LSEnvironmentSwitcher.%s ERR: %s', attr, e)
-        else:
-            LOG.info('DIAG LSEnvironmentSwitcher: not found in LSArenaPhasesComponent')
-    except ImportError:
-        LOG.info('DIAG LSArenaPhasesComponent: module not available')
-    except Exception as e:
-        LOG.info('DIAG LSEnvironmentSwitcher scan ERR: %s', e)
-
-    # --- BigWorld env methods (повний список) ---
-    try:
-        env_methods = [m for m in dir(BigWorld)
-                       if any(k in m.lower() for k in ('env', 'space', 'reload', 'weather'))
-                       and callable(getattr(BigWorld, m, None))]
-        LOG.info('DIAG BigWorld env/space methods: %s', env_methods)
-    except Exception as e:
-        LOG.info('DIAG BigWorld methods ERR: %s', e)
-
-
 def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     """
-    Live-застосування environment через LSEnvironmentSwitcher.
+    Live-застосування environment:
+    1. addSpaceGeometryMapping — завантажує environment wotmod в живий простір
+    2. _switchEnvironment(guid) — перемикає на завантажений environment
 
-    LSEnvironmentSwitcher — клас WoT для перемикання environment/освітлення в бою.
-    З логу відомо:
-    - _switchEnvironment(self, guid) — приймає рівно 1 аргумент (guid з крапками)
-    - setupEnvironment(self, ...) — потребує _callbackDelayer
-    - Обидва потребують _spaceID і _callbackDelayer в instance
-
-    Стратегія: створюємо instance через __new__, встановлюємо _spaceID вручну,
-    для _callbackDelayer пробуємо None і реальний delayer з BigWorld.
+    Без кроку 1 _switchEnvironment не має ефекту бо guid невідомий простору.
     """
     if not IN_GAME:
         return False
-
-    _diagnose_arena_type_once(space_name, preset_guid)
 
     guid_dot = _guid_to_dot(preset_guid) if preset_guid else None
     if not guid_dot:
@@ -816,13 +706,41 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         if not space_id and hasattr(BigWorld, 'spaceID'):
             space_id = BigWorld.spaceID()
     except Exception as e:
-        LOG.info('live_apply: spaceID ERR: %s', e)
+        LOG.warning('live_apply: spaceID ERR: %s', e)
 
     if not space_id:
-        LOG.warning('live_apply: no spaceID available')
+        LOG.warning('live_apply: no spaceID')
         return False
 
-    # --- LSEnvironmentSwitcher ---
+    # --- Крок 1: завантажуємо environment в простір через addSpaceGeometryMapping ---
+    # guid в wotmod зберігається з дефісами: 56BA3213-40FFB1DF-125FBCAD-173E8347
+    guid_dash = preset_guid  # вже з дефісами з реєстру
+
+    # Virtual paths через які VFS бачить environment з wotmod
+    virtual_paths = [
+        'spaces/%s/environments/%s' % (space_name, guid_dash),
+        'spaces/%s/environments/%s' % (space_name, guid_dot),
+        'res/spaces/%s/environments/%s' % (space_name, guid_dash),
+    ]
+
+    geometry_handle = None
+    try:
+        import Math
+        identity = Math.Matrix()
+        identity.setIdentity()
+
+        for vpath in virtual_paths:
+            try:
+                handle = BigWorld.addSpaceGeometryMapping(space_id, identity, vpath)
+                LOG.info('live_apply: addSpaceGeometryMapping(%s) OK handle=%s', vpath, handle)
+                geometry_handle = handle
+                break
+            except Exception as e:
+                LOG.info('live_apply: addSpaceGeometryMapping(%s) ERR: %s', vpath, str(e)[:80])
+    except Exception as e:
+        LOG.warning('live_apply: Math.Matrix ERR: %s', e)
+
+    # --- Крок 2: перемикаємо environment через LSEnvironmentSwitcher ---
     try:
         import LSArenaPhasesComponent as _ls
         sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
@@ -832,58 +750,13 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
 
         inst = sw_class.__new__(sw_class)
         inst._spaceID = space_id
-
-        # Пробуємо різні варіанти _callbackDelayer
-        delayer_candidates = [None]
-        # Спробуємо отримати реальний CallbackDelayer з BigWorld
-        try:
-            if hasattr(BigWorld, 'CallbackDelayer'):
-                delayer_candidates.append(BigWorld.CallbackDelayer())
-        except Exception:
-            pass
-        try:
-            import CallbackDelayer
-            delayer_candidates.append(CallbackDelayer.CallbackDelayer())
-        except Exception:
-            pass
-
-        for delayer in delayer_candidates:
-            try:
-                inst._callbackDelayer = delayer
-                inst._switchEnvironment(guid_dot)
-                LOG.info('live_apply: LSEnvSwitcher._switchEnvironment(%s) OK with delayer=%s',
-                         guid_dot, delayer)
-                return True
-            except Exception as e:
-                err = str(e)[:120]
-                LOG.info('live_apply: LSEnvSwitcher._switchEnvironment ERR (delayer=%s): %s',
-                         delayer, err)
-                # Якщо помилка вже не про атрибут — більше спроб не потрібно
-                if '_callbackDelayer' not in err and '_spaceID' not in err:
-                    LOG.info('live_apply: got new error type, stopping: %s', err)
-                    break
-
-        # Спроба setupEnvironment з тим самим підходом
-        for delayer in delayer_candidates:
-            try:
-                inst._callbackDelayer = delayer
-                inst.setupEnvironment(guid_dot)
-                LOG.info('live_apply: LSEnvSwitcher.setupEnvironment(%s) OK', guid_dot)
-                return True
-            except Exception as e:
-                err = str(e)[:120]
-                LOG.info('live_apply: LSEnvSwitcher.setupEnvironment ERR (delayer=%s): %s',
-                         delayer, err)
-                if '_callbackDelayer' not in err and '_spaceID' not in err:
-                    break
-
-    except ImportError:
-        LOG.warning('live_apply: LSArenaPhasesComponent not available')
+        inst._callbackDelayer = None
+        inst._switchEnvironment(guid_dot)
+        LOG.info('live_apply: _switchEnvironment(%s) OK', guid_dot)
+        return True
     except Exception as e:
-        LOG.error('live_apply: LSEnvironmentSwitcher block ERR: %s', traceback.format_exc())
-
-    LOG.info('live_apply: no live method worked for preset=%s', preset_id)
-    return False
+        LOG.warning('live_apply: _switchEnvironment ERR: %s', traceback.format_exc())
+        return False
 
 
 # ---------------------------------------------------------------------------
