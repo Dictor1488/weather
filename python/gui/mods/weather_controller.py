@@ -614,52 +614,92 @@ def _guid_to_dot(guid):
     return guid.replace('-', '.')
 
 def write_environments_json_for_preset(preset_id, space_name=None):
+    """
+    Пише environments.json з УСІМА guid-ами всіх пресетів.
+    WoT читає цей файл і завантажує всі перелічені environment-и в простір.
+    Після цього _switchEnvironment може перемикати між ними live.
+
+    randomizer визначає який пресет обрати при вході (вага 100 = обраний).
+    """
     try:
         env_json_path = _find_environments_json_path()
         if not env_json_path:
             return False
-        if not preset_id or preset_id == 'standard':
-            if os.path.isfile(env_json_path):
-                try:
-                    os.remove(env_json_path)
-                    LOG.info('write_environments_json: removed override')
-                except Exception:
-                    LOG.error('write_environments_json: remove failed\n%s', traceback.format_exc())
-            return True
-        registry    = get_environment_registry()
-        preset_data = registry.get(preset_id)
-        if not preset_data:
+
+        registry = get_environment_registry()
+
+        # Збираємо всі guid-и для поточної карти (або глобальні якщо карта невідома)
+        all_guids = []
+        labels = {}
+
+        for pid in PRESET_ORDER:
+            if pid == 'standard':
+                continue
+            preset_data = registry.get(pid)
+            if not preset_data:
+                continue
+            # Беремо guid для конкретної карти якщо є, інакше перший доступний
+            guid = None
+            if space_name:
+                sd = preset_data.get('spaces', {}).get(space_name)
+                if sd:
+                    guid = _guid_to_dot(sd.get('guid', ''))
+            if not guid:
+                for _, sd in preset_data.get('spaces', {}).items():
+                    g = sd.get('guid')
+                    if g:
+                        guid = _guid_to_dot(g)
+                        break
+            if guid:
+                all_guids.append(guid)
+                labels[guid] = PRESET_LABELS.get(pid, pid)
+
+        if not all_guids:
+            LOG.warning('write_environments_json: no guids found')
             return False
-        guid = None
-        if space_name:
-            sd = preset_data.get('spaces', {}).get(space_name)
-            if sd:
-                guid = sd.get('guid')
-        if not guid:
-            for _, sd in preset_data.get('spaces', {}).items():
-                guid = sd.get('guid')
-                if guid:
-                    break
-        if not guid:
-            return False
-        guid_dot = _guid_to_dot(guid)
+
+        # Визначаємо ваги — обраний пресет = 100, інші = 0
+        # (randomizer вибирає environment при завантаженні карти)
+        common_weights = {'default': 0}
+        selected_guid = None
+
+        if preset_id and preset_id != 'standard':
+            preset_data = registry.get(preset_id)
+            if preset_data:
+                if space_name:
+                    sd = preset_data.get('spaces', {}).get(space_name)
+                    if sd:
+                        selected_guid = _guid_to_dot(sd.get('guid', ''))
+                if not selected_guid:
+                    for _, sd in preset_data.get('spaces', {}).items():
+                        g = sd.get('guid')
+                        if g:
+                            selected_guid = _guid_to_dot(g)
+                            break
+
+        for guid in all_guids:
+            common_weights[guid] = 100 if guid == selected_guid else 0
+
         payload = {
-            "enabled":    True,
-            "environments": [guid_dot],
-            "labels":     {guid_dot: PRESET_LABELS.get(preset_id, preset_id)},
-            "randomizer": {"advanced": {}, "common": {guid_dot: 100, "default": 0}},
-            "toggleKeyset": [-1, 88],
+            'enabled':    True,
+            'environments': all_guids,
+            'labels':     labels,
+            'randomizer': {'advanced': {}, 'common': common_weights},
+            'toogleKeyset': [-1, 88],
         }
+
         folder = os.path.dirname(env_json_path)
         if not os.path.isdir(folder):
             os.makedirs(folder)
         with open(env_json_path, 'w') as f:
             json.dump(payload, f, indent=4, ensure_ascii=False)
-        LOG.info('write_environments_json: preset=%s guid=%s', preset_id, guid_dot)
+        LOG.info('write_environments_json: preset=%s guids=%s selected=%s',
+                 preset_id, all_guids, selected_guid)
         return True
     except Exception:
         LOG.error('write_environments_json failed\n%s', traceback.format_exc())
         return False
+
 
 def _write_text_file(target_path, content):
     try:
@@ -684,11 +724,8 @@ def _write_text_file(target_path, content):
 
 def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     """
-    Live-застосування environment:
-    1. addSpaceGeometryMapping — завантажує environment wotmod в живий простір
-    2. _switchEnvironment(guid) — перемикає на завантажений environment
-
-    Без кроку 1 _switchEnvironment не має ефекту бо guid невідомий простору.
+    Live-застосування environment через LSEnvironmentSwitcher._switchEnvironment
+    + spaceTimeOfDay як тригер оновлення рендеру.
     """
     if not IN_GAME:
         return False
@@ -697,7 +734,6 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     if not guid_dot:
         return False
 
-    # Отримуємо spaceID
     space_id = None
     try:
         player = BigWorld.player()
@@ -712,40 +748,10 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         LOG.warning('live_apply: no spaceID')
         return False
 
-    # --- Крок 1: завантажуємо environment в простір через addSpaceGeometryMapping ---
-    # guid в wotmod зберігається з дефісами: 56BA3213-40FFB1DF-125FBCAD-173E8347
-    guid_dash = preset_guid  # вже з дефісами з реєстру
-
-    # Virtual paths через які VFS бачить environment з wotmod
-    virtual_paths = [
-        'spaces/%s/environments/%s' % (space_name, guid_dash),
-        'spaces/%s/environments/%s' % (space_name, guid_dot),
-        'res/spaces/%s/environments/%s' % (space_name, guid_dash),
-    ]
-
-    geometry_handle = None
-    try:
-        import Math
-        identity = Math.Matrix()
-        identity.setIdentity()
-
-        for vpath in virtual_paths:
-            try:
-                handle = BigWorld.addSpaceGeometryMapping(space_id, identity, vpath)
-                LOG.info('live_apply: addSpaceGeometryMapping(%s) OK handle=%s', vpath, handle)
-                geometry_handle = handle
-                break
-            except Exception as e:
-                LOG.info('live_apply: addSpaceGeometryMapping(%s) ERR: %s', vpath, str(e)[:80])
-    except Exception as e:
-        LOG.warning('live_apply: Math.Matrix ERR: %s', e)
-
-    # --- Крок 2: перемикаємо environment через LSEnvironmentSwitcher ---
     try:
         import LSArenaPhasesComponent as _ls
         sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
         if sw_class is None:
-            LOG.warning('live_apply: LSEnvironmentSwitcher not found')
             return False
 
         inst = sw_class.__new__(sw_class)
@@ -753,9 +759,25 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         inst._callbackDelayer = None
         inst._switchEnvironment(guid_dot)
         LOG.info('live_apply: _switchEnvironment(%s) OK', guid_dot)
+
+        # Тригеримо оновлення рендеру через spaceTimeOfDay
+        # Читаємо поточний час і записуємо назад — це змушує рендер
+        # перечитати поточний environment
+        try:
+            fn_tod = getattr(BigWorld, 'spaceTimeOfDay', None)
+            if fn_tod is not None:
+                current_time = fn_tod(space_id, '')
+                LOG.info('live_apply: spaceTimeOfDay current=%r', current_time)
+                # Записуємо той самий час — тригер refresh
+                fn_tod(space_id, current_time)
+                LOG.info('live_apply: spaceTimeOfDay refresh called')
+        except Exception as e:
+            LOG.info('live_apply: spaceTimeOfDay ERR: %s', str(e)[:100])
+
         return True
+
     except Exception as e:
-        LOG.warning('live_apply: _switchEnvironment ERR: %s', traceback.format_exc())
+        LOG.warning('live_apply: ERR: %s', traceback.format_exc())
         return False
 
 
