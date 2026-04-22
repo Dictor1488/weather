@@ -290,7 +290,7 @@ def scan_environment_packages():
             continue
         for name in _safe_listdir(folder):
             lower = name.lower()
-            if not lower.endswith('.wotmod') or not lower.startswith('environments.'):
+            if not lower.endswith('.wotmod') or not (lower.startswith('environments.') or lower.startswith('environments_')):
                 continue
             preset_id = _detect_preset_from_filename(name)
             if not preset_id:
@@ -805,6 +805,68 @@ def apply_environment_bigworld_api(space_id, guid, package_path=None, space_name
     return False
 
 
+def _find_environments_settings_view():
+    """Шукає активний Flash view EnvironmentsSettingsUI через DAAPI / app container."""
+    try:
+        from gui.app_loader import g_appLoader
+        app = g_appLoader.getApp()
+        if app is None:
+            return None
+        # Scaleform (старіші версії WoT)
+        container_mgr = getattr(app, 'containerManager', None)
+        if container_mgr is not None:
+            for alias in ('EnvironmentsSettingsUI', 'environmentsSettings', 'WeatherUI'):
+                try:
+                    view = container_mgr.getViewByAlias(alias)
+                    if view is not None:
+                        return view
+                except Exception:
+                    pass
+    except Exception:
+        LOG.debug('_find_environments_settings_view: %s', traceback.format_exc())
+    return None
+
+
+def apply_environment_wg_api(space_id, env_name, preset_guid, space_name=None):
+    """
+    Застосовує environment LIVE через BigWorld API.
+
+    В WoT 2.2.1 немає wg_setSpaceEnvironmentId, але є notifySpaceChange —
+    він сигналізує движку перечитати space.settings без повного перезавантаження.
+    Спочатку space.settings вже записаний apply_environment_via_packages.
+    """
+    if not IN_GAME or not space_id:
+        return False
+
+    _log_bigworld_env_api_once()
+
+    # Спроба 1: notifySpaceChange(spaceID) — перечитує space.settings live
+    fn1 = getattr(BigWorld, 'notifySpaceChange', None)
+    if fn1 is not None:
+        try:
+            fn1(space_id)
+            LOG.info('apply_env_wg: notifySpaceChange(%s) OK', space_id)
+            return True
+        except Exception as e:
+            LOG.info('apply_env_wg: notifySpaceChange ERR: %s', str(e)[:200])
+
+    # Спроба 2: spaceTimeOfDay — змінює time of day як сайд-ефект оновлення env
+    # (деякі версії WoT оновлюють environment при зміні time)
+    fn2 = getattr(BigWorld, 'wg_setHourOfDay', None)
+    if fn2 is not None:
+        try:
+            # Читаємо поточний час і встановлюємо той самий — тригерить refresh
+            current = BigWorld.spaceTimeOfDay(space_id) if hasattr(BigWorld, 'spaceTimeOfDay') else 12.0
+            fn2(space_id, current)
+            LOG.info('apply_env_wg: wg_setHourOfDay(%s, %s) OK as refresh trigger', space_id, current)
+            return True
+        except Exception as e:
+            LOG.info('apply_env_wg: wg_setHourOfDay ERR: %s', str(e)[:200])
+
+    LOG.warning('apply_env_wg: no working WG API found (notifySpaceChange and wg_setHourOfDay unavailable)')
+    return False
+
+
 def trigger_daapi_override_ingame(preset_id, space_name=None):
     """
     Намагається надіслати команду зміни environment через DAAPI EnvironmentsSettingsUI.
@@ -933,13 +995,21 @@ def apply_environment_via_packages(space_name, preset_id):
 
         if in_battle and space_id and preset_guid:
             pkg_path = (resolved or {}).get('package_path')
-            live_bw = apply_environment_bigworld_api(
-                space_id, preset_guid, package_path=pkg_path, space_name=space_name)
-            LOG.info('apply_env: live BigWorld API = %s', live_bw)
 
-            if not live_bw:
-                live_daapi = trigger_daapi_override_ingame(actual_preset_id, space_name)
-                LOG.info('apply_env: live DAAPI = %s', live_daapi)
+            # Спроба 1: WG-специфічний API (миттєва зміна як у вбудованому моді)
+            live_wg = apply_environment_wg_api(space_id, env_name, preset_guid, space_name)
+            LOG.info('apply_env: live WG API = %s', live_wg)
+
+            if not live_wg:
+                # Спроба 2: addSpaceGeometryMapping
+                live_bw = apply_environment_bigworld_api(
+                    space_id, preset_guid, package_path=pkg_path, space_name=space_name)
+                LOG.info('apply_env: live BigWorld API = %s', live_bw)
+
+                if not live_bw:
+                    # Спроба 3: DAAPI Flash view
+                    live_daapi = trigger_daapi_override_ingame(actual_preset_id, space_name)
+                    LOG.info('apply_env: live DAAPI = %s', live_daapi)
 
         return True
 
@@ -959,9 +1029,13 @@ def on_space_entered(space_name):
             preset_id = _current_override_preset
         else:
             preset_id = get_preset_for_map(space_name)
-            if preset_id and preset_id != 'standard':
-                _current_override_preset = preset_id
-                _current_cycle_index = PRESET_ORDER.index(preset_id) if preset_id in PRESET_ORDER else 0
+            # Якщо вийшов standard — форсуємо рандомний ненульовий пресет
+            if not preset_id or preset_id == 'standard':
+                non_std = [p for p in PRESET_ORDER if p != 'standard']
+                preset_id = random.choice(non_std)
+                LOG.info('on_space_entered: weights gave standard, forced random=%s', preset_id)
+            _current_override_preset = preset_id
+            _current_cycle_index = PRESET_ORDER.index(preset_id) if preset_id in PRESET_ORDER else 0
         LOG.info('on_space_entered: preset=%s', preset_id or 'standard')
         return apply_environment_via_packages(space_name, preset_id)
     except Exception:
