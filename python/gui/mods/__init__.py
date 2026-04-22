@@ -413,6 +413,9 @@ def _install_key_hook():
     log = _log()
     installed = False
 
+    # Встановлюємо ТІЛЬКИ AvatarInputHandler (бойовий хук).
+    # InputHandler.g_instance.onKeyDown НЕ встановлюємо одночасно —
+    # це призводить до подвійного спрацювання (обидва отримують той самий event).
     try:
         import AvatarInputHandler as _AIH
         cls_aih = _AIH.AvatarInputHandler
@@ -432,19 +435,23 @@ def _install_key_hook():
             cls_aih.handleKeyEvent = _make_aih_wrapper(_orig_aih)
             installed = True
             log.info('Key hook: AvatarInputHandler.handleKeyEvent OK')
+        else:
+            log.warning('AvatarInputHandler.handleKeyEvent not found')
     except ImportError:
         log.warning('AvatarInputHandler not available')
     except Exception:
         log.exception('Failed to install AvatarInputHandler key hook')
 
-    try:
-        _ih = _get_input_handler()
-        if _ih is not None and getattr(_ih, 'g_instance', None) is not None:
-            _ih.g_instance.onKeyDown += _on_key_event
-            installed = True
-            log.info('Key hook: InputHandler.g_instance.onKeyDown OK')
-    except Exception:
-        log.exception('Failed to install InputHandler key hook')
+    # InputHandler.g_instance.onKeyDown — тільки якщо AvatarInputHandler недоступний
+    if not installed:
+        try:
+            _ih = _get_input_handler()
+            if _ih is not None and getattr(_ih, 'g_instance', None) is not None:
+                _ih.g_instance.onKeyDown += _on_key_event
+                installed = True
+                log.info('Key hook: InputHandler.g_instance.onKeyDown OK (fallback)')
+        except Exception:
+            log.exception('Failed to install InputHandler key hook')
 
     _KEY_HOOK_INSTALLED = installed
 
@@ -453,10 +460,15 @@ def _remove_key_hook():
     global _KEY_HOOK_INSTALLED
     if not IN_GAME or not _KEY_HOOK_INSTALLED:
         return
+    # AvatarInputHandler хук знімається через _BATTLE_SPACE_HOOKS.
+    # Тут знімаємо тільки InputHandler fallback (якщо він був встановлений).
     try:
         _ih = _get_input_handler()
         if _ih is not None and getattr(_ih, 'g_instance', None) is not None:
-            _ih.g_instance.onKeyDown -= _on_key_event
+            try:
+                _ih.g_instance.onKeyDown -= _on_key_event
+            except Exception:
+                pass
     except Exception:
         pass
     _KEY_HOOK_INSTALLED = False
