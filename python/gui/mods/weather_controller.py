@@ -751,62 +751,58 @@ def _remove_old_geometry_handles(space_id):
 
 def apply_environment_bigworld_api(space_id, guid, package_path=None, space_name=None):
     """
-    Пробує застосувати environment LIVE через BigWorld API.
+    Пробує застосувати environment LIVE через addSpaceGeometryMapping.
 
-    Стратегія для WoT 2.2.1 (з діагностичного логу):
-      1. addSpaceGeometryMapping(spaceID, virtual_path, wotmod_path)
-         — завантажує wotmod прямо в живий простір
-      2. spaceReload(spaceID)
-         — перезавантажує простір з уже записаними файлами в res_mods
+    Правильна сигнатура (з лога помилки):
+      BigWorld.addSpaceGeometryMapping(spaceID: int, pMapper: Math.MatrixProvider, path: str)
+
+    Завантажуємо wotmod пресету прямо в живий простір через identity matrix.
+    ВАЖЛИВО: НЕ використовуємо spaceReload — він повністю перезавантажує карту
+    і вибиває гравця з бою.
     """
     if not IN_GAME or not space_id:
         return False
 
     _log_bigworld_env_api_once()
-    success = False
 
-    # --- Спроба 1: addSpaceGeometryMapping з wotmod ---
-    # Завантажує environment wotmod прямо в поточний живий простір
-    if package_path and os.path.isfile(package_path) and space_name:
-        fn = getattr(BigWorld, 'addSpaceGeometryMapping', None)
-        if fn is not None:
-            _remove_old_geometry_handles(space_id)
-            # virtual path — шлях до папки spaces всередині wotmod
-            virtual_path = 'spaces/' + space_name
-            for args in [
-                (space_id, virtual_path, package_path),   # 3 аргументи
-                (space_id, package_path),                  # 2 аргументи
-            ]:
-                try:
-                    handle = fn(*args)
-                    LOG.info('apply_env_bw: addSpaceGeometryMapping%s OK handle=%s', args[1:], handle)
-                    _store_geometry_handle(space_id, handle)
-                    success = True
-                    break
-                except Exception as e:
-                    LOG.info('apply_env_bw: addSpaceGeometryMapping%s ERR: %s', args[1:], str(e)[:160])
+    if not package_path or not os.path.isfile(package_path):
+        LOG.warning('apply_env_bw: package_path missing or not found: %s', package_path)
+        return False
 
-    # --- Спроба 2: spaceReload ---
-    # Перезавантажує простір — підхоплює space.settings з res_mods
-    if not success:
-        fn = getattr(BigWorld, 'spaceReload', None)
-        if fn is not None:
-            try:
-                fn(space_id)
-                LOG.info('apply_env_bw: spaceReload(%s) OK', space_id)
-                success = True
-            except Exception as e:
-                LOG.info('apply_env_bw: spaceReload ERR: %s', str(e)[:160])
+    fn = getattr(BigWorld, 'addSpaceGeometryMapping', None)
+    if fn is None:
+        LOG.warning('apply_env_bw: addSpaceGeometryMapping not available')
+        return False
 
-    # --- Спроба 3: wg_setHourOfDay (часткова зміна освітлення через час доби) ---
-    # Якщо нічого не спрацювало — хоча б змінити час доби для деяких пресетів
-    if not success:
-        fn = getattr(BigWorld, 'wg_setHourOfDay', None)
-        if fn is not None and space_name:
-            # midnight ~ 0.0, standard ~ 12.0, sunset ~ 18.0, midday ~ 13.0
-            pass  # поки не чіпаємо — це окрема логіка
+    _remove_old_geometry_handles(space_id)
 
-    return success
+    # Потрібен Math.MatrixProvider — використовуємо identity matrix
+    try:
+        import Math
+        identity = Math.Matrix()
+        identity.setIdentity()
+    except Exception as e:
+        LOG.warning('apply_env_bw: Math.Matrix() failed: %s', e)
+        return False
+
+    # Пробуємо різні варіанти path: повний шлях до wotmod, або virtual path
+    attempts = [
+        (space_id, identity, package_path),          # wotmod path напряму
+        (space_id, identity, 'spaces/' + (space_name or '')),  # virtual path
+    ]
+
+    for args in attempts:
+        try:
+            handle = fn(*args)
+            LOG.info('apply_env_bw: addSpaceGeometryMapping(%s, identity, %s) OK handle=%s',
+                     space_id, args[2], handle)
+            _store_geometry_handle(space_id, handle)
+            return True
+        except Exception as e:
+            LOG.info('apply_env_bw: addSpaceGeometryMapping(sid, identity, %s) ERR: %s',
+                     args[2], str(e)[:200])
+
+    return False
 
 
 def trigger_daapi_override_ingame(preset_id, space_name=None):
