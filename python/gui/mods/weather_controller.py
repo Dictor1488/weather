@@ -428,16 +428,19 @@ def _apply_resmgr_patch_for_space(space_name, env_name, preset_guid):
             section.writeString('environmentOverride', preset_guid)
 
         # Зберігаємо в res_mods/spaces/
+        # Спробуємо зберегти в VFS шлях - це може оновити кеш VFS
+        # і рушій прочитає нові дані при завантаженні простору
+        result_vfs = section.save(vfs_path)
+        LOG.info('resmgr_patch: %s vfs_save=%s', space_name, result_vfs)
+
+        # Також зберігаємо в res_mods як запасний варіант
         version_dir = _find_latest_version_dir('res_mods')
         if version_dir:
             save_path = os.path.normpath(
                 os.path.join(version_dir, 'spaces', space_name, 'space.settings'))
             _ensure_dir(save_path)
             result = section.save(save_path)
-            LOG.info('resmgr_patch: %s save=%s', space_name, result)
-        else:
-            result = section.save(vfs_path)
-            LOG.info('resmgr_patch: vfs save=%s', result)
+            LOG.info('resmgr_patch: %s resmods_save=%s', space_name, result)
 
         return True
     except Exception:
