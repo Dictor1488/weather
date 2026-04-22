@@ -715,32 +715,39 @@ def _get_current_space_id():
     return None
 
 
+def _log_bigworld_env_api_once():
+    """Одноразово логує всі BigWorld env-методи для діагностики."""
+    if getattr(_log_bigworld_env_api_once, '_done', False):
+        return
+    _log_bigworld_env_api_once._done = True
+    try:
+        keywords = ('env', 'Env', 'space', 'Space', 'reload', 'Reload', 'Environment', 'wg_set')
+        found = [m for m in dir(BigWorld)
+                 if any(k in m for k in keywords) and callable(getattr(BigWorld, m, None))]
+        LOG.info('BigWorld env-related methods: %s', found)
+    except Exception as e:
+        LOG.warning('_log_bigworld_env_api_once: %s', e)
+
+
 def apply_environment_bigworld_api(space_id, guid):
     """
-    Спроба застосувати environment LIVE через різні BigWorld API.
-
-    WoT має кілька варіантів API залежно від версії клієнта:
-      1. BigWorld.wg_setSpaceEnvironmentId(spaceID, guid_string)
-      2. BigWorld.setSpaceEnvironmentID(spaceID, guid_string)
-      3. BigWorld.wg_reloadEnvironment(spaceID)  — після запису файлів
-
-    GUID може бути у форматі:
-      - 'AABBCCDD-EEFF-0011-...'  (з дефісами)
-      - 'AA.BB.CC.DD.EE.FF.00.11...'  (з крапками — формат WoT environments.json)
-
-    Повертає True якщо хоча б один виклик не кинув виняток.
+    Пробує застосувати environment LIVE через BigWorld API.
+    При першому виклику логує всі доступні env-методи BigWorld для діагностики.
     """
     if not IN_GAME or not space_id:
         return False
 
-    # Готуємо обидва формати guid
+    _log_bigworld_env_api_once()
+
     guid_dash = guid.replace('.', '-') if '.' in guid else guid
     guid_dot  = guid.replace('-', '.') if '-' in guid else guid
 
     success = False
 
-    # --- Спроба 1: wg_setSpaceEnvironmentId (найновіший WoT API) ---
-    for fn_name in ('wg_setSpaceEnvironmentId', 'wg_setSpaceEnvironmentID'):
+    # --- Спроба 1: прямі API зміни environment ---
+    for fn_name in ('wg_setSpaceEnvironmentId', 'wg_setSpaceEnvironmentID',
+                    'setSpaceEnvironmentID', 'setSpaceEnvironmentId',
+                    'wg_changeSpaceEnvironment', 'changeSpaceEnvironment'):
         fn = getattr(BigWorld, fn_name, None)
         if fn is None:
             continue
@@ -751,88 +758,35 @@ def apply_environment_bigworld_api(space_id, guid):
                 success = True
                 break
             except Exception as e:
-                LOG.info('apply_env_bw: %s ERR: %s', fn_name, str(e)[:120])
+                LOG.info('apply_env_bw: %s ERR: %s', fn_name, str(e)[:160])
         if success:
             break
 
-    # --- Спроба 2: setSpaceEnvironmentID (старіший API) ---
-    if not success:
-        fn = getattr(BigWorld, 'setSpaceEnvironmentID', None)
-        if fn is not None:
-            for g in (guid_dash, guid_dot):
-                try:
-                    fn(space_id, g)
-                    LOG.info('apply_env_bw: setSpaceEnvironmentID(%s, %s) OK', space_id, g)
-                    success = True
-                    break
-                except Exception as e:
-                    LOG.info('apply_env_bw: setSpaceEnvironmentID ERR: %s', str(e)[:120])
-
-    # --- Спроба 3: wg_reloadEnvironment — після того як файли вже записані ---
-    # Цей виклик змушує рушій перечитати space.settings з res_mods
-    if hasattr(BigWorld, 'wg_reloadEnvironment'):
+    # --- Спроба 2: reload після запису файлів ---
+    for fn_name in ('wg_reloadEnvironment', 'reloadEnvironment',
+                    'wg_reloadSpaceEnvironment', 'reloadSpaceEnvironment'):
+        fn = getattr(BigWorld, fn_name, None)
+        if fn is None:
+            continue
         try:
-            BigWorld.wg_reloadEnvironment(space_id)
-            LOG.info('apply_env_bw: wg_reloadEnvironment(%s) OK', space_id)
+            fn(space_id)
+            LOG.info('apply_env_bw: %s(%s) OK', fn_name, space_id)
             success = True
+            break
         except Exception as e:
-            LOG.info('apply_env_bw: wg_reloadEnvironment ERR: %s', str(e)[:120])
+            LOG.info('apply_env_bw: %s ERR: %s', fn_name, str(e)[:160])
 
-    # --- Спроба 4: notifySpaceChange — fallback ---
-    if not success and hasattr(BigWorld, 'notifySpaceChange'):
-        try:
-            BigWorld.notifySpaceChange(space_id)
-            LOG.info('apply_env_bw: notifySpaceChange(%s) called', space_id)
-        except Exception as e:
-            LOG.info('apply_env_bw: notifySpaceChange ERR: %s', str(e)[:120])
+    # --- Спроба 3: notifySpaceChange ---
+    if not success:
+        fn = getattr(BigWorld, 'notifySpaceChange', None)
+        if fn is not None:
+            try:
+                fn(space_id)
+                LOG.info('apply_env_bw: notifySpaceChange(%s) OK', space_id)
+            except Exception as e:
+                LOG.info('apply_env_bw: notifySpaceChange ERR: %s', str(e)[:160])
 
     return success
-
-
-# ---------------------------------------------------------------------------
-# LIVE зміна через EnvironmentsSettingsUI DAAPI
-# ---------------------------------------------------------------------------
-# SWF-компонент components-environment.swf (EnvironmentsSettingsUI) надає:
-#   interactiveEvent_overrideIngame  — подія яку Flash шле в Python
-#   as_setStaticData / as_setDynamicData — Python шле дані у Flash
-#
-# Але ще важливіше: цей компонент живе в GUI і коли він відправляє
-# interactiveEvent_overrideIngame, WoT сам змінює environment через
-# внутрішній API. Тому нам достатньо знайти цей view і викликати
-# потрібний метод через DAAPI.
-# ---------------------------------------------------------------------------
-
-def _find_environments_settings_view():
-    """
-    Шукає живий екземпляр EnvironmentsSettingsUI у WoT view менеджері.
-    Повертає view або None.
-    """
-    if not IN_GAME:
-        return None
-    try:
-        # Спосіб 1: через g_appLoader / appFactory
-        from gui.app_loader import g_appLoader
-        app = g_appLoader.getApp()
-        if app is not None:
-            view_mgr = getattr(app, 'containerManager', None) or getattr(app, 'viewManager', None)
-            if view_mgr is not None:
-                for alias in ('EnvironmentsSettingsUI', 'environment_settings',
-                              'ENVIRONMENTS_SETTINGS', 'environments_settings'):
-                    view = getattr(view_mgr, 'getView', lambda a: None)(alias)
-                    if view is not None:
-                        LOG.info('_find_environments_settings_view: found via viewManager alias=%s', alias)
-                        return view
-    except Exception as e:
-        LOG.debug('_find_environments_settings_view: app_loader ERR: %s', e)
-
-    try:
-        # Спосіб 2: через gui.shared.system_factory
-        from gui.shared import g_eventBus
-        _ = g_eventBus  # перевіряємо доступність
-    except Exception:
-        pass
-
-    return None
 
 
 def trigger_daapi_override_ingame(preset_id, space_name=None):
