@@ -840,24 +840,15 @@ def apply_environment_wg_api(space_id, env_name, preset_guid, space_name=None):
 
     _log_bigworld_env_api_once()
 
-    # Спроба 1: notifySpaceChange(unicode) — різні формати аргументу
-    # Сигнатура: (arg0: unicode) -> None
+    # notifySpaceChange — мережева нотифікація, НЕ змінює environment рендер
+    # Логуємо для діагностики але не вважаємо успіхом
     fn1 = getattr(BigWorld, 'notifySpaceChange', None)
-    if fn1 is not None:
-        # Пробуємо всі можливі формати: space_name, virtual path, str(spaceID)
-        candidates = []
-        if space_name:
-            candidates.append(space_name)                        # '14_siegfried_line'
-            candidates.append('spaces/' + space_name)            # 'spaces/14_siegfried_line'
-            candidates.append('res/spaces/' + space_name)        # 'res/spaces/14_siegfried_line'
-        candidates.append(str(space_id))                         # '20'
-        for arg in candidates:
-            try:
-                fn1(arg)
-                LOG.info('apply_env_wg: notifySpaceChange(%r) OK', arg)
-                return True
-            except Exception as e:
-                LOG.info('apply_env_wg: notifySpaceChange(%r) ERR: %s', arg, str(e)[:120])
+    if fn1 is not None and space_name:
+        try:
+            fn1(space_name)
+            LOG.info('apply_env_wg: notifySpaceChange(%r) called (network notify only, not env change)', space_name)
+        except Exception as e:
+            LOG.info('apply_env_wg: notifySpaceChange ERR: %s', str(e)[:80])
 
     # Спроба 2: spaceTimeOfDay(int, unicode) → читаємо поточний час, потім тригеримо refresh
     fn_tod = getattr(BigWorld, 'spaceTimeOfDay', None)
@@ -872,43 +863,59 @@ def apply_environment_wg_api(space_id, env_name, preset_guid, space_name=None):
             LOG.info('apply_env_wg: wg_setHourOfDay ERR: %s', str(e)[:200])
 
     # Спроба 3: пряме звернення до вбудованого EnvironmentsSettings Python модуля
-    # Він має прямий доступ до C++ EnvironmentManager без файлових операцій
     try:
         import sys
         guid_dot = _guid_to_dot(preset_guid) if preset_guid else None
 
-        # Крок 1: знаходимо всі environment-related модулі (один раз логуємо)
+        # Один раз логуємо ВСІ модулі що містять env/weather/space/settings
         if not getattr(apply_environment_wg_api, '_modules_logged', False):
             apply_environment_wg_api._modules_logged = True
-            env_mods = [n for n in sys.modules if 'environ' in n.lower() or 'weather' in n.lower()]
-            LOG.info('apply_env_wg: environment modules in sys.modules: %s', env_mods)
+            all_mods = sorted(sys.modules.keys())
+            env_mods = [n for n in all_mods if any(k in n.lower() for k in
+                ('environ', 'weather', 'setting', 'lighting', 'skybox', 'atmosphere', 'daapi'))]
+            LOG.info('apply_env_wg: env-related sys.modules (%d): %s', len(env_mods), env_mods)
+            # Також логуємо всі модулі що мають 'override' або 'environment' в атрибутах
+            for mod_name in all_mods:
+                mod = sys.modules.get(mod_name)
+                if mod is None:
+                    continue
+                try:
+                    attrs = [a for a in dir(mod) if any(k in a.lower() for k in
+                             ('environ', 'override', 'preset', 'lighting'))]
+                    if attrs:
+                        LOG.info('apply_env_wg: module %s has attrs: %s', mod_name, attrs[:10])
+                except Exception:
+                    pass
 
-        # Крок 2: пробуємо відомі шляхи до EnvironmentsSettings
+        # Пробуємо відомі шляхи до EnvironmentsSettings singleton
         candidates = [
             'EnvironmentsSettings',
             'mods.EnvironmentsSettings',
             'gui.Scaleform.daapi.view.battle.EnvironmentsSettingsUI',
             'gui.Scaleform.daapi.view.lobby.EnvironmentsSettingsUI',
+            'gui.battle_control.controllers.environment',
+            'gui.battle_control.environment_controller',
+            'account_helpers.settings_core.options',
         ]
         for mod_name in candidates:
             mod = sys.modules.get(mod_name)
             if mod is None:
                 try:
-                    mod = __import__(mod_name)
+                    mod = __import__(mod_name, fromlist=[''])
                 except Exception:
                     continue
             if mod is None:
                 continue
-            # Шукаємо singleton або функцію зміни environment
-            for attr_name in ('g_instance', 'g_environmentsSettings', 'instance'):
+            for attr_name in ('g_instance', 'g_environmentsSettings', 'instance',
+                              'g_settingsCore', 'g_settingsCache'):
                 instance = getattr(mod, attr_name, None)
                 if instance is None:
                     continue
                 LOG.info('apply_env_wg: found %s.%s = %s', mod_name, attr_name, type(instance))
-                # Пробуємо методи зміни
                 for method_name in ('setOverride', 'setEnvironmentOverride',
                                     'overrideEnvironment', 'applyPreset',
-                                    'setPreset', 'selectEnvironment'):
+                                    'setPreset', 'selectEnvironment',
+                                    'setEnvironment', 'changeEnvironment'):
                     method = getattr(instance, method_name, None)
                     if method is None:
                         continue
