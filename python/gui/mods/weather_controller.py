@@ -72,8 +72,8 @@ ENV_XML_RE = re.compile(
     r"^res/spaces/([^/]+)/environments/([A-Fa-f0-9\-]+)/environment\.xml$",
     re.I
 )
-ENV_NAME_RE_FULL = re.compile('<n>\\t([^\\t<]+)\\t</n>', re.I)
-ENV_NAME_RE_OLD  = re.compile('<n>\\s*([^<]+?)\\s*</n>', re.I | re.S)
+ENV_NAME_RE_FULL = re.compile('<name>\\t([^\\t<]+)\\t</name>', re.I)
+ENV_NAME_RE_OLD  = re.compile('<name>\\s*([^<]+?)\\s*</name>', re.I | re.S)
 _ENV_NAME_SKIP  = frozenset(['RexpTM', 'FilmicTM', 'LinearExpTM'])
 ROOT_ENV_RE          = re.compile(r'(<environment>)([^<]*)(</environment>)',                 re.I)
 ROOT_ENV_OVERRIDE_RE = re.compile(r'(<environmentOverride>)([^<]*)(</environmentOverride>)', re.I)
