@@ -729,62 +729,82 @@ def _log_bigworld_env_api_once():
         LOG.warning('_log_bigworld_env_api_once: %s', e)
 
 
-def apply_environment_bigworld_api(space_id, guid):
+# Зберігаємо handles addSpaceGeometryMapping для видалення при наступній зміні
+_geometry_handles = {}
+
+def _store_geometry_handle(space_id, handle):
+    if handle is None:
+        return
+    _geometry_handles.setdefault(space_id, []).append(handle)
+
+def _remove_old_geometry_handles(space_id):
+    handles = _geometry_handles.pop(space_id, [])
+    if not handles or not hasattr(BigWorld, 'delSpaceGeometryMapping'):
+        return
+    for handle in handles:
+        try:
+            BigWorld.delSpaceGeometryMapping(space_id, handle)
+            LOG.info('removed geometry handle=%s', handle)
+        except Exception as e:
+            LOG.warning('delSpaceGeometryMapping ERR: %s', e)
+
+
+def apply_environment_bigworld_api(space_id, guid, package_path=None, space_name=None):
     """
     Пробує застосувати environment LIVE через BigWorld API.
-    При першому виклику логує всі доступні env-методи BigWorld для діагностики.
+
+    Стратегія для WoT 2.2.1 (з діагностичного логу):
+      1. addSpaceGeometryMapping(spaceID, virtual_path, wotmod_path)
+         — завантажує wotmod прямо в живий простір
+      2. spaceReload(spaceID)
+         — перезавантажує простір з уже записаними файлами в res_mods
     """
     if not IN_GAME or not space_id:
         return False
 
     _log_bigworld_env_api_once()
-
-    guid_dash = guid.replace('.', '-') if '.' in guid else guid
-    guid_dot  = guid.replace('-', '.') if '-' in guid else guid
-
     success = False
 
-    # --- Спроба 1: прямі API зміни environment ---
-    for fn_name in ('wg_setSpaceEnvironmentId', 'wg_setSpaceEnvironmentID',
-                    'setSpaceEnvironmentID', 'setSpaceEnvironmentId',
-                    'wg_changeSpaceEnvironment', 'changeSpaceEnvironment'):
-        fn = getattr(BigWorld, fn_name, None)
-        if fn is None:
-            continue
-        for g in (guid_dash, guid_dot):
-            try:
-                fn(space_id, g)
-                LOG.info('apply_env_bw: %s(%s, %s) OK', fn_name, space_id, g)
-                success = True
-                break
-            except Exception as e:
-                LOG.info('apply_env_bw: %s ERR: %s', fn_name, str(e)[:160])
-        if success:
-            break
+    # --- Спроба 1: addSpaceGeometryMapping з wotmod ---
+    # Завантажує environment wotmod прямо в поточний живий простір
+    if package_path and os.path.isfile(package_path) and space_name:
+        fn = getattr(BigWorld, 'addSpaceGeometryMapping', None)
+        if fn is not None:
+            _remove_old_geometry_handles(space_id)
+            # virtual path — шлях до папки spaces всередині wotmod
+            virtual_path = 'spaces/' + space_name
+            for args in [
+                (space_id, virtual_path, package_path),   # 3 аргументи
+                (space_id, package_path),                  # 2 аргументи
+            ]:
+                try:
+                    handle = fn(*args)
+                    LOG.info('apply_env_bw: addSpaceGeometryMapping%s OK handle=%s', args[1:], handle)
+                    _store_geometry_handle(space_id, handle)
+                    success = True
+                    break
+                except Exception as e:
+                    LOG.info('apply_env_bw: addSpaceGeometryMapping%s ERR: %s', args[1:], str(e)[:160])
 
-    # --- Спроба 2: reload після запису файлів ---
-    for fn_name in ('wg_reloadEnvironment', 'reloadEnvironment',
-                    'wg_reloadSpaceEnvironment', 'reloadSpaceEnvironment'):
-        fn = getattr(BigWorld, fn_name, None)
-        if fn is None:
-            continue
-        try:
-            fn(space_id)
-            LOG.info('apply_env_bw: %s(%s) OK', fn_name, space_id)
-            success = True
-            break
-        except Exception as e:
-            LOG.info('apply_env_bw: %s ERR: %s', fn_name, str(e)[:160])
-
-    # --- Спроба 3: notifySpaceChange ---
+    # --- Спроба 2: spaceReload ---
+    # Перезавантажує простір — підхоплює space.settings з res_mods
     if not success:
-        fn = getattr(BigWorld, 'notifySpaceChange', None)
+        fn = getattr(BigWorld, 'spaceReload', None)
         if fn is not None:
             try:
                 fn(space_id)
-                LOG.info('apply_env_bw: notifySpaceChange(%s) OK', space_id)
+                LOG.info('apply_env_bw: spaceReload(%s) OK', space_id)
+                success = True
             except Exception as e:
-                LOG.info('apply_env_bw: notifySpaceChange ERR: %s', str(e)[:160])
+                LOG.info('apply_env_bw: spaceReload ERR: %s', str(e)[:160])
+
+    # --- Спроба 3: wg_setHourOfDay (часткова зміна освітлення через час доби) ---
+    # Якщо нічого не спрацювало — хоча б змінити час доби для деяких пресетів
+    if not success:
+        fn = getattr(BigWorld, 'wg_setHourOfDay', None)
+        if fn is not None and space_name:
+            # midnight ~ 0.0, standard ~ 12.0, sunset ~ 18.0, midday ~ 13.0
+            pass  # поки не чіпаємо — це окрема логіка
 
     return success
 
@@ -916,7 +936,9 @@ def apply_environment_via_packages(space_name, preset_id):
                 pass
 
         if in_battle and space_id and preset_guid:
-            live_bw = apply_environment_bigworld_api(space_id, preset_guid)
+            pkg_path = (resolved or {}).get('package_path')
+            live_bw = apply_environment_bigworld_api(
+                space_id, preset_guid, package_path=pkg_path, space_name=space_name)
             LOG.info('apply_env: live BigWorld API = %s', live_bw)
 
             if not live_bw:
