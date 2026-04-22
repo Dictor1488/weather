@@ -991,26 +991,34 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     except Exception as e:
         LOG.warning('live_apply: spaceID ERR: %s', e)
 
-    # Спроба 1: game.onChangeEnvironments
+    # Спроба 1: game.onChangeEnvironments - діагностика що це таке
     try:
         import game as _game
         fn = getattr(_game, 'onChangeEnvironments', None)
         if fn:
-            LOG.info('live_apply: game.onChangeEnvironments found, trying...')
-            # Пробуємо різні аргументи
-            for args in [(guid_dot,), (preset_guid,), (env_name,),
-                         ([guid_dot],), ({guid_dot: 100},),
-                         (space_id, guid_dot), (space_name, guid_dot)]:
+            LOG.info('live_apply: onChangeEnvironments type=%s dir=%s',
+                     type(fn), [a for a in dir(fn) if not a.startswith('_')][:20])
+            # Пробуємо викликати
+            for args in [(guid_dot,), ([guid_dot],),
+                         ({guid_dot: 100},),
+                         (space_id, guid_dot),
+                         (space_name, guid_dot),
+                         (guid_dot, space_id)]:
                 try:
-                    fn(*args)
-                    LOG.info('live_apply: game.onChangeEnvironments%s OK', args)
-                    return True
+                    result = fn(*args)
+                    LOG.info('live_apply: onChangeEnvironments%s = %s', args, result)
+                    if result not in (None, False, 0):
+                        return True
                 except Exception as e:
-                    LOG.info('live_apply: game.onChangeEnvironments%s ERR: %s', args, str(e)[:100])
+                    LOG.info('live_apply: onChangeEnvironments%s ERR: %s', args, str(e)[:100])
+
+        # Всі атрибути game модуля
+        game_attrs = [a for a in dir(_game) if not a.startswith('_')]
+        LOG.info('live_apply: game module attrs: %s', game_attrs)
     except ImportError:
         LOG.info('live_apply: game module not available')
     except Exception as e:
-        LOG.warning('live_apply: game.onChangeEnvironments ERR: %s', e)
+        LOG.warning('live_apply: game ERR: %s', e)
 
     # Спроба 2: helpers.LightingGenerationMode._startLightingGeneration
     try:
