@@ -235,6 +235,23 @@ def _install_battle_space_hook():
                         space_name = _get_space_name_for_become_player(self)
                         if space_name:
                             _log().info('onBecomePlayer hook: space=%s -> writing files', space_name)
+                            # Одноразова діагностика - шукаємо environment randomizer в sys.modules
+                            if not getattr(wrapped_bp, '_env_diag_done', False):
+                                wrapped_bp._env_diag_done = True
+                                try:
+                                    import sys
+                                    env_modules = [k for k in sys.modules.keys()
+                                                   if any(x in k.lower() for x in
+                                                          ['environ', 'randomizer', 'lighting', 'skybox'])]
+                                    _log().info('ENV MODULES in sys.modules: %s', env_modules)
+                                    # Шукаємо клас що читає environments.json
+                                    for mod_name in env_modules:
+                                        mod = sys.modules.get(mod_name)
+                                        if mod is None: continue
+                                        attrs = [a for a in dir(mod) if not a.startswith('_')]
+                                        _log().info('ENV MODULE %s: %s', mod_name, attrs[:20])
+                                except Exception as e:
+                                    _log().info('env diag ERR: %s', e)
                             result = g_controller.onSpaceEntered(space_name)
                             if result:
                                 # Позначаємо тільки якщо запис успішний
