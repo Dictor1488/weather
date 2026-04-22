@@ -584,18 +584,20 @@ def _patch_space_settings_template(template_text, env_name, preset_guid):
     if not template_text:
         return None
     text = template_text
-    closing_tag = u'</space.settings>' if '</space.settings>' in text else u'</root>'
+    # Визначаємо роздільник рядків з шаблону щоб не додавати зайвих \r
+    nl = u'\r\n' if u'\r\n' in text else u'\n'
+    closing_tag = u'</space.settings>' if u'</space.settings>' in text else u'</root>'
     if ROOT_ENV_RE.search(text):
         text = ROOT_ENV_RE.sub(r'\1%s\3' % env_name, text, count=1)
     else:
         text = text.replace(closing_tag,
-                            u'  <environment>%s</environment>\n%s' % (env_name, closing_tag), 1)
+                            u'  <environment>%s</environment>%s%s' % (env_name, nl, closing_tag), 1)
     if preset_guid:
         if ROOT_ENV_OVERRIDE_RE.search(text):
             text = ROOT_ENV_OVERRIDE_RE.sub(r'\1%s\3' % preset_guid, text, count=1)
         else:
             text = text.replace(closing_tag,
-                                u'  <environmentOverride>%s</environmentOverride>\n%s' % (preset_guid, closing_tag), 1)
+                                u'  <environmentOverride>%s</environmentOverride>%s%s' % (preset_guid, nl, closing_tag), 1)
     else:
         text = ROOT_ENV_OVERRIDE_RE.sub(u'', text)
     return text
@@ -677,8 +679,14 @@ def _write_text_file(target_path, content):
         folder = os.path.dirname(target_path)
         if not os.path.isdir(folder):
             os.makedirs(folder)
-        with open(target_path, 'w') as f:
-            f.write(content)
+        # Пишемо в бінарному режимі щоб уникнути подвійного \r\n на Windows
+        # (Python text mode автоматично конвертує \n → \r\n, але шаблон вже має \r\n)
+        if isinstance(content, bytes):
+            raw = content
+        else:
+            raw = content.encode('utf-8')
+        with open(target_path, 'wb') as f:
+            f.write(raw)
         return True
     except Exception:
         LOG.error('write %s failed\n%s', target_path, traceback.format_exc())
