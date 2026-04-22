@@ -711,7 +711,12 @@ def write_environments_json_for_preset(preset_id, space_name=None):
                             break
 
         for guid in all_guids:
-            common_weights[guid] = 100 if guid == selected_guid else 0
+            if guid == selected_guid:
+                common_weights[guid] = 100
+            else:
+                # Ненульова вага = environment завантажується в простір
+                # (дозволяє _switchEnvironment перемикати між ними live)
+                common_weights[guid] = 11
 
         payload = {
             'enabled':    True,
