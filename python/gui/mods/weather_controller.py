@@ -955,9 +955,7 @@ def _push_environments_to_flash(all_guids, selected_guid, space_name):
 
 def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     """
-    Live-застосування environment:
-    1. _push_environments_to_flash — передає всі guid-и у Flash → движок завантажує їх
-    2. _switchEnvironment(guid) — перемикає на потрібний environment
+    Live-застосування environment.
     """
     if not IN_GAME:
         return False
@@ -980,34 +978,20 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         LOG.warning('live_apply: no spaceID')
         return False
 
-    # Збираємо всі guid-и для Flash
+    # Спроба 1: wg_prefetchSpaceZip - завантажує zip/wotmod в поточний простір
     registry = get_environment_registry()
-    all_guids = []
-    for pid in PRESET_ORDER:
-        if pid == 'standard':
-            continue
-        preset_data = registry.get(pid)
-        if not preset_data:
-            continue
-        g = None
-        if space_name:
-            sd = preset_data.get('spaces', {}).get(space_name)
-            if sd:
-                g = _guid_to_dot(sd.get('guid', ''))
-        if not g:
-            for _, sd in preset_data.get('spaces', {}).items():
-                raw = sd.get('guid')
-                if raw:
-                    g = _guid_to_dot(raw)
-                    break
-        if g:
-            all_guids.append(g)
+    preset_data = registry.get(preset_id)
+    if preset_data:
+        pkg_path = preset_data.get('package_path', '')
+        prefetch_fn = getattr(BigWorld, 'wg_prefetchSpaceZip', None)
+        if prefetch_fn and pkg_path and os.path.isfile(pkg_path):
+            try:
+                prefetch_fn(space_id, pkg_path)
+                LOG.info('live_apply: wg_prefetchSpaceZip(%s) called', pkg_path)
+            except Exception as e:
+                LOG.info('live_apply: wg_prefetchSpaceZip ERR: %s', str(e)[:100])
 
-    # Крок 1: передаємо всі guid-и у Flash (щоб завантажити в простір)
-    flash_ok = _push_environments_to_flash(all_guids, guid_dot, space_name)
-    LOG.info('live_apply: push_to_flash=%s', flash_ok)
-
-    # Крок 2: перемикаємо через LSEnvironmentSwitcher
+    # Спроба 2: LSEnvironmentSwitcher
     try:
         import LSArenaPhasesComponent as _ls
         sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
@@ -1020,15 +1004,13 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         inst._switchEnvironment(guid_dot)
         LOG.info('live_apply: _switchEnvironment(%s) OK', guid_dot)
 
-        # Тригер оновлення рендеру
         try:
             fn_tod = getattr(BigWorld, 'spaceTimeOfDay', None)
             if fn_tod:
                 current_time = fn_tod(space_id, '')
                 fn_tod(space_id, current_time)
-                LOG.info('live_apply: spaceTimeOfDay refresh OK')
-        except Exception as e:
-            LOG.info('live_apply: spaceTimeOfDay ERR: %s', str(e)[:80])
+        except Exception:
+            pass
 
         return True
 
