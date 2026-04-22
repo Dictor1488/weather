@@ -83,7 +83,7 @@ ALL_MAPS = [
     ('209_wg_epic_suburbia',   u'Крафтверк'),
     ('210_bf_epic_desert',     u'Застава'),
     ('212_epic_random_valley', u'Долина'),
-    ('217_er_alaska',          u'Устрична затока'),
+    ('217_er_alaska',          u'Клондайк'),          # 2.2.1: повернуто в Random Battles
     ('222_er_clime',           u'Вайдпарк'),
 ]
 
@@ -154,6 +154,7 @@ def _get_space_name_for_become_player(avatar):
       1. arenaTypeID + ArenaType.g_cache  — найнадійніший на onBecomePlayer,
          бо arena.arenaType може ще не мати geometryName
       2. Стандартний arena.arenaType.geometryName — fallback
+      3. arena.geometryName напряму — 2.2.1: Klondike та reworked maps
     """
     log = _log()
 
@@ -172,11 +173,27 @@ def _get_space_name_for_become_player(avatar):
     except Exception as e:
         log.warning('_get_space_name_for_become_player: arenaTypeID ERR: %s', e)
 
-    # --- Спосіб 2: стандартний через arena.arenaType (FALLBACK) ---
+    # --- Спосіб 2: стандартний через arena.arenaType ---
     name = _get_space_name_from_avatar(avatar)
     if name:
         log.info('_get_space_name_for_become_player: via arena.arenaType = %s', name)
         return name
+
+    # --- Спосіб 3: NEW 2.2.1 — напряму через arena.geometryName ---
+    # Klondike (217_er_alaska) та reworked карти (Pearl River, Serene Coast)
+    # іноді зберігають geometryName безпосередньо в об'єкті arena
+    try:
+        arena = getattr(avatar, 'arena', None)
+        if arena:
+            for attr in ('geometryName', 'geometry'):
+                v = getattr(arena, attr, None)
+                if v and isinstance(v, str):
+                    name = v.strip().rsplit('/', 1)[-1]
+                    if name:
+                        log.info('_get_space_name_for_become_player: arena.%s = %s', attr, name)
+                        return name
+    except Exception as e:
+        log.warning('_get_space_name_for_become_player: arena.geometryName ERR: %s', e)
 
     log.warning('_get_space_name_for_become_player: could not determine space name')
     return None
