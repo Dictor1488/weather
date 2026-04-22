@@ -60,13 +60,17 @@ WEATHER_SYSTEM_LABELS = {
     "Hail":    u"Град",
 }
 
+# Патерни підтримують обидва формати імен файлів:
+#   environments.sunset_1_9.wotmod   (стара конвенція — крапка після 'environments')
+#   environments_sunset_1_9.wotmod   (нова конвенція v1.9+ — підкреслення)
+# Розділювач між 'environments' і назвою пресету: [._]
 PRESET_PACKAGE_PATTERNS = {
-    "midday":   re.compile(r"^environments\.midday_.*\.wotmod$",   re.I),
-    "midnight": re.compile(r"^environments\.midnight_.*\.wotmod$", re.I),
-    "overcast": re.compile(r"^environments\.overcast_.*\.wotmod$", re.I),
-    "sunset":   re.compile(r"^environments\.sunset_.*\.wotmod$",   re.I),
+    "midday":   re.compile(r"^environments[._]midday_.*\.wotmod$",   re.I),
+    "midnight": re.compile(r"^environments[._]midnight_.*\.wotmod$", re.I),
+    "overcast": re.compile(r"^environments[._]overcast_.*\.wotmod$", re.I),
+    "sunset":   re.compile(r"^environments[._]sunset_.*\.wotmod$",   re.I),
 }
-SPACES_WG_PACKAGE_RE = re.compile(r"^environments\.spaces_wg_.*\.wotmod$", re.I)
+SPACES_WG_PACKAGE_RE = re.compile(r"^environments[._]spaces_wg_.*\.wotmod$", re.I)
 
 ENV_XML_RE = re.compile(
     r"^res/spaces/([^/]+)/environments/([A-Fa-f0-9\-]+)/environment\.xml$",
