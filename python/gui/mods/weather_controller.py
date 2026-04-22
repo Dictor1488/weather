@@ -955,7 +955,10 @@ def _push_environments_to_flash(all_guids, selected_guid, space_name):
 
 def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     """
-    Live-застосування environment.
+    Live-застосування environment:
+    1. wg_prefetchSpaceZip(wotmod_path) - завантажує всі пресет-wotmod в простір
+    2. _switchEnvironment(guid) - перемикає на потрібний environment
+    Сигнатура підтверджена логом: wg_prefetchSpaceZip(path) без space_id.
     """
     if not IN_GAME:
         return False
@@ -969,8 +972,6 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         player = BigWorld.player()
         if player:
             space_id = getattr(player, 'spaceID', None)
-        if not space_id and hasattr(BigWorld, 'spaceID'):
-            space_id = BigWorld.spaceID()
     except Exception as e:
         LOG.warning('live_apply: spaceID ERR: %s', e)
 
@@ -978,37 +979,23 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         LOG.warning('live_apply: no spaceID')
         return False
 
-    # Спроба 1: wg_prefetchSpaceZip - завантажує zip/wotmod в поточний простір
-    registry = get_environment_registry()
-    preset_data = registry.get(preset_id)
-    if preset_data:
-        pkg_path = preset_data.get('package_path', '')
-        prefetch_fn = getattr(BigWorld, 'wg_prefetchSpaceZip', None)
-        if prefetch_fn and pkg_path and os.path.isfile(pkg_path):
-            # Пробуємо всі варіанти сигнатури
-            for args in [(space_id, pkg_path),
-                         (pkg_path,),
-                         (space_id, pkg_path, True),
-                         (space_id, pkg_path, False),
-                         (space_id, pkg_path, 0),
-                         (space_id, pkg_path, 1)]:
-                try:
-                    prefetch_fn(*args)
-                    LOG.info('live_apply: wg_prefetchSpaceZip%s OK', args)
-                    break
-                except Exception as e:
-                    LOG.info('live_apply: wg_prefetchSpaceZip%s ERR: %s', args, str(e)[:200])
+    # Крок 1: завантажуємо ВСІ пресет-wotmod в простір через wg_prefetchSpaceZip
+    prefetch_fn = getattr(BigWorld, 'wg_prefetchSpaceZip', None)
+    if prefetch_fn:
+        mods_dir = _find_latest_version_dir('mods')
+        if mods_dir:
+            for pattern in PRESET_PACKAGE_PATTERNS:
+                import os as _os
+                for name in _safe_listdir(mods_dir):
+                    if PRESET_PACKAGE_PATTERNS[pattern].match(name):
+                        pkg_path = _os.path.join(mods_dir, name)
+                        try:
+                            prefetch_fn(pkg_path)
+                            LOG.info('live_apply: wg_prefetchSpaceZip(%s) OK', name)
+                        except Exception as e:
+                            LOG.info('live_apply: wg_prefetchSpaceZip(%s) ERR: %s', name, str(e)[:80])
 
-        # Також пробуємо notifySpaceChange
-        notify_fn = getattr(BigWorld, 'notifySpaceChange', None)
-        if notify_fn:
-            try:
-                notify_fn(space_id)
-                LOG.info('live_apply: notifySpaceChange(%s) OK', space_id)
-            except Exception as e:
-                LOG.info('live_apply: notifySpaceChange ERR: %s', str(e)[:100])
-
-    # Спроба 2: LSEnvironmentSwitcher
+    # Крок 2: перемикаємо environment
     try:
         import LSArenaPhasesComponent as _ls
         sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
@@ -1020,15 +1007,6 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
         inst._callbackDelayer = None
         inst._switchEnvironment(guid_dot)
         LOG.info('live_apply: _switchEnvironment(%s) OK', guid_dot)
-
-        try:
-            fn_tod = getattr(BigWorld, 'spaceTimeOfDay', None)
-            if fn_tod:
-                current_time = fn_tod(space_id, '')
-                fn_tod(space_id, current_time)
-        except Exception:
-            pass
-
         return True
 
     except Exception:
