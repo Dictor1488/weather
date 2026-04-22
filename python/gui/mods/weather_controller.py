@@ -437,6 +437,28 @@ def load_config():
     save_config()
     load_environment_registry(force=True)
     logger.info('config loaded from %s, preset=%s', CONFIG_PATH, saved_preset)
+
+    # Діагностика ResMgr - шукаємо метод для монтування res_mods/spaces/
+    if IN_GAME:
+        try:
+            resmgr_methods = [a for a in dir(ResMgr) if not a.startswith('_')]
+            logger.info('ResMgr methods: %s', resmgr_methods)
+            # Спробуємо примонтувати spaces/ з вищим пріоритетом
+            version_dir = _find_latest_version_dir('res_mods')
+            if version_dir:
+                spaces_path = os.path.join(version_dir, 'spaces')
+                for method_name in ('addPath', 'appendPath', 'mount',
+                                    'addZipFile', 'addResPath', 'pushPath'):
+                    fn = getattr(ResMgr, method_name, None)
+                    if fn:
+                        try:
+                            fn(spaces_path)
+                            logger.info('ResMgr.%s(%s) OK', method_name, spaces_path)
+                        except Exception as e:
+                            logger.info('ResMgr.%s ERR: %s', method_name, str(e)[:100])
+        except Exception as e:
+            logger.warning('ResMgr check ERR: %s', e)
+
     return _cfg
 
 def save_config():
@@ -603,48 +625,21 @@ def find_space_settings_path(space_name):
         return None
 
 def _find_environments_json_path():
-    """
-    Повертає список шляхів куди писати environments.json.
-    Протанки кладуть в configs/protanki/ - це і є правильний шлях.
-    Також пишемо в scripts/client/mods/ як запасний варіант.
-    """
     try:
-        game_root = _resolve_game_root()
         version_dir = _find_latest_version_dir('res_mods')
-        paths = []
-        # Основний шлях - configs/protanki/ (де WoT шукає environments.json)
-        if game_root:
-            version_name = os.path.basename(_find_latest_version_dir('mods') or '')
-            configs_path = os.path.normpath(
-                os.path.join(game_root, 'mods', version_name, 'configs', 'protanki', 'environments.json'))
-            paths.append(configs_path)
-        # Запасний - scripts/client/mods/
-        if version_dir:
-            paths.append(os.path.normpath(
-                os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json')))
-        return paths[0] if paths else None
+        if not version_dir:
+            return None
+        return os.path.normpath(
+            os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json'))
     except Exception:
         LOG.error('_find_environments_json_path failed\n%s', traceback.format_exc())
         return None
 
 
 def _get_all_environments_json_paths():
-    """Повертає всі шляхи для запису environments.json."""
-    try:
-        game_root = _resolve_game_root()
-        version_dir = _find_latest_version_dir('res_mods')
-        mods_dir = _find_latest_version_dir('mods')
-        paths = []
-        if game_root and mods_dir:
-            version_name = os.path.basename(mods_dir)
-            paths.append(os.path.normpath(
-                os.path.join(game_root, 'mods', version_name, 'configs', 'protanki', 'environments.json')))
-        if version_dir:
-            paths.append(os.path.normpath(
-                os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json')))
-        return paths
-    except Exception:
-        return []
+    """Повертає шлях для запису environments.json."""
+    path = _find_environments_json_path()
+    return [path] if path else []
 
 def _guid_to_dot(guid):
     return guid.replace('-', '.')
