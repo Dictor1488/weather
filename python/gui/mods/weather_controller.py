@@ -840,30 +840,32 @@ def apply_environment_wg_api(space_id, env_name, preset_guid, space_name=None):
 
     _log_bigworld_env_api_once()
 
-    # Спроба 1: notifySpaceChange(spaceID) — перечитує space.settings live
+    # Спроба 1: notifySpaceChange(unicode) — перечитує space.settings live
+    # Сигнатура: (arg0: unicode) -> None  — передаємо space_name або str(spaceID)
     fn1 = getattr(BigWorld, 'notifySpaceChange', None)
     if fn1 is not None:
-        try:
-            fn1(space_id)
-            LOG.info('apply_env_wg: notifySpaceChange(%s) OK', space_id)
-            return True
-        except Exception as e:
-            LOG.info('apply_env_wg: notifySpaceChange ERR: %s', str(e)[:200])
+        # Пробуємо space_name спочатку, потім str(spaceID)
+        for arg in filter(None, [space_name, str(space_id)]):
+            try:
+                fn1(arg)
+                LOG.info('apply_env_wg: notifySpaceChange(%r) OK', arg)
+                return True
+            except Exception as e:
+                LOG.info('apply_env_wg: notifySpaceChange(%r) ERR: %s', arg, str(e)[:200])
 
-    # Спроба 2: spaceTimeOfDay — змінює time of day як сайд-ефект оновлення env
-    # (деякі версії WoT оновлюють environment при зміні time)
+    # Спроба 2: spaceTimeOfDay(int, unicode) → читаємо поточний час, потім тригеримо refresh
+    fn_tod = getattr(BigWorld, 'spaceTimeOfDay', None)
     fn2 = getattr(BigWorld, 'wg_setHourOfDay', None)
-    if fn2 is not None:
+    if fn_tod is not None and fn2 is not None:
         try:
-            # Читаємо поточний час і встановлюємо той самий — тригерить refresh
-            current = BigWorld.spaceTimeOfDay(space_id) if hasattr(BigWorld, 'spaceTimeOfDay') else 12.0
-            fn2(space_id, current)
-            LOG.info('apply_env_wg: wg_setHourOfDay(%s, %s) OK as refresh trigger', space_id, current)
+            current_str = fn_tod(space_id, '')  # (arg0: int, arg1: unicode)
+            fn2(space_id, current_str)
+            LOG.info('apply_env_wg: wg_setHourOfDay refresh OK, tod=%r', current_str)
             return True
         except Exception as e:
             LOG.info('apply_env_wg: wg_setHourOfDay ERR: %s', str(e)[:200])
 
-    LOG.warning('apply_env_wg: no working WG API found (notifySpaceChange and wg_setHourOfDay unavailable)')
+    LOG.warning('apply_env_wg: no working WG API found')
     return False
 
 
@@ -906,11 +908,8 @@ def trigger_daapi_override_ingame(preset_id, space_name=None):
         view = _find_environments_settings_view()
         if view is not None:
             try:
-                # Метод який Flash відправляє до Python — нам потрібен зворотній:
-                # Python викликає метод AS3 view'а через DAAPI flashObject
                 flash = getattr(view, 'flashObject', None)
                 if flash is not None:
-                    # Відправляємо override через flashObject (AS3 → Engine)
                     payload = {'preset': preset_id, 'guid': guid or '', 'spaceName': space_name or ''}
                     if hasattr(flash, 'as_setDynamicData'):
                         flash.as_setDynamicData(payload)
@@ -919,18 +918,35 @@ def trigger_daapi_override_ingame(preset_id, space_name=None):
             except Exception as e:
                 LOG.warning('trigger_daapi: flashObject ERR: %s', e)
 
-        # Fallback: якщо view не знайдено — спробувати через g_eventBus
+        # Fallback: викликаємо interactiveEvent напряму через app/views
         try:
-            from gui.shared import g_eventBus
-            from gui.shared.events import GameEvent
-            # Деякі WoT версії приймають override через eventBus
-            event_id = 'WEATHER_OVERRIDE_INGAME'
-            g_eventBus.handleEvent(
-                GameEvent(event_id, ctx={'preset': preset_id, 'guid': guid or ''}))
-            LOG.info('trigger_daapi: g_eventBus.handleEvent %s sent', event_id)
-            return True
+            from gui.app_loader import g_appLoader
+            app = g_appLoader.getApp()
+            if app is not None:
+                # Спроба через lobby/battle view manager
+                for mgr_name in ('containerManager', 'viewsManager'):
+                    mgr = getattr(app, mgr_name, None)
+                    if mgr is None:
+                        continue
+                    for alias in ('EnvironmentsSettingsUI', 'environmentsSettings'):
+                        try:
+                            v = mgr.getViewByAlias(alias)
+                            if v is None:
+                                continue
+                            # Прямий виклик Python-методу що реєструє WoT
+                            if hasattr(v, 'interactiveEvent_overrideIngame'):
+                                v.interactiveEvent_overrideIngame(
+                                    preset_id=preset_id,
+                                    guid=guid or '',
+                                    space_name=space_name or '')
+                                LOG.info('trigger_daapi: interactiveEvent_overrideIngame OK preset=%s', preset_id)
+                                return True
+                        except Exception as e2:
+                            LOG.debug('trigger_daapi: %s/%s ERR: %s', mgr_name, alias, e2)
         except Exception as e:
-            LOG.debug('trigger_daapi: g_eventBus ERR: %s', e)
+            LOG.debug('trigger_daapi: app fallback ERR: %s', e)
+
+        LOG.warning('trigger_daapi: no live method worked for preset=%s', preset_id)
 
     except Exception:
         LOG.error('trigger_daapi_override_ingame failed\n%s', traceback.format_exc())
@@ -1117,13 +1133,17 @@ def _resolve_current_arena_name():
     return _last_space_name
 
 def get_available_cycle_presets(space_name):
-    available = ['standard']
+    """Повертає список пресетів для циклу в бою — БЕЗ 'standard'."""
+    available = []
     registry  = get_environment_registry()
     for preset_id in PRESET_ORDER:
         if preset_id == 'standard':
             continue
         if registry.get(preset_id, {}).get('spaces', {}).get(space_name):
             available.append(preset_id)
+    # Якщо реєстр порожній або карта не знайдена — беремо всі не-standard
+    if not available:
+        available = [p for p in PRESET_ORDER if p != 'standard']
     return available
 
 def get_current_override_preset():
