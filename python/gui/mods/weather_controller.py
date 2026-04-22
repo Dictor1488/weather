@@ -441,27 +441,64 @@ def load_config():
     # Пробуємо змінити space.settings через ResMgr.openSection + save
     if IN_GAME:
         try:
-            # Тест: читаємо і зберігаємо space.settings через VFS
             test_space = 'spaces/01_karelia/space.settings'
             section = ResMgr.openSection(test_space)
             if section is not None:
-                logger.info('ResMgr.openSection OK: %s, keys=%s',
-                            test_space, list(section.keys())[:10])
-                # Перевіримо чи є environment тег
-                env = section.get('environment')
-                env_override = section.get('environmentOverride')
-                logger.info('ResMgr space.settings: environment=%s, environmentOverride=%s',
-                            env, env_override)
-                # Спробуємо записати через ResMgr.save
+                # DataSection API: ітерація, readString, writeString
+                ds_attrs = [a for a in dir(section) if not a.startswith('_')]
+                logger.info('DataSection attrs: %s', ds_attrs)
+
+                # Читаємо існуючі значення
+                for key in ['environment', 'environmentOverride']:
+                    try:
+                        child = section[key]
+                        logger.info('section[%s] = %s (type=%s)', key, child, type(child))
+                    except Exception as e:
+                        logger.info('section[%s] ERR: %s', key, e)
+
+                # Спробуємо записати environment через різні методи
+                env_name = 'Night_01'
+                guid = '15755E11-4090266B-594778B6-B233C12C'
+
+                # Спроба 1: writeString
+                for method in ('writeString', 'write', 'writeSection'):
+                    fn = getattr(section, method, None)
+                    if fn:
+                        try:
+                            fn('environment', env_name)
+                            logger.info('DataSection.%s(environment, %s) OK', method, env_name)
+                        except Exception as e:
+                            logger.info('DataSection.%s ERR: %s', method, str(e)[:80])
+
+                # Спроба 2: section['environment'] = value
+                try:
+                    section['environment'] = env_name
+                    logger.info('section[environment] = %s OK', env_name)
+                except Exception as e:
+                    logger.info('section[environment] = value ERR: %s', str(e)[:80])
+
+                # Спроба 3: createSection + setString
+                for method in ('createSection', 'openSection'):
+                    fn = getattr(section, method, None)
+                    if fn:
+                        try:
+                            child = fn('environment')
+                            if child is not None:
+                                logger.info('created section environment, attrs=%s',
+                                            [a for a in dir(child) if not a.startswith('_')][:10])
+                        except Exception as e:
+                            logger.info('section.%s(environment) ERR: %s', method, str(e)[:80])
+
+                # Спроба зберегти
                 try:
                     result = ResMgr.save(section, test_space)
                     logger.info('ResMgr.save result=%s', result)
                 except Exception as e:
                     logger.info('ResMgr.save ERR: %s', str(e)[:100])
             else:
-                logger.warning('ResMgr.openSection returned None for %s', test_space)
+                logger.warning('ResMgr.openSection returned None')
         except Exception as e:
-            logger.warning('ResMgr openSection ERR: %s', e)
+            logger.warning('ResMgr test ERR: %s', e)
 
     return _cfg
 
