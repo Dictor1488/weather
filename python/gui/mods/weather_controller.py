@@ -200,13 +200,16 @@ def _resolve_game_root():
     return fallback
 
 def _find_latest_version_dir(root_name):
+    import re
     game_root = _resolve_game_root()
     root = os.path.join(game_root, root_name)
     if not os.path.isdir(root):
         LOG.warning('%s root not found: %s', root_name, root)
         return None
+    # Шукаємо тільки папки що схожі на версію: цифри і крапки (наприклад 2.2.1.0)
+    version_re = re.compile(r'^[0-9]+\.[0-9]+')
     dirs = [os.path.join(root, n) for n in _safe_listdir(root)
-            if os.path.isdir(os.path.join(root, n))]
+            if os.path.isdir(os.path.join(root, n)) and version_re.match(n)]
     if not dirs:
         LOG.warning('No version dirs in %s', root)
         return None
