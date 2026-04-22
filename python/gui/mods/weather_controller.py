@@ -413,6 +413,60 @@ def get_preset_guid(preset_id, space_name=None):
 # Конфіг
 # ---------------------------------------------------------------------------
 
+def _apply_resmgr_patch_for_space(space_name, env_name, preset_guid):
+    """Патчить space.settings в VFS через ResMgr.writeString + section.save."""
+    try:
+        vfs_path = u'spaces/%s/space.settings' % space_name
+        section = ResMgr.openSection(vfs_path)
+        if section is None:
+            LOG.warning('resmgr_patch: openSection None for %s', vfs_path)
+            return False
+
+        if env_name:
+            section.writeString('environment', env_name)
+        if preset_guid:
+            section.writeString('environmentOverride', preset_guid)
+
+        # Зберігаємо в res_mods/spaces/
+        version_dir = _find_latest_version_dir('res_mods')
+        if version_dir:
+            save_path = os.path.normpath(
+                os.path.join(version_dir, 'spaces', space_name, 'space.settings'))
+            _ensure_dir(save_path)
+            result = section.save(save_path)
+            LOG.info('resmgr_patch: %s save=%s', space_name, result)
+        else:
+            result = section.save(vfs_path)
+            LOG.info('resmgr_patch: vfs save=%s', result)
+
+        return True
+    except Exception:
+        LOG.error('resmgr_patch failed\n%s', traceback.format_exc())
+        return False
+
+
+def _apply_resmgr_patch_all(preset_id):
+    """Патчить space.settings для всіх карт через ResMgr."""
+    if not IN_GAME:
+        return
+    registry = get_environment_registry()
+    if not preset_id or preset_id == 'standard':
+        LOG.info('resmgr_patch_all: standard, skip')
+        return
+    preset_data = registry.get(preset_id)
+    if not preset_data:
+        LOG.warning('resmgr_patch_all: preset not in registry: %s', preset_id)
+        return
+    count = 0
+    for space_name, sd in preset_data.get('spaces', {}).items():
+        env_name = sd.get('env_name')
+        guid = sd.get('guid')
+        if env_name and guid:
+            if _apply_resmgr_patch_for_space(space_name, env_name, guid):
+                count += 1
+    LOG.info('resmgr_patch_all: done preset=%s patched=%d', preset_id, count)
+
+
 def load_config():
     global _cfg, _current_override_preset, _current_cycle_index
     _cfg = json.loads(json.dumps(DEFAULT_CFG))
