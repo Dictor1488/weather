@@ -681,9 +681,27 @@ def _find_environments_json_path():
 
 
 def _get_all_environments_json_paths():
-    """Повертає шлях для запису environments.json."""
-    path = _find_environments_json_path()
-    return [path] if path else []
+    """
+    Повертає всі шляхи для запису environments.json.
+    Правильний шлях: mods/configs/protanki/environments.json
+    (поряд з папкою версії, не всередині неї)
+    """
+    paths = []
+    try:
+        game_root = _resolve_game_root()
+        # ПРАВИЛЬНИЙ шлях - поряд з 2.2.1.0/, не всередині
+        correct_path = os.path.normpath(
+            os.path.join(game_root, 'mods', 'configs', 'protanki', 'environments.json'))
+        paths.append(correct_path)
+        # Також res_mods як запасний
+        version_dir = _find_latest_version_dir('res_mods')
+        if version_dir:
+            paths.append(os.path.normpath(
+                os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json')))
+        LOG.info('environments.json paths: %s', paths)
+    except Exception as e:
+        LOG.warning('_get_all_environments_json_paths ERR: %s', e)
+    return paths
 
 def _guid_to_dot(guid):
     return guid.replace('-', '.')
