@@ -1031,15 +1031,19 @@ def _resolve_current_arena_name():
             return _last_space_name
         arena = getattr(player, 'arena', None)
         if arena is not None:
+            # Спосіб 1: через arenaType (стандартний)
             arena_type = getattr(arena, 'arenaType', None)
             if arena_type is not None:
                 for attr in ('geometryName', 'geometry', 'name'):
                     value = _normalize_space_name(getattr(arena_type, attr, None))
                     if value:
                         return value
-            value = _normalize_space_name(getattr(arena, 'geometryName', None))
-            if value:
-                return value
+            # Спосіб 2: напряму через arena (2.2.1: Klondike + reworked maps)
+            for attr in ('geometryName', 'geometry'):
+                value = _normalize_space_name(getattr(arena, attr, None))
+                if value:
+                    LOG.info('_resolve_current_arena_name: arena.%s=%s', attr, value)
+                    return value
     except Exception:
         LOG.error('_resolve_current_arena_name failed\n%s', traceback.format_exc())
     return _last_space_name
