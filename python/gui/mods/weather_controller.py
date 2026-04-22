@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v6.0
+Weather controller v7.0
 
-Зміни відносно v5.12:
-- CORE FIX: виправлено інвертовану логіку onEnterWorld (більше не пропускає запис)
-- CORE FIX: onBecomePlayer тепер спочатку читає arenaTypeID через ArenaType.g_cache
-- feat: live-зміна environment через EnvironmentsSettingsUI DAAPI
-        (interactiveEvent_overrideIngame → as_setStaticData / as_setDynamicData)
-- feat: живий BigWorld API пошук: wg_setSpaceEnvironmentId / setSpaceEnvironmentID /
-        BigWorld.wg_reloadEnvironment
-- fix: _become_player_wrote_for_space більше не блокує onEnterWorld при неуспішному записі
+Зміни відносно v6.0:
+- CORE FIX: res_mods/spaces/ не читається движком — видалено як основний метод
+- CORE FIX: прибрано мертвий код (wg_setHourOfDay з неправильними аргументами,
+            addSpaceGeometryMapping для server space, DAAPI Flash view в бою)
+- feat: діагностика ArenaType.g_cache для пошуку правильного live API
+- feat: діагностика Weather модуля (вбудований WoT environment switcher)
+- info: основний метод застосування — патч wotmod (робиться окремо при збірці)
+        live API буде підключено після знаходження правильного методу через лог
 """
 import json
 import os
@@ -60,10 +60,6 @@ WEATHER_SYSTEM_LABELS = {
     "Hail":    u"Град",
 }
 
-# Патерни підтримують обидва формати імен файлів:
-#   environments.sunset_1_9.wotmod   (стара конвенція — крапка після 'environments')
-#   environments_sunset_1_9.wotmod   (нова конвенція v1.9+ — підкреслення)
-# Розділювач між 'environments' і назвою пресету: [._]
 PRESET_PACKAGE_PATTERNS = {
     "midday":   re.compile(r"^environments[._]midday_.*\.wotmod$",   re.I),
     "midnight": re.compile(r"^environments[._]midnight_.*\.wotmod$", re.I),
@@ -76,10 +72,7 @@ ENV_XML_RE = re.compile(
     r"^res/spaces/([^/]+)/environments/([A-Fa-f0-9\-]+)/environment\.xml$",
     re.I
 )
-# v1.9+: env name stored in <name>value</name>
-# legacy: env name stored in <n>value</n>
-# Tonemapping names (RexpTM, FilmicTM, LinearExpTM) are in <n> tags - ignored
-ENV_NAME_RE_FULL = re.compile('<name>\\t([^\\t<]+)\\t</name>', re.I)
+ENV_NAME_RE_FULL = re.compile('<n>\\t([^\\t<]+)\\t</n>', re.I)
 ENV_NAME_RE_OLD  = re.compile('<n>\\s*([^<]+?)\\s*</n>', re.I | re.S)
 _ENV_NAME_SKIP  = frozenset(['RexpTM', 'FilmicTM', 'LinearExpTM'])
 ROOT_ENV_RE          = re.compile(r'(<environment>)([^<]*)(</environment>)',                 re.I)
@@ -112,7 +105,6 @@ _registry_loaded          = False
 _last_space_name          = None
 _spaces_wg_package_path   = None
 _spaces_wg_template_cache = {}
-_pending_reload_cb        = None
 
 
 # ---------------------------------------------------------------------------
@@ -228,20 +220,13 @@ def _find_latest_version_dir(root_name):
 # ---------------------------------------------------------------------------
 
 def _extract_env_name(xml_bytes):
-    """
-    Витягує назву environment з environment.xml.
-    v1.9+: назва в <name>value</name>  (наприклад Night_01, 02_Sunset)
-    legacy: назва в <n>value</n>
-    """
     try:
         xml_text = (xml_bytes.decode('utf-8', 'ignore')
                     if not isinstance(xml_bytes, basestring) else xml_bytes)
-        # Спроба 1: v1.9 — <name>\tvalue\t</name>
         for m in ENV_NAME_RE_FULL.finditer(xml_text):
             val = m.group(1).strip()
             if val and val not in _ENV_NAME_SKIP and '/' not in val:
                 return val
-        # Спроба 2: legacy — <n>value</n>
         for m in ENV_NAME_RE_OLD.finditer(xml_text):
             val = m.group(1).strip()
             if val and val not in _ENV_NAME_SKIP and '/' not in val:
@@ -551,7 +536,7 @@ def get_all_for_map_ui(map_name):
 
 
 # ---------------------------------------------------------------------------
-# space.settings патч
+# space.settings патч (запасний — для res_mods)
 # ---------------------------------------------------------------------------
 
 def _decode_xml_bytes(data):
@@ -575,7 +560,10 @@ def _get_spaces_wg_templates(space_name):
         except Exception:
             LOG.warning('spaces_wg template missing: %s', space_name)
         finally:
-            archive.close()
+            try:
+                archive.close()
+            except Exception:
+                pass
     except Exception:
         LOG.error('Failed to open spaces_wg package\n%s', traceback.format_exc())
     return result
@@ -584,7 +572,6 @@ def _patch_space_settings_template(template_text, env_name, preset_guid):
     if not template_text:
         return None
     text = template_text
-    # Визначаємо роздільник рядків з шаблону щоб не додавати зайвих \r
     nl = u'\r\n' if u'\r\n' in text else u'\n'
     closing_tag = u'</space.settings>' if u'</space.settings>' in text else u'</root>'
     if ROOT_ENV_RE.search(text):
@@ -639,7 +626,7 @@ def write_environments_json_for_preset(preset_id, space_name=None):
                 except Exception:
                     LOG.error('write_environments_json: remove failed\n%s', traceback.format_exc())
             return True
-        registry   = get_environment_registry()
+        registry    = get_environment_registry()
         preset_data = registry.get(preset_id)
         if not preset_data:
             return False
@@ -679,8 +666,6 @@ def _write_text_file(target_path, content):
         folder = os.path.dirname(target_path)
         if not os.path.isdir(folder):
             os.makedirs(folder)
-        # Пишемо в бінарному режимі щоб уникнути подвійного \r\n на Windows
-        # (Python text mode автоматично конвертує \n → \r\n, але шаблон вже має \r\n)
         if isinstance(content, bytes):
             raw = content
         else:
@@ -694,328 +679,165 @@ def _write_text_file(target_path, content):
 
 
 # ---------------------------------------------------------------------------
-# LIVE зміна environment — BigWorld API
+# Діагностика ArenaType і Weather — для пошуку live API
 # ---------------------------------------------------------------------------
 
-def _get_current_space_id():
-    try:
-        if not IN_GAME:
-            return None
-        player = BigWorld.player()
-        if player is not None:
-            sid = getattr(player, 'spaceID', None)
-            if sid:
-                return sid
-        if hasattr(BigWorld, 'spaceID'):
-            sid = BigWorld.spaceID()
-            if sid:
-                return sid
-    except Exception:
-        LOG.error('_get_current_space_id failed\n%s', traceback.format_exc())
-    return None
-
-
-def _log_bigworld_env_api_once():
-    """Одноразово логує всі BigWorld env-методи для діагностики."""
-    if getattr(_log_bigworld_env_api_once, '_done', False):
-        return
-    _log_bigworld_env_api_once._done = True
-    try:
-        keywords = ('env', 'Env', 'space', 'Space', 'reload', 'Reload', 'Environment', 'wg_set')
-        found = [m for m in dir(BigWorld)
-                 if any(k in m for k in keywords) and callable(getattr(BigWorld, m, None))]
-        LOG.info('BigWorld env-related methods: %s', found)
-    except Exception as e:
-        LOG.warning('_log_bigworld_env_api_once: %s', e)
-
-
-# Зберігаємо handles addSpaceGeometryMapping для видалення при наступній зміні
-_geometry_handles = {}
-
-def _store_geometry_handle(space_id, handle):
-    if handle is None:
-        return
-    _geometry_handles.setdefault(space_id, []).append(handle)
-
-def _remove_old_geometry_handles(space_id):
-    handles = _geometry_handles.pop(space_id, [])
-    if not handles or not hasattr(BigWorld, 'delSpaceGeometryMapping'):
-        return
-    for handle in handles:
-        try:
-            BigWorld.delSpaceGeometryMapping(space_id, handle)
-            LOG.info('removed geometry handle=%s', handle)
-        except Exception as e:
-            LOG.warning('delSpaceGeometryMapping ERR: %s', e)
-
-
-def apply_environment_bigworld_api(space_id, guid, package_path=None, space_name=None):
+def _diagnose_arena_type_once(space_name, preset_guid):
     """
-    Пробує застосувати environment LIVE через addSpaceGeometryMapping.
-
-    Правильна сигнатура (з лога помилки):
-      BigWorld.addSpaceGeometryMapping(spaceID: int, pMapper: Math.MatrixProvider, path: str)
-
-    Завантажуємо wotmod пресету прямо в живий простір через identity matrix.
-    ВАЖЛИВО: НЕ використовуємо spaceReload — він повністю перезавантажує карту
-    і вибиває гравця з бою.
+    Одноразово логує все що є в ArenaType і Weather модулях.
+    Результат логу покаже правильний метод для live-зміни environment.
     """
-    if not IN_GAME or not space_id:
-        return False
+    if getattr(_diagnose_arena_type_once, '_done', False):
+        return
+    _diagnose_arena_type_once._done = True
 
-    _log_bigworld_env_api_once()
-
-    if not package_path or not os.path.isfile(package_path):
-        LOG.warning('apply_env_bw: package_path missing or not found: %s', package_path)
-        return False
-
-    fn = getattr(BigWorld, 'addSpaceGeometryMapping', None)
-    if fn is None:
-        LOG.warning('apply_env_bw: addSpaceGeometryMapping not available')
-        return False
-
-    _remove_old_geometry_handles(space_id)
-
-    # Потрібен Math.MatrixProvider — використовуємо identity matrix
+    # --- ArenaType ---
     try:
-        import Math
-        identity = Math.Matrix()
-        identity.setIdentity()
+        import ArenaType as _at
+        LOG.info('DIAG ArenaType: dir=%s', [a for a in dir(_at) if not a.startswith('__')])
+
+        g_cache = getattr(_at, 'g_cache', None)
+        if g_cache is not None:
+            LOG.info('DIAG ArenaType.g_cache type=%s len=%s', type(g_cache),
+                     len(g_cache) if hasattr(g_cache, '__len__') else '?')
+            for key, val in list(g_cache.items())[:2]:
+                attrs = [a for a in dir(val) if not a.startswith('__')]
+                LOG.info('DIAG ArenaType cache[%s] type=%s attrs=%s', key, type(val), attrs)
+                # Всі атрибути що пов'язані з environment/weather/preset
+                for attr in attrs:
+                    if any(k in attr.lower() for k in ('weather', 'environ', 'preset',
+                                                        'override', 'lighting', 'skybox')):
+                        try:
+                            v = getattr(val, attr)
+                            LOG.info('DIAG ArenaType.%s = %s (type=%s)', attr, v, type(v))
+                        except Exception as e:
+                            LOG.info('DIAG ArenaType.%s ERR: %s', attr, e)
     except Exception as e:
-        LOG.warning('apply_env_bw: Math.Matrix() failed: %s', e)
-        return False
+        LOG.info('DIAG ArenaType scan ERR: %s', e)
 
-    # Пробуємо різні варіанти path: повний шлях до wotmod, або virtual path
-    attempts = [
-        (space_id, identity, package_path),          # wotmod path напряму
-        (space_id, identity, 'spaces/' + (space_name or '')),  # virtual path
-    ]
-
-    for args in attempts:
-        try:
-            handle = fn(*args)
-            LOG.info('apply_env_bw: addSpaceGeometryMapping(%s, identity, %s) OK handle=%s',
-                     space_id, args[2], handle)
-            _store_geometry_handle(space_id, handle)
-            return True
-        except Exception as e:
-            LOG.info('apply_env_bw: addSpaceGeometryMapping(sid, identity, %s) ERR: %s',
-                     args[2], str(e)[:200])
-
-    return False
-
-
-def _find_environments_settings_view():
-    """Шукає активний Flash view EnvironmentsSettingsUI через DAAPI / app container."""
+    # --- Weather модуль ---
     try:
-        from gui.app_loader import g_appLoader
-        app = g_appLoader.getApp()
-        if app is None:
-            return None
-        # Scaleform (старіші версії WoT)
-        container_mgr = getattr(app, 'containerManager', None)
-        if container_mgr is not None:
-            for alias in ('EnvironmentsSettingsUI', 'environmentsSettings', 'WeatherUI'):
+        import Weather as _w
+        LOG.info('DIAG Weather: dir=%s', [a for a in dir(_w) if not a.startswith('__')])
+        for attr in dir(_w):
+            if not attr.startswith('__'):
                 try:
-                    view = container_mgr.getViewByAlias(alias)
-                    if view is not None:
-                        return view
+                    v = getattr(_w, attr)
+                    if callable(v):
+                        LOG.info('DIAG Weather.%s (callable)', attr)
+                    else:
+                        LOG.info('DIAG Weather.%s = %s', attr, v)
                 except Exception:
                     pass
-    except Exception:
-        LOG.debug('_find_environments_settings_view: %s', traceback.format_exc())
-    return None
-
-
-def apply_environment_wg_api(space_id, env_name, preset_guid, space_name=None):
-    """
-    Застосовує environment LIVE через BigWorld API.
-
-    В WoT 2.2.1 немає wg_setSpaceEnvironmentId, але є notifySpaceChange —
-    він сигналізує движку перечитати space.settings без повного перезавантаження.
-    Спочатку space.settings вже записаний apply_environment_via_packages.
-    """
-    if not IN_GAME or not space_id:
-        return False
-
-    _log_bigworld_env_api_once()
-
-    # notifySpaceChange — мережева нотифікація, НЕ змінює environment рендер
-    # Логуємо для діагностики але не вважаємо успіхом
-    fn1 = getattr(BigWorld, 'notifySpaceChange', None)
-    if fn1 is not None and space_name:
-        try:
-            fn1(space_name)
-            LOG.info('apply_env_wg: notifySpaceChange(%r) called (network notify only, not env change)', space_name)
-        except Exception as e:
-            LOG.info('apply_env_wg: notifySpaceChange ERR: %s', str(e)[:80])
-
-    # Спроба 2: spaceTimeOfDay(int, unicode) → читаємо поточний час, потім тригеримо refresh
-    fn_tod = getattr(BigWorld, 'spaceTimeOfDay', None)
-    fn2 = getattr(BigWorld, 'wg_setHourOfDay', None)
-    if fn_tod is not None and fn2 is not None:
-        try:
-            current_str = fn_tod(space_id, '')  # (arg0: int, arg1: unicode)
-            fn2(space_id, current_str)
-            LOG.info('apply_env_wg: wg_setHourOfDay refresh OK, tod=%r', current_str)
-            return True
-        except Exception as e:
-            LOG.info('apply_env_wg: wg_setHourOfDay ERR: %s', str(e)[:200])
-
-    # Спроба 3: пряме звернення до вбудованого EnvironmentsSettings Python модуля
-    try:
-        import sys
-        guid_dot = _guid_to_dot(preset_guid) if preset_guid else None
-
-        # Один раз логуємо ВСІ модулі що містять env/weather/space/settings
-        if not getattr(apply_environment_wg_api, '_modules_logged', False):
-            apply_environment_wg_api._modules_logged = True
-            all_mods = sorted(sys.modules.keys())
-            env_mods = [n for n in all_mods if any(k in n.lower() for k in
-                ('environ', 'weather', 'setting', 'lighting', 'skybox', 'atmosphere', 'daapi'))]
-            LOG.info('apply_env_wg: env-related sys.modules (%d): %s', len(env_mods), env_mods)
-            # Також логуємо всі модулі що мають 'override' або 'environment' в атрибутах
-            for mod_name in all_mods:
-                mod = sys.modules.get(mod_name)
-                if mod is None:
-                    continue
-                try:
-                    attrs = [a for a in dir(mod) if any(k in a.lower() for k in
-                             ('environ', 'override', 'preset', 'lighting'))]
-                    if attrs:
-                        LOG.info('apply_env_wg: module %s has attrs: %s', mod_name, attrs[:10])
-                except Exception:
-                    pass
-
-        # Пробуємо відомі шляхи до EnvironmentsSettings singleton
-        candidates = [
-            'EnvironmentsSettings',
-            'mods.EnvironmentsSettings',
-            'gui.Scaleform.daapi.view.battle.EnvironmentsSettingsUI',
-            'gui.Scaleform.daapi.view.lobby.EnvironmentsSettingsUI',
-            'gui.battle_control.controllers.environment',
-            'gui.battle_control.environment_controller',
-            'account_helpers.settings_core.options',
-        ]
-        for mod_name in candidates:
-            mod = sys.modules.get(mod_name)
-            if mod is None:
-                try:
-                    mod = __import__(mod_name, fromlist=[''])
-                except Exception:
-                    continue
-            if mod is None:
-                continue
-            for attr_name in ('g_instance', 'g_environmentsSettings', 'instance',
-                              'g_settingsCore', 'g_settingsCache'):
-                instance = getattr(mod, attr_name, None)
-                if instance is None:
-                    continue
-                LOG.info('apply_env_wg: found %s.%s = %s', mod_name, attr_name, type(instance))
-                for method_name in ('setOverride', 'setEnvironmentOverride',
-                                    'overrideEnvironment', 'applyPreset',
-                                    'setPreset', 'selectEnvironment',
-                                    'setEnvironment', 'changeEnvironment'):
-                    method = getattr(instance, method_name, None)
-                    if method is None:
-                        continue
-                    try:
-                        method(guid_dot or preset_guid)
-                        LOG.info('apply_env_wg: %s.%s.%s(%s) OK',
-                                 mod_name, attr_name, method_name, guid_dot)
-                        return True
-                    except Exception as e:
-                        LOG.info('apply_env_wg: %s.%s.%s ERR: %s',
-                                 mod_name, attr_name, method_name, str(e)[:120])
+    except ImportError:
+        LOG.info('DIAG Weather: module not available')
     except Exception as e:
-        LOG.warning('apply_env_wg: module scan ERR: %s', e)
+        LOG.info('DIAG Weather scan ERR: %s', e)
 
-    LOG.warning('apply_env_wg: no working WG API found')
-    return False
+    # --- LSEnvironmentSwitcher ---
+    try:
+        import LSArenaPhasesComponent as _ls
+        sw = getattr(_ls, 'LSEnvironmentSwitcher', None)
+        if sw is not None:
+            LOG.info('DIAG LSEnvironmentSwitcher type=%s', type(sw))
+            attrs = [a for a in dir(sw) if not a.startswith('__')]
+            LOG.info('DIAG LSEnvironmentSwitcher attrs=%s', attrs)
+            for attr in attrs:
+                try:
+                    v = getattr(sw, attr)
+                    LOG.info('DIAG LSEnvironmentSwitcher.%s = %s (callable=%s)',
+                             attr, v, callable(v))
+                except Exception as e:
+                    LOG.info('DIAG LSEnvironmentSwitcher.%s ERR: %s', attr, e)
+        else:
+            LOG.info('DIAG LSEnvironmentSwitcher: not found in LSArenaPhasesComponent')
+    except ImportError:
+        LOG.info('DIAG LSArenaPhasesComponent: module not available')
+    except Exception as e:
+        LOG.info('DIAG LSEnvironmentSwitcher scan ERR: %s', e)
+
+    # --- BigWorld env methods (повний список) ---
+    try:
+        env_methods = [m for m in dir(BigWorld)
+                       if any(k in m.lower() for k in ('env', 'space', 'reload', 'weather'))
+                       and callable(getattr(BigWorld, m, None))]
+        LOG.info('DIAG BigWorld env/space methods: %s', env_methods)
+    except Exception as e:
+        LOG.info('DIAG BigWorld methods ERR: %s', e)
 
 
-def trigger_daapi_override_ingame(preset_id, space_name=None):
+def _try_live_apply(space_name, preset_id, env_name, preset_guid):
     """
-    Намагається надіслати команду зміни environment через DAAPI EnvironmentsSettingsUI.
-
-    Flash-компонент EnvironmentsSettingsUI має метод interactiveEvent_overrideIngame
-    що WoT обробляє і застосовує environment live.
-
-    Структура payload для as_setDynamicData / interactiveEvent_overrideIngame
-    (реверс-інжиніринг зі SWF):
-      {
-        'preset': preset_id,         # 'midnight', 'overcast', etc.
-        'guid':   guid_dot_format,   # '00.11.22...' формат з крапками
-        'spaceName': space_name,
-      }
+    Спробувати застосувати environment live (в бою).
+    Зараз логує діагностику і пробує LSEnvironmentSwitcher.
+    Після аналізу логу тут буде правильний виклик.
     """
     if not IN_GAME:
         return False
 
+    # Діагностика — один раз щоб побачити що є
+    _diagnose_arena_type_once(space_name, preset_guid)
+
+    guid_dot = _guid_to_dot(preset_guid) if preset_guid else None
+
+    # Спроба через LSEnvironmentSwitcher
     try:
-        registry = get_environment_registry()
-        preset_data = registry.get(preset_id)
-        if not preset_data and preset_id != 'standard':
-            LOG.warning('trigger_daapi_override_ingame: preset not in registry: %s', preset_id)
-            return False
-
-        guid = None
-        if preset_data and space_name:
-            sd = preset_data.get('spaces', {}).get(space_name)
-            if sd:
-                guid = _guid_to_dot(sd.get('guid', ''))
-        if not guid and preset_data:
-            for _, sd in preset_data.get('spaces', {}).items():
-                if sd.get('guid'):
-                    guid = _guid_to_dot(sd['guid'])
-                    break
-
-        view = _find_environments_settings_view()
-        if view is not None:
-            try:
-                flash = getattr(view, 'flashObject', None)
-                if flash is not None:
-                    payload = {'preset': preset_id, 'guid': guid or '', 'spaceName': space_name or ''}
-                    if hasattr(flash, 'as_setDynamicData'):
-                        flash.as_setDynamicData(payload)
-                        LOG.info('trigger_daapi: as_setDynamicData sent preset=%s', preset_id)
+        import LSArenaPhasesComponent as _ls
+        sw = getattr(_ls, 'LSEnvironmentSwitcher', None)
+        if sw is not None:
+            # Пробуємо всі методи що можуть перемикати environment
+            for method_name in ('switchEnvironment', 'setEnvironment', 'applyEnvironment',
+                                'overrideEnvironment', 'setPreset', 'forceEnvironment',
+                                'setEnvironmentOverride', 'changeEnvironment'):
+                method = getattr(sw, method_name, None)
+                if method is None:
+                    # Можливо це клас — шукаємо instance
+                    inst = (getattr(sw, 'instance', None) or
+                            getattr(sw, 'g_instance', None) or
+                            getattr(sw, '_instance', None))
+                    if inst:
+                        method = getattr(inst, method_name, None)
+                if method is None:
+                    continue
+                # Пробуємо різні аргументи
+                for args in [(guid_dot,), (preset_guid,), (env_name,),
+                             (space_name, guid_dot), (space_name, preset_guid)]:
+                    try:
+                        method(*args)
+                        LOG.info('live_apply: LSEnvironmentSwitcher.%s%s OK', method_name, args)
                         return True
-            except Exception as e:
-                LOG.warning('trigger_daapi: flashObject ERR: %s', e)
+                    except Exception as e:
+                        LOG.info('live_apply: LSEnvironmentSwitcher.%s%s ERR: %s',
+                                 method_name, args, str(e)[:100])
+    except ImportError:
+        pass
+    except Exception as e:
+        LOG.warning('live_apply: LSEnvironmentSwitcher ERR: %s', e)
 
-        # Fallback: викликаємо interactiveEvent напряму через app/views
-        try:
-            from gui.app_loader import g_appLoader
-            app = g_appLoader.getApp()
-            if app is not None:
-                # Спроба через lobby/battle view manager
-                for mgr_name in ('containerManager', 'viewsManager'):
-                    mgr = getattr(app, mgr_name, None)
-                    if mgr is None:
-                        continue
-                    for alias in ('EnvironmentsSettingsUI', 'environmentsSettings'):
-                        try:
-                            v = mgr.getViewByAlias(alias)
-                            if v is None:
-                                continue
-                            # Прямий виклик Python-методу що реєструє WoT
-                            if hasattr(v, 'interactiveEvent_overrideIngame'):
-                                v.interactiveEvent_overrideIngame(
-                                    preset_id=preset_id,
-                                    guid=guid or '',
-                                    space_name=space_name or '')
-                                LOG.info('trigger_daapi: interactiveEvent_overrideIngame OK preset=%s', preset_id)
+    # Спроба через ArenaType напряму
+    try:
+        import ArenaType as _at
+        g_cache = getattr(_at, 'g_cache', None)
+        if g_cache:
+            player = BigWorld.player()
+            arena_type_id = getattr(player, 'arenaTypeID', None) if player else None
+            if arena_type_id:
+                at = g_cache.get(arena_type_id)
+                if at:
+                    for method_name in ('overrideEnvironment', 'setEnvironment',
+                                        'applyEnvironment', 'setWeatherPreset'):
+                        method = getattr(at, method_name, None)
+                        if method:
+                            try:
+                                method(guid_dot or preset_guid)
+                                LOG.info('live_apply: ArenaType.%s(%s) OK', method_name, guid_dot)
                                 return True
-                        except Exception as e2:
-                            LOG.debug('trigger_daapi: %s/%s ERR: %s', mgr_name, alias, e2)
-        except Exception as e:
-            LOG.debug('trigger_daapi: app fallback ERR: %s', e)
+                            except Exception as e:
+                                LOG.info('live_apply: ArenaType.%s ERR: %s', method_name, e)
+    except Exception as e:
+        LOG.info('live_apply: ArenaType direct ERR: %s', e)
 
-        LOG.warning('trigger_daapi: no live method worked for preset=%s', preset_id)
-
-    except Exception:
-        LOG.error('trigger_daapi_override_ingame failed\n%s', traceback.format_exc())
-
+    LOG.info('live_apply: no live method worked for preset=%s', preset_id)
     return False
 
 
@@ -1025,50 +847,52 @@ def trigger_daapi_override_ingame(preset_id, space_name=None):
 
 def apply_environment_via_packages(space_name, preset_id):
     """
-    Записує space.settings та environments.json і намагається застосувати live.
+    Застосовує пресет для вказаної карти.
 
-    Порядок спроб live-зміни:
-      1. BigWorld.wg_setSpaceEnvironmentId / wg_reloadEnvironment
-      2. EnvironmentsSettingsUI DAAPI (interactiveEvent_overrideIngame)
+    При заході в бій:
+      - пише environments.json (для randomizer системи WoT)
+      - пише space.settings в res_mods (запасний варіант)
+      - основне застосування відбувається через патч wotmod при збірці пресету
+
+    В бою (F12):
+      - намагається live-застосування через LSEnvironmentSwitcher / ArenaType
+      - логує діагностику для знаходження правильного API
     """
     try:
         LOG.info('apply_env: space=%s preset=%s', space_name, preset_id)
         if not space_name:
             return False
 
-        # Завжди пишемо environments.json (скидаємо або встановлюємо)
-        env_json_ok = write_environments_json_for_preset(preset_id, space_name)
+        # Завжди пишемо environments.json
+        write_environments_json_for_preset(preset_id, space_name)
 
         if not preset_id or preset_id == 'standard':
-            LOG.info('apply_env: standard preset, environments.json cleared')
-            return env_json_ok
+            LOG.info('apply_env: standard preset — environments.json cleared')
+            return True
 
         actual_preset_id, resolved = resolve_environment_with_fallback(space_name, preset_id)
         if not resolved:
-            return env_json_ok
+            LOG.warning('apply_env: no resolved environment for space=%s preset=%s',
+                        space_name, preset_id)
+            return False
 
         env_name    = resolved.get('env_name')
         preset_guid = resolved.get('guid')
         LOG.info('apply_env: resolved preset=%s env_name=%s guid=%s',
                  actual_preset_id, env_name, preset_guid)
 
-        # Записуємо space.settings
+        # Пишемо space.settings в res_mods (запасний)
         templates = _get_spaces_wg_templates(space_name)
         space_settings_path = find_space_settings_path(space_name)
-        settings_content = None
-        if space_settings_path:
+        if space_settings_path and templates.get('space_settings'):
             settings_content = _patch_space_settings_template(
                 templates.get('space_settings'), env_name, preset_guid)
             if settings_content:
                 ok = _write_text_file(space_settings_path, settings_content)
-                LOG.info('apply_env: space.settings write=%s path=%s', ok, space_settings_path)
-            else:
-                LOG.warning('apply_env: WG template not found for %s', space_name)
-        else:
-            LOG.warning('apply_env: space_settings_path is None for %s', space_name)
+                LOG.info('apply_env: res_mods space.settings write=%s path=%s',
+                         ok, space_settings_path)
 
-        # --- Live зміна (тільки в бою) ---
-        space_id = _get_current_space_id()
+        # Live-зміна (тільки якщо реально в бою)
         in_battle = False
         if IN_GAME:
             try:
@@ -1077,23 +901,18 @@ def apply_environment_via_packages(space_name, preset_id):
             except Exception:
                 pass
 
-        if in_battle and space_id and preset_guid:
-            pkg_path = (resolved or {}).get('package_path')
-
-            # Спроба 1: WG-специфічний API (миттєва зміна як у вбудованому моді)
-            live_wg = apply_environment_wg_api(space_id, env_name, preset_guid, space_name)
-            LOG.info('apply_env: live WG API = %s', live_wg)
-
-            if not live_wg:
-                # Спроба 2: addSpaceGeometryMapping
-                live_bw = apply_environment_bigworld_api(
-                    space_id, preset_guid, package_path=pkg_path, space_name=space_name)
-                LOG.info('apply_env: live BigWorld API = %s', live_bw)
-
-                if not live_bw:
-                    # Спроба 3: DAAPI Flash view
-                    live_daapi = trigger_daapi_override_ingame(actual_preset_id, space_name)
-                    LOG.info('apply_env: live DAAPI = %s', live_daapi)
+        if in_battle:
+            live = _try_live_apply(space_name, actual_preset_id, env_name, preset_guid)
+            LOG.info('apply_env: live apply = %s', live)
+            if not live:
+                try:
+                    from gui import SystemMessages
+                    SystemMessages.pushMessage(
+                        u'[Weather] %s — застосується при наступному заході в бій' %
+                        PRESET_LABELS.get(preset_id, preset_id),
+                        SystemMessages.SM_TYPE.Information)
+                except Exception:
+                    pass
 
         return True
 
@@ -1113,7 +932,6 @@ def on_space_entered(space_name):
             preset_id = _current_override_preset
         else:
             preset_id = get_preset_for_map(space_name)
-            # Якщо вийшов standard — форсуємо рандомний ненульовий пресет
             if not preset_id or preset_id == 'standard':
                 non_std = [p for p in PRESET_ORDER if p != 'standard']
                 preset_id = random.choice(non_std)
@@ -1130,10 +948,6 @@ def on_space_entered(space_name):
 def cycle_weather_in_battle():
     global _current_cycle_index, _current_override_preset
     try:
-        from gui import SystemMessages
-    except Exception:
-        SystemMessages = None
-    try:
         in_battle = False
         try:
             player = BigWorld.player()
@@ -1145,9 +959,9 @@ def cycle_weather_in_battle():
         available  = get_available_cycle_presets(arena_name) if arena_name else list(PRESET_ORDER)
         current    = _current_override_preset or 'standard'
         if current not in available:
-            current = 'standard'
-        idx          = available.index(current)
-        next_preset  = available[(idx + 1) % len(available)]
+            current = available[0] if available else 'standard'
+        idx         = available.index(current) if current in available else 0
+        next_preset = available[(idx + 1) % len(available)]
 
         _current_cycle_index = PRESET_ORDER.index(next_preset) if next_preset in PRESET_ORDER else 0
         _current_override_preset = None if next_preset == 'standard' else next_preset
@@ -1157,13 +971,13 @@ def cycle_weather_in_battle():
 
         save_config()
 
-        if SystemMessages is not None:
-            try:
-                SystemMessages.pushMessage(
-                    u'[Weather] %s' % PRESET_LABELS.get(next_preset, next_preset),
-                    SystemMessages.SM_TYPE.Information)
-            except Exception:
-                pass
+        try:
+            from gui import SystemMessages
+            SystemMessages.pushMessage(
+                u'[Weather] %s' % PRESET_LABELS.get(next_preset, next_preset),
+                SystemMessages.SM_TYPE.Information)
+        except Exception:
+            pass
     except Exception:
         LOG.error('cycle_weather_in_battle failed\n%s', traceback.format_exc())
 
@@ -1183,25 +997,21 @@ def _resolve_current_arena_name():
             return _last_space_name
         arena = getattr(player, 'arena', None)
         if arena is not None:
-            # Спосіб 1: через arenaType (стандартний)
             arena_type = getattr(arena, 'arenaType', None)
             if arena_type is not None:
                 for attr in ('geometryName', 'geometry', 'name'):
                     value = _normalize_space_name(getattr(arena_type, attr, None))
                     if value:
                         return value
-            # Спосіб 2: напряму через arena (2.2.1: Klondike + reworked maps)
             for attr in ('geometryName', 'geometry'):
                 value = _normalize_space_name(getattr(arena, attr, None))
                 if value:
-                    LOG.info('_resolve_current_arena_name: arena.%s=%s', attr, value)
                     return value
     except Exception:
         LOG.error('_resolve_current_arena_name failed\n%s', traceback.format_exc())
     return _last_space_name
 
 def get_available_cycle_presets(space_name):
-    """Повертає список пресетів для циклу в бою — БЕЗ 'standard'."""
     available = []
     registry  = get_environment_registry()
     for preset_id in PRESET_ORDER:
@@ -1209,7 +1019,6 @@ def get_available_cycle_presets(space_name):
             continue
         if registry.get(preset_id, {}).get('spaces', {}).get(space_name):
             available.append(preset_id)
-    # Якщо реєстр порожній або карта не знайдена — беремо всі не-standard
     if not available:
         available = [p for p in PRESET_ORDER if p != 'standard']
     return available
@@ -1224,6 +1033,20 @@ def set_override_preset(preset_id):
     _current_override_preset = None if preset_id == 'standard' else preset_id
     _current_cycle_index     = PRESET_ORDER.index(preset_id)
     save_config()
+
+def set_override_and_apply(preset_id):
+    """Зберігає пресет і одразу застосовує до поточної карти."""
+    global _current_override_preset, _current_cycle_index
+    if preset_id not in PRESET_ORDER:
+        LOG.warning('set_override_and_apply: unknown preset=%s', preset_id)
+        return False
+    _current_override_preset = None if preset_id == 'standard' else preset_id
+    _current_cycle_index     = PRESET_ORDER.index(preset_id)
+    save_config()
+    space = _resolve_current_arena_name()
+    if space:
+        apply_environment_via_packages(space, _current_override_preset)
+    return True
 
 def get_preset_labels():
     return dict(PRESET_LABELS)
@@ -1254,6 +1077,9 @@ class WeatherController(object):
 
     def setOverridePreset(self, preset_id):
         return set_override_preset(preset_id)
+
+    def setOverrideAndApply(self, preset_id):
+        return set_override_and_apply(preset_id)
 
     def select_preset_in_battle(self, preset_id):
         """Вибір конкретного пресету в бою (клавіші 1-5 або DAAPI)."""
