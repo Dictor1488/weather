@@ -661,7 +661,7 @@ def write_environments_json_for_preset(preset_id, space_name=None):
 
         registry = get_environment_registry()
 
-        # Збираємо всі guid-и для поточної карти (або глобальні якщо карта невідома)
+        # Збираємо тільки ті guid-и які реально є для поточної карти
         all_guids = []
         labels = {}
 
@@ -671,13 +671,14 @@ def write_environments_json_for_preset(preset_id, space_name=None):
             preset_data = registry.get(pid)
             if not preset_data:
                 continue
-            # Беремо guid для конкретної карти якщо є, інакше перший доступний
+            # Беремо guid ТІЛЬКИ якщо є для конкретної карти
             guid = None
             if space_name:
                 sd = preset_data.get('spaces', {}).get(space_name)
                 if sd:
                     guid = _guid_to_dot(sd.get('guid', ''))
-            if not guid:
+            # Якщо карта невідома — беремо перший доступний
+            if not guid and not space_name:
                 for _, sd in preset_data.get('spaces', {}).items():
                     g = sd.get('guid')
                     if g:
