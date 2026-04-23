@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Точка входу мода. v2.0
-Виправлення:
-  - CORE FIX: onEnterWorld більше не пропускає запис коли onBecomePlayer не отримав space_name
-  - CORE FIX: _get_space_name_for_become_player пріоритет arenaTypeID через ArenaType.g_cache
-  - feat: DAAPI-обробник interactiveEvent_overrideIngame для прийому live-змін від Flash
+Точка входу мода. v3.0
+Сумісність з weather_controller v8.0
 """
 
 try:
@@ -30,7 +27,6 @@ from weather_controller import g_controller
 _BATTLE_SPACE_HOOKS = []
 _KEY_HOOK_INSTALLED = False
 _INIT_DONE = False
-_hotkey_codes = []
 _DEFAULT_WEIGHT_VALUE = 20
 _PRESET_IDS = ['standard', 'midnight', 'overcast', 'sunset', 'midday']
 _HARDCODED_TRIGGER_KEY = getattr(Keys, 'KEY_F12', 0) if IN_GAME else 0
@@ -83,7 +79,7 @@ ALL_MAPS = [
     ('209_wg_epic_suburbia',   u'Крафтверк'),
     ('210_bf_epic_desert',     u'Застава'),
     ('212_epic_random_valley', u'Долина'),
-    ('217_er_alaska',          u'Клондайк'),          # 2.2.1: повернуто в Random Battles
+    ('217_er_alaska',          u'Клондайк'),
     ('222_er_clime',           u'Вайдпарк'),
 ]
 
@@ -115,8 +111,6 @@ def _effective_ui_weights(weights):
 
 
 def _load_hotkey_codes():
-    global _hotkey_codes
-    _hotkey_codes = [_HARDCODED_TRIGGER_KEY] if _HARDCODED_TRIGGER_KEY else []
     if IN_GAME:
         try:
             g_controller.setHotkey(True, [], 'KEY_F12')
@@ -147,18 +141,8 @@ def _get_space_name_from_avatar(avatar):
 
 
 def _get_space_name_for_become_player(avatar):
-    """
-    Отримує назву карти на onBecomePlayer.
-
-    ПРІОРИТЕТ:
-      1. arenaTypeID + ArenaType.g_cache  — найнадійніший на onBecomePlayer,
-         бо arena.arenaType може ще не мати geometryName
-      2. Стандартний arena.arenaType.geometryName — fallback
-      3. arena.geometryName напряму — 2.2.1: Klondike та reworked maps
-    """
     log = _log()
-
-    # --- Спосіб 1: arenaTypeID + ArenaType.g_cache (ОСНОВНИЙ) ---
+    # Спосіб 1: arenaTypeID + ArenaType.g_cache
     try:
         arena_type_id = getattr(avatar, 'arenaTypeID', None)
         if arena_type_id:
@@ -172,16 +156,12 @@ def _get_space_name_for_become_player(avatar):
                     return name
     except Exception as e:
         log.warning('_get_space_name_for_become_player: arenaTypeID ERR: %s', e)
-
-    # --- Спосіб 2: стандартний через arena.arenaType ---
+    # Спосіб 2: arena.arenaType
     name = _get_space_name_from_avatar(avatar)
     if name:
         log.info('_get_space_name_for_become_player: via arena.arenaType = %s', name)
         return name
-
-    # --- Спосіб 3: NEW 2.2.1 — напряму через arena.geometryName ---
-    # Klondike (217_er_alaska) та reworked карти (Pearl River, Serene Coast)
-    # іноді зберігають geometryName безпосередньо в об'єкті arena
+    # Спосіб 3: arena.geometryName напряму
     try:
         arena = getattr(avatar, 'arena', None)
         if arena:
@@ -194,12 +174,10 @@ def _get_space_name_for_become_player(avatar):
                         return name
     except Exception as e:
         log.warning('_get_space_name_for_become_player: arena.geometryName ERR: %s', e)
-
     log.warning('_get_space_name_for_become_player: could not determine space name')
     return None
 
 
-# Відстежуємо для яких карт onBecomePlayer УСПІШНО записав файли
 _become_player_wrote_spaces = set()
 
 def _mark_become_player_wrote(space_name):
@@ -211,24 +189,16 @@ def _become_player_wrote_for_space(space_name):
 
 def _install_battle_space_hook():
     log = _log()
-    installed_early = False
-
     try:
         import Avatar
-
         if not hasattr(Avatar, 'PlayerAvatar'):
             log.warning('Avatar.PlayerAvatar not found')
             return
-
         cls = Avatar.PlayerAvatar
 
-        # ----------------------------------------------------------------
-        # Хук onBecomePlayer: НАЙРАНІШИЙ момент (до завантаження простору)
-        # Файли записані тут будуть прочитані рушієм під час завантаження.
-        # ----------------------------------------------------------------
+        # onBecomePlayer — найраніший момент
         if hasattr(cls, 'onBecomePlayer'):
             orig_bp = cls.onBecomePlayer
-
             def make_bp_wrapper(orig):
                 def wrapped_bp(self, *a, **kw):
                     try:
@@ -237,86 +207,62 @@ def _install_battle_space_hook():
                             _log().info('onBecomePlayer hook: space=%s -> writing files', space_name)
                             result = g_controller.onSpaceEntered(space_name)
                             if result:
-                                # Позначаємо тільки якщо запис успішний
                                 _mark_become_player_wrote(space_name)
                                 _log().info('onBecomePlayer hook: files written OK for %s', space_name)
                             else:
                                 _log().warning('onBecomePlayer hook: onSpaceEntered returned False for %s', space_name)
                         else:
-                            _log().warning('onBecomePlayer hook: no space_name, onEnterWorld буде запасним')
+                            _log().warning('onBecomePlayer hook: no space_name')
                     except Exception:
                         _log().exception('onBecomePlayer hook failed')
                     return orig(self, *a, **kw)
                 return wrapped_bp
-
             cls.onBecomePlayer = make_bp_wrapper(orig_bp)
             _BATTLE_SPACE_HOOKS.append((cls, 'onBecomePlayer', orig_bp))
-            installed_early = True
             log.info('Installed EARLY hook: Avatar.PlayerAvatar.onBecomePlayer')
-        else:
-            log.warning('Avatar.PlayerAvatar.onBecomePlayer not found')
 
-        # ----------------------------------------------------------------
-        # Хук onEnterWorld: ЗАПАСНИЙ — спрацьовує якщо onBecomePlayer
-        # НЕ отримав space_name (або не записав файли успішно).
-        #
-        # ВИПРАВЛЕНО: умова тепер правильна —
-        #   пропускаємо ТІЛЬКИ якщо onBecomePlayer вже успішно написав.
-        # ----------------------------------------------------------------
+        # onEnterWorld — запасний
         if hasattr(cls, 'onEnterWorld'):
             original = cls.onEnterWorld
-
             def make_wrapper(orig):
                 def wrapped(self, *args, **kwargs):
                     try:
                         space_name = _get_space_name_from_avatar(self)
                         if space_name:
                             if _become_player_wrote_for_space(space_name):
-                                # onBecomePlayer вже успішно записав — не перезаписуємо
                                 _log().info('onEnterWorld: space=%s skip (onBecomePlayer OK)', space_name)
                             else:
-                                # onBecomePlayer або не спрацював, або не отримав space_name
-                                _log().info('onEnterWorld: space=%s writing (onBecomePlayer did not write)', space_name)
+                                _log().info('onEnterWorld: space=%s writing', space_name)
                                 g_controller.onSpaceEntered(space_name)
                     except Exception:
                         _log().exception('onEnterWorld hook failed')
                     return orig(self, *args, **kwargs)
                 return wrapped
-
             cls.onEnterWorld = make_wrapper(original)
             _BATTLE_SPACE_HOOKS.append((cls, 'onEnterWorld', original))
             log.info('Installed FALLBACK hook: Avatar.PlayerAvatar.onEnterWorld')
-        else:
-            log.warning('Avatar.PlayerAvatar.onEnterWorld not found')
 
-        # ----------------------------------------------------------------
-        # Хук onLeaveWorld: КЛЮЧОВИЙ для наступного бою
-        # Skybox Randomizer використовує саме цей момент:
-        # після виходу з бою — записуємо space.settings для НАСТУПНОГО
-        # входу. Файл буде на місці ДО того як движок читає space.settings.
-        # ----------------------------------------------------------------
+        # onLeaveWorld — записуємо пресет для наступного бою
         if hasattr(cls, 'onLeaveWorld'):
             orig_lw = cls.onLeaveWorld
-
             def make_lw_wrapper(orig):
                 def wrapped_lw(self, *a, **kw):
                     try:
                         space_name = _get_space_name_from_avatar(self)
-                        _log().info('onLeaveWorld hook: space=%s -> writing environments.json', space_name)
-                        from weather_controller import write_environments_json_for_preset, get_current_override_preset
-                        preset_id = get_current_override_preset()
-                        write_environments_json_for_preset(preset_id, space_name)
-                        _log().info('onLeaveWorld: environments.json written for preset=%s', preset_id)
+                        preset_id  = g_controller.getCurrentPreset()
+                        _log().info('onLeaveWorld: space=%s preset=%s -> writing files', space_name, preset_id)
+                        # v8: write_environments_xml для поточної карти
+                        from weather_controller import write_environments_xml, write_space_settings
+                        if space_name:
+                            write_environments_xml(space_name, preset_id)
+                            write_space_settings(space_name, preset_id)
                     except Exception:
                         _log().exception('onLeaveWorld hook failed')
                     return orig(self, *a, **kw)
                 return wrapped_lw
-
             cls.onLeaveWorld = make_lw_wrapper(orig_lw)
             _BATTLE_SPACE_HOOKS.append((cls, 'onLeaveWorld', orig_lw))
             log.info('Installed POST-BATTLE hook: Avatar.PlayerAvatar.onLeaveWorld')
-        else:
-            log.warning('Avatar.PlayerAvatar.onLeaveWorld not found')
 
     except Exception:
         log.exception('Failed to install Avatar hook')
@@ -332,66 +278,7 @@ def _remove_battle_space_hook():
 
 
 # ---------------------------------------------------------------------------
-# DAAPI-обробник від Flash-компонента EnvironmentsSettingsUI
-# ---------------------------------------------------------------------------
-
-def interactiveEvent_overrideIngame(preset_id=None, guid=None, space_name=None, *args, **kwargs):
-    """
-    Викликається Flash-компонентом EnvironmentsSettingsUI коли гравець
-    перемикає environment в GUI (OVERRIDE_INGAME event зі SWF).
-
-    Flash шле: preset_id (string), guid (string, формат з крапками), space_name (string).
-    Ми зберігаємо вибір і застосовуємо через weather_controller.
-    """
-    log = _log()
-    log.info('interactiveEvent_overrideIngame: preset=%s guid=%s space=%s',
-             preset_id, guid, space_name)
-    try:
-        if preset_id and preset_id in _PRESET_IDS:
-            g_controller.setOverridePreset(preset_id)
-            actual_space = space_name or _resolve_arena_name_safe()
-            if actual_space:
-                g_controller.onSpaceEntered(actual_space)
-    except Exception:
-        log.exception('interactiveEvent_overrideIngame handler failed')
-
-
-def interactiveEvent_settingsChanged(data=None, *args, **kwargs):
-    """Викликається коли гравець змінює налаштування в GUI."""
-    log = _log()
-    log.info('interactiveEvent_settingsChanged: data=%s', data)
-    try:
-        if not data:
-            return
-        if isinstance(data, dict):
-            _on_settings_changed('com.example.weather', data)
-    except Exception:
-        log.exception('interactiveEvent_settingsChanged handler failed')
-
-
-def _resolve_arena_name_safe():
-    try:
-        if not IN_GAME:
-            return None
-        player = BigWorld.player()
-        if player is None:
-            return None
-        arena      = getattr(player, 'arena', None)
-        arena_type = getattr(arena, 'arenaType', None) if arena else None
-        if arena_type:
-            for attr in ('geometryName', 'geometry', 'name'):
-                v = getattr(arena_type, attr, None)
-                if v and isinstance(v, str):
-                    name = v.strip().rsplit('/', 1)[-1]
-                    if name:
-                        return name
-    except Exception:
-        pass
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Клавіатурні хуки
+# Клавіатура
 # ---------------------------------------------------------------------------
 
 def _hotkey_matches(key_code):
@@ -407,7 +294,7 @@ def _handle_hotkey_trigger(key_code):
         pass
     _log().info('hotkey matched: key=%s in_battle=%s', key_code, in_battle)
     if in_battle:
-        g_controller.cycleWeatherInBattle()
+        g_controller.cyclePreset()
 
 
 def _extract_key_event_data(event_or_key):
@@ -441,16 +328,11 @@ def _install_key_hook():
         return
     log = _log()
     installed = False
-
-    # Встановлюємо ТІЛЬКИ AvatarInputHandler (бойовий хук).
-    # InputHandler.g_instance.onKeyDown НЕ встановлюємо одночасно —
-    # це призводить до подвійного спрацювання (обидва отримують той самий event).
     try:
         import AvatarInputHandler as _AIH
         cls_aih = _AIH.AvatarInputHandler
         if hasattr(cls_aih, 'handleKeyEvent'):
             _orig_aih = cls_aih.handleKeyEvent
-
             def _make_aih_wrapper(orig):
                 def _aih_patched(self, *a, **kw):
                     try:
@@ -460,18 +342,14 @@ def _install_key_hook():
                         _log().exception('AvatarInputHandler hotkey dispatch failed')
                     return orig(self, *a, **kw)
                 return _aih_patched
-
             cls_aih.handleKeyEvent = _make_aih_wrapper(_orig_aih)
             installed = True
             log.info('Key hook: AvatarInputHandler.handleKeyEvent OK')
-        else:
-            log.warning('AvatarInputHandler.handleKeyEvent not found')
     except ImportError:
         log.warning('AvatarInputHandler not available')
     except Exception:
         log.exception('Failed to install AvatarInputHandler key hook')
 
-    # InputHandler.g_instance.onKeyDown — тільки якщо AvatarInputHandler недоступний
     if not installed:
         try:
             _ih = _get_input_handler()
@@ -489,8 +367,6 @@ def _remove_key_hook():
     global _KEY_HOOK_INSTALLED
     if not IN_GAME or not _KEY_HOOK_INSTALLED:
         return
-    # AvatarInputHandler хук знімається через _BATTLE_SPACE_HOOKS.
-    # Тут знімаємо тільки InputHandler fallback (якщо він був встановлений).
     try:
         _ih = _get_input_handler()
         if _ih is not None and getattr(_ih, 'g_instance', None) is not None:
@@ -518,11 +394,8 @@ def open_weather_window():
 
 
 def _on_settings_changed(linkage, newSettings):
-    log = _log()
-    log.debug('settings changed: %s', newSettings)
-
-    current_general  = g_controller.getGeneralWeights()
-    changed_general  = False
+    current_general = g_controller.getGeneralWeights()
+    changed_general = False
     for pid in _PRESET_IDS:
         key = 'global_' + pid
         if key in newSettings:
@@ -538,8 +411,8 @@ def _on_settings_changed(linkage, newSettings):
         active_map = ''
 
     if active_map:
-        current_map  = g_controller.getMapWeights(active_map)
-        changed_map  = False
+        current_map = g_controller.getMapWeights(active_map)
+        changed_map = False
         for pid in _PRESET_IDS:
             key = 'map_' + pid
             if key in newSettings:
@@ -584,7 +457,7 @@ def _apply_saved_settings(saved):
 # ---------------------------------------------------------------------------
 
 def _patch_ls_env_switcher():
-    """Перехоплює _switchEnvironment щоб побачити як його викликає чужий мод."""
+    """Перехоплює _switchEnvironment для діагностики."""
     try:
         import LSArenaPhasesComponent as _ls
         sw = _ls.LSEnvironmentSwitcher
@@ -592,17 +465,13 @@ def _patch_ls_env_switcher():
         orig_setup  = sw.setupEnvironment
 
         def patched_switch(self, *args, **kwargs):
-            _log().info('INTERCEPT _switchEnvironment: args=%s _spaceID=%s _callbackDelayer=%s',
-                        args,
-                        getattr(self, '_spaceID', 'MISSING'),
-                        type(getattr(self, '_callbackDelayer', 'MISSING')).__name__)
+            _log().info('INTERCEPT _switchEnvironment: args=%s _spaceID=%s',
+                        args, getattr(self, '_spaceID', 'MISSING'))
             return orig_switch(self, *args, **kwargs)
 
         def patched_setup(self, *args, **kwargs):
-            _log().info('INTERCEPT setupEnvironment: args=%s _spaceID=%s _callbackDelayer=%s',
-                        args,
-                        getattr(self, '_spaceID', 'MISSING'),
-                        type(getattr(self, '_callbackDelayer', 'MISSING')).__name__)
+            _log().info('INTERCEPT setupEnvironment: args=%s _spaceID=%s',
+                        args, getattr(self, '_spaceID', 'MISSING'))
             return orig_setup(self, *args, **kwargs)
 
         sw._switchEnvironment = patched_switch
@@ -627,18 +496,18 @@ def init(*args, **kwargs):
         from gui.modsSettingsApi import templates as t
         import Keys as K
 
-        current_codes    = [_HARDCODED_TRIGGER_KEY] if _HARDCODED_TRIGGER_KEY else [K.KEY_F12]
-        general_weights  = _effective_ui_weights(g_controller.getGeneralWeights())
+        current_codes       = [_HARDCODED_TRIGGER_KEY] if _HARDCODED_TRIGGER_KEY else [K.KEY_F12]
+        general_weights     = _effective_ui_weights(g_controller.getGeneralWeights())
         default_map_weights = _default_weights()
 
         def make_sliders(prefix, values):
             weights = _effective_ui_weights(values)
             return [
-                t.createSlider(varName=prefix+'standard', text=u'Стандарт',  value=weights.get('standard', _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix+'midnight', text=u'Ніч',       value=weights.get('midnight', _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix+'overcast', text=u'Хмарно',    value=weights.get('overcast', _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix+'sunset',   text=u'Захід',     value=weights.get('sunset',   _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix+'midday',   text=u'Полудень',  value=weights.get('midday',   _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
+                t.createSlider(varName=prefix+'standard', text=u'Стандарт', value=weights.get('standard', _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
+                t.createSlider(varName=prefix+'midnight', text=u'Ніч',      value=weights.get('midnight', _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
+                t.createSlider(varName=prefix+'overcast', text=u'Хмарно',   value=weights.get('overcast', _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
+                t.createSlider(varName=prefix+'sunset',   text=u'Захід',    value=weights.get('sunset',   _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
+                t.createSlider(varName=prefix+'midday',   text=u'Полудень', value=weights.get('midday',   _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
             ]
 
         column1 = [t.createLabel(text=u'Загальні налаштування'), t.createEmpty()]
@@ -682,15 +551,9 @@ def fini(*args, **kwargs):
 
 
 def onBecomeNonPlayer(*args, **kwargs):
-    """Вихід з бою — скидаємо стан."""
     global _become_player_wrote_spaces
     try:
         _become_player_wrote_spaces = set()
-        cfg = g_controller.get_config()
-        if cfg.get('currentOverridePreset', 'standard') == 'standard':
-            from weather_controller import set_override_preset
-            set_override_preset('standard')
-            _log().info('onBecomeNonPlayer: reset random preset')
     except Exception:
         _log().exception('onBecomeNonPlayer failed')
     return None
