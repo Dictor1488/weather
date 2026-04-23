@@ -601,9 +601,9 @@ def _get_preset_for_map(space_name):
     return _weighted_choice(_cfg.get('generalWeights', {}))
 
 
-def _write_protanki_environments_json(space_name, active_preset_id):
+def _write_environments_json(space_name, active_preset_id):
     """
-    Пише mods/configs/protanki/environments.json з усіма guid-ами пресетів.
+    Пише mods/configs/weather/environments.json з усіма guid-ами пресетів.
     WoT читає цей файл і завантажує ВСІ перелічені environments в простір —
     тільки тоді _switchEnvironment може між ними перемикати live.
 
@@ -612,7 +612,7 @@ def _write_protanki_environments_json(space_name, active_preset_id):
     try:
         game_root = _resolve_game_root()
         path = os.path.normpath(
-            os.path.join(game_root, 'mods', 'configs', 'protanki', 'environments.json'))
+            os.path.join(game_root, 'mods', 'configs', 'weather', 'environments.json'))
 
         # Збираємо всі guid-и пресетів для цієї карти
         all_guids = []
@@ -669,11 +669,11 @@ def _write_protanki_environments_json(space_name, active_preset_id):
             os.makedirs(folder)
         with open(path, 'w') as f:
             json.dump(payload, f, indent=4, ensure_ascii=False)
-        LOG.info('_write_protanki_environments_json: %s guids=%s active=%s',
+        LOG.info('_write_environments_json: %s guids=%s active=%s',
                  space_name, all_guids, active_guid)
         return True
     except Exception:
-        LOG.error('_write_protanki_environments_json failed\n%s', traceback.format_exc())
+        LOG.error('_write_environments_json failed\n%s', traceback.format_exc())
         return False
 
 
@@ -719,7 +719,7 @@ def apply_preset_all_maps(preset_id):
     # environments.json — пишемо один раз (не залежить від карти)
     # використовуємо першу доступну карту для отримання дефолтного guid
     sample_space = spaces[0] if spaces else None
-    _write_protanki_environments_json(sample_space, preset_id)
+    _write_environments_json(sample_space, preset_id)
 
     return ok
 
