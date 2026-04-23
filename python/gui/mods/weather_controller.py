@@ -679,8 +679,6 @@ def apply_preset(space_name, preset_id):
     LOG.info('apply_preset: space=%s preset=%s', space_name, preset_id)
     ok1 = write_environments_xml(space_name, preset_id)
     ok2 = write_space_settings(space_name, preset_id)
-    # Пишемо environments.json з усіма guid-ами щоб WoT завантажив їх всі
-    _write_protanki_environments_json(space_name, preset_id)
     LOG.info('apply_preset: environments_xml=%s space_settings=%s', ok1, ok2)
     return ok1
 
@@ -691,12 +689,15 @@ def apply_preset_all_maps(preset_id):
     ok = write_environments_xml_all_maps(preset_id)
 
     # Також пишемо space.settings для всіх карт
-    if ok and preset_id and preset_id != 'standard':
-        preset_wotmod = _find_preset_wotmod(preset_id)
-        if preset_wotmod:
-            spaces = _get_spaces_from_wotmod(preset_wotmod)
-            for space_name in spaces:
-                write_space_settings(space_name, preset_id)
+    preset_wotmod = _find_preset_wotmod(preset_id) if preset_id and preset_id != 'standard' else None
+    spaces = _get_spaces_from_wotmod(preset_wotmod) if preset_wotmod else []
+    for space_name in spaces:
+        write_space_settings(space_name, preset_id)
+
+    # environments.json — пишемо один раз (не залежить від карти)
+    # використовуємо першу доступну карту для отримання дефолтного guid
+    sample_space = spaces[0] if spaces else None
+    _write_protanki_environments_json(sample_space, preset_id)
 
     return ok
 
@@ -795,49 +796,18 @@ def _try_live_switch(preset_id):
             LOG.info('live_switch: LSEnvironmentSwitcher not found')
             return False
 
-        # Спроба 1: знайти реальний екземпляр через BigWorld.entities
+        # Створюємо екземпляр з CallbackDelayer
         real_inst = None
         try:
-            for eid, e in BigWorld.entities.items():
-                if e is None:
-                    continue
-                for attr in dir(e):
-                    if 'nvironment' not in attr:
-                        continue
-                    val = getattr(e, attr, None)
-                    if isinstance(val, sw_class):
-                        real_inst = val
-                        LOG.info('live_switch: found real inst on entity %s.%s', eid, attr)
-                        break
-                if real_inst:
-                    break
+            from helpers.CallbackDelayer import CallbackDelayer
+            real_inst = sw_class.__new__(sw_class)
+            real_inst._spaceID = space_id
+            real_inst._callbackDelayer = CallbackDelayer()
         except Exception as e2:
-            LOG.info('live_switch: entity search ERR: %s', e2)
-
-        # Спроба 2: через компоненти простору
-        if real_inst is None:
-            try:
-                for comp in (BigWorld.getSpaceComponents(space_id) or []):
-                    if isinstance(comp, sw_class):
-                        real_inst = comp
-                        LOG.info('live_switch: found via getSpaceComponents')
-                        break
-            except Exception as e2:
-                LOG.info('live_switch: getSpaceComponents ERR: %s', e2)
-
-        # Спроба 3: новий екземпляр з CallbackDelayer
-        if real_inst is None:
-            try:
-                from helpers.CallbackDelayer import CallbackDelayer
-                real_inst = sw_class.__new__(sw_class)
-                real_inst._spaceID = space_id
-                real_inst._callbackDelayer = CallbackDelayer()
-                LOG.info('live_switch: new inst with CallbackDelayer')
-            except Exception as e2:
-                LOG.info('live_switch: CallbackDelayer ERR: %s', e2)
-                real_inst = sw_class.__new__(sw_class)
-                real_inst._spaceID = space_id
-                real_inst._callbackDelayer = None
+            LOG.info('live_switch: CallbackDelayer ERR: %s', e2)
+            real_inst = sw_class.__new__(sw_class)
+            real_inst._spaceID = space_id
+            real_inst._callbackDelayer = None
 
         real_inst._switchEnvironment(guid)
         LOG.info('live_switch: _switchEnvironment(%s) OK', guid)
