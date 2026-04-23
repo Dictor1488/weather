@@ -302,13 +302,11 @@ def _install_battle_space_hook():
                 def wrapped_lw(self, *a, **kw):
                     try:
                         space_name = _get_space_name_from_avatar(self)
-                        _log().info('onLeaveWorld hook: space=%s -> pre-patching ALL maps for next battle', space_name)
-                        # Патчимо ВСІ карти одразу — бо наступний бій може бути на будь-якій карті
-                        from weather_controller import write_environments_json_for_preset, get_current_override_preset, _apply_resmgr_patch_all
+                        _log().info('onLeaveWorld hook: space=%s -> writing environments.json', space_name)
+                        from weather_controller import write_environments_json_for_preset, get_current_override_preset
                         preset_id = get_current_override_preset()
                         write_environments_json_for_preset(preset_id, space_name)
-                        _apply_resmgr_patch_all(preset_id)
-                        _log().info('onLeaveWorld: all maps patched for preset=%s', preset_id)
+                        _log().info('onLeaveWorld: environments.json written for preset=%s', preset_id)
                     except Exception:
                         _log().exception('onLeaveWorld hook failed')
                     return orig(self, *a, **kw)
@@ -618,19 +616,6 @@ def init(*args, **kwargs):
     global _INIT_DONE
     if _INIT_DONE:
         return
-
-    # Встановлюємо пресет ПЕРШИМ - до будь-яких інших дій
-    # Це найранніший момент коли Python запускається
-    # Файли мають бути в res_mods/ ДО кешування VFS
-    try:
-        from weather_controller import _install_preset_to_resmods, get_current_override_preset, load_config
-        load_config()
-        preset_id = get_current_override_preset()
-        _log().info('init: installing preset=%s to res_mods/ EARLY', preset_id)
-        ok = _install_preset_to_resmods(preset_id)
-        _log().info('init: early install_preset=%s', ok)
-    except Exception:
-        _log().exception('init: early install_preset failed')
 
     _patch_ls_env_switcher()
     _load_hotkey_codes()
