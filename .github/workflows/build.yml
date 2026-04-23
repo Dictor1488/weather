@@ -109,8 +109,9 @@ jobs:
         $env:Path = "C:\flex-sdk\bin;$env:Path"
         New-Item -Force -ItemType Directory as3\bin | Out-Null
 
-        $srcPaths = "as3","as3/components","as3/data","as3/events","as3/views" |
-          ForEach-Object { "-source-path+=$_" }
+        # source-path вказує на папку що МІСТИТЬ пакет 'weather'
+        # as3/src_flash/ -> weather/ -> WeatherMediator.as
+        $srcPaths = @("-source-path+=as3/src_flash")
 
         $libs = @()
         Get-ChildItem as3\libs -Filter *.swc -EA SilentlyContinue | ForEach-Object {
@@ -123,7 +124,7 @@ jobs:
           "-target-player=32.0",
           "-swf-version=39",
           "-strict=true","-optimize=true","--",
-          "as3/WeatherMediator.as"
+          "as3/src_flash/weather/WeatherMediator.as"
         )
 
         $p = Start-Process "C:\flex-sdk\bin\mxmlc.bat" $mxmlcArgs -NoNewWindow -Wait -PassThru `
