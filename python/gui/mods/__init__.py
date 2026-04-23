@@ -24,6 +24,10 @@ def _get_input_handler():
 
 from weather_controller import g_controller
 
+WEATHER_PANEL_ALIAS = 'weatherPanel'
+WEATHER_PANEL_SWF   = 'weather/WeatherPanel.swf'
+_VIEW_REGISTERED    = False
+
 _BATTLE_SPACE_HOOKS = []
 _KEY_HOOK_INSTALLED = False
 _INIT_DONE = False
@@ -387,6 +391,60 @@ def _remove_key_hook():
 # Mod Settings API
 # ---------------------------------------------------------------------------
 
+def _register_weather_view():
+    global _VIEW_REGISTERED
+    if _VIEW_REGISTERED:
+        return
+    try:
+        from weather_window import WeatherWindowMeta
+        from gui.Scaleform.framework import g_entitiesFactories, ViewSettings, ScopeTemplates
+
+        # ViewTypes — переїхав в різних версіях WoT
+        ViewTypes = None
+        for path in ('gui.Scaleform.framework',
+                     'gui.Scaleform.framework.entities.View',
+                     'gui.Scaleform.framework.view_types'):
+            try:
+                import importlib
+                m = importlib.import_module(path)
+                if hasattr(m, 'ViewTypes'):
+                    ViewTypes = m.ViewTypes
+                    break
+            except Exception:
+                pass
+        if ViewTypes is None:
+            class ViewTypes(object):
+                WINDOW = 3
+
+        settings = ViewSettings(
+            WEATHER_PANEL_ALIAS, WeatherWindowMeta, WEATHER_PANEL_SWF,
+            ViewTypes.WINDOW, None, ScopeTemplates.DEFAULT_SCOPE
+        )
+        g_entitiesFactories.addSettings(settings)
+        _VIEW_REGISTERED = True
+        _log().info('Weather view registered: %s', WEATHER_PANEL_ALIAS)
+    except Exception:
+        _log().exception('Weather view registration failed')
+
+
+def _register_mods_list_entry():
+    try:
+        from gui.mods.modsListApi import g_modsListApi
+        g_modsListApi.addMod(
+            id='weather_panel',
+            name=u'Погода на картах',
+            description=u'Налаштування погодних пресетів для кожної карти',
+            icon='gui/maps/icons/pro.environment/modsList.png',
+            enabled=True,
+            login=False,
+            lobby=True,
+            callback=open_weather_window,
+        )
+        _log().info('modsListApi entry registered')
+    except Exception:
+        _log().warning('modsListApi not available or entry registration failed')
+
+
 def open_weather_window():
     _register_weather_view()
     try:
@@ -508,6 +566,8 @@ def init(*args, **kwargs):
     _load_hotkey_codes()
     _install_battle_space_hook()
     _install_key_hook()
+    _register_weather_view()
+    _register_mods_list_entry()
 
     try:
         from gui.modsSettingsApi import g_modsSettingsApi
