@@ -619,6 +619,19 @@ def init(*args, **kwargs):
     if _INIT_DONE:
         return
 
+    # Встановлюємо пресет ПЕРШИМ - до будь-яких інших дій
+    # Це найранніший момент коли Python запускається
+    # Файли мають бути в res_mods/ ДО кешування VFS
+    try:
+        from weather_controller import _install_preset_to_resmods, get_current_override_preset, load_config
+        load_config()
+        preset_id = get_current_override_preset()
+        _log().info('init: installing preset=%s to res_mods/ EARLY', preset_id)
+        ok = _install_preset_to_resmods(preset_id)
+        _log().info('init: early install_preset=%s', ok)
+    except Exception:
+        _log().exception('init: early install_preset failed')
+
     _patch_ls_env_switcher()
     _load_hotkey_codes()
     _install_battle_space_hook()
