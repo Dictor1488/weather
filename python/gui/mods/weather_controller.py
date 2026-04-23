@@ -822,119 +822,13 @@ def _try_live_switch(preset_id):
     if not guid:
         return False
 
-    # Спроба через DAAPI — відправляємо подію в протанки компонент
+    # Спроба через BigWorld.wg_setSpaceItemsVisibilityMask або подібне
     try:
-        app = None
-        # Різні способи отримати app в різних версіях WoT
-        try:
-            from gui.app_loader import g_appLoader
-            app = g_appLoader.getApp()
-        except ImportError:
-            pass
-        if app is None:
-            try:
-                from gui.Scaleform.framework import g_entitiesFactories
-                import gui.Scaleform.daapi.view.lobby.LobbyView as _lv
-                app = getattr(_lv, '_app', None)
-            except Exception:
-                pass
-        if app is None:
-            try:
-                from gui import g_guiResetters
-                for r in (g_guiResetters or []):
-                    a = getattr(r, '_app', None) or getattr(r, 'app', None)
-                    if a is not None:
-                        app = a
-                        break
-            except Exception:
-                pass
-        if app is None:
-            try:
-                import BigWorld as _BW
-                app = getattr(_BW, 'app', None)
-            except Exception:
-                pass
-        if app is None:
-            LOG.info('_try_live_switch: app not found')
-            return False
-
-        # Шукаємо EnvironmentsSettingsUI або EnvironmentsBackground
-        view = None
-        for mgr_name in ('containerManager', 'viewsManager', '_containerManager'):
-            mgr = getattr(app, mgr_name, None)
-            if mgr is None:
-                continue
-            for alias in ('EnvironmentsSettingsUI', 'EnvironmentsBackground',
-                          'protanki-components-environment', 'environmentsSettings'):
-                try:
-                    v = (mgr.getViewByAlias(alias)
-                         if hasattr(mgr, 'getViewByAlias') else None)
-                    if v is not None:
-                        view = v
-                        LOG.info('_try_live_switch: found view %s via %s.%s', type(v).__name__, mgr_name, alias)
-                        break
-                except Exception:
-                    pass
-            if view:
-                break
-
-        if view is None:
-            # Логуємо всі views в containerManager
-            try:
-                for mgr_name in ('containerManager', '_containerManager', 'viewsManager'):
-                    mgr = getattr(app, mgr_name, None)
-                    if mgr is None:
-                        continue
-                    all_views = []
-                    for fn in ('getViews', 'getViewsByType', 'getAllViews'):
-                        try:
-                            vlist = getattr(mgr, fn)()
-                            all_views.extend([type(v).__name__ for v in (vlist or [])])
-                        except Exception:
-                            pass
-                    if all_views:
-                        LOG.info('_try_live_switch: %s views: %s', mgr_name, all_views[:20])
-            except Exception as e:
-                LOG.info('_try_live_switch: view list ERR: %s', e)
-            # Логуємо всі BigWorld wg_ методи
-            try:
-                all_bw = [a for a in dir(BigWorld) if not a.startswith('__')]
-                LOG.info('_try_live_switch: BigWorld all methods: %s', all_bw)
-            except Exception as e:
-                LOG.info('_try_live_switch: BigWorld dir ERR: %s', e)
-            return False
-
-        flash = getattr(view, 'flashObject', None)
-        if flash is None:
-            return False
-
-        # Спроба викликати методи Flash об'єкта
-        for method in ('as_setEnvironment', 'as_overrideIngame',
-                       'as_switchEnvironment', 'as_setActiveEnvironment'):
-            fn = getattr(flash, method, None)
-            if fn:
-                try:
-                    fn(guid)
-                    LOG.info('_try_live_switch: flash.%s(%s) OK', method, guid)
-                    return True
-                except Exception as e:
-                    LOG.info('_try_live_switch: flash.%s ERR: %s', method, str(e)[:80])
-
-        # Спроба через call
-        try:
-            flash.call('overrideIngame', [guid])
-            LOG.info('_try_live_switch: flash.call(overrideIngame) OK')
-            return True
-        except Exception as e:
-            LOG.info('_try_live_switch: flash.call ERR: %s', str(e)[:80])
-
-        # Логуємо всі доступні методи flash
-        flash_methods = [a for a in dir(flash) if not a.startswith('__')]
-        LOG.info('_try_live_switch: flash methods: %s', flash_methods[:30])
-
+        # Логуємо всі BigWorld методи одноразово для діагностики
+        all_bw = sorted([a for a in dir(BigWorld) if not a.startswith('__')])
+        LOG.info('_try_live_switch: BigWorld methods: %s', all_bw)
     except Exception as e:
-        LOG.info('_try_live_switch: ERR: %s', e)
-
+        LOG.info('_try_live_switch: BigWorld dir ERR: %s', e)
     return False
 
 
