@@ -32,65 +32,118 @@ jobs:
         python-version: '3.10'
 
     - name: Install Python 2.7 via Chocolatey
-      run: |
-        choco install python2 -y --no-progress
+      run: choco install python2 -y --no-progress
+
+    - name: Install Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '11'
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install psutil
 
+    - name: Cache Flex SDK
+      id: cache-flex
+      uses: actions/cache@v4
+      with:
+        path: C:\flex-sdk
+        key: flex-sdk-4.16.1-v2
+
+    - name: Download Flex SDK
+      if: steps.cache-flex.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        $urls = @(
+          "https://archive.apache.org/dist/flex/4.16.1/binaries/apache-flex-sdk-4.16.1-bin.zip",
+          "https://dlcdn.apache.org/flex/4.16.1/binaries/apache-flex-sdk-4.16.1-bin.zip"
+        )
+        $ok = $false
+        foreach ($url in $urls) {
+          try { Invoke-WebRequest -Uri $url -OutFile flex.zip -UseBasicParsing -TimeoutSec 300; $ok=$true; break }
+          catch { Write-Host "Failed: $_" }
+        }
+        if (-not $ok) { exit 1 }
+        New-Item -Force -ItemType Directory C:\flex-sdk | Out-Null
+        Expand-Archive flex.zip C:\flex-sdk-tmp -Force
+        $sub = Get-ChildItem C:\flex-sdk-tmp
+        if ($sub.Count -eq 1 -and $sub[0].PSIsContainer) {
+          Get-ChildItem $sub[0].FullName | Move-Item -Destination C:\flex-sdk -Force
+        } else {
+          Get-ChildItem C:\flex-sdk-tmp | Move-Item -Destination C:\flex-sdk -Force
+        }
+
+    - name: Setup playerglobal.swc
+      shell: pwsh
+      run: |
+        $src = "as3\libs\playerglobal.swc"
+        if (-not (Test-Path $src)) { Write-Error "playerglobal.swc not found"; exit 1 }
+        $vDir = "C:\flex-sdk\frameworks\libs\player\32.0"
+        New-Item -Force -ItemType Directory $vDir | Out-Null
+        Copy-Item $src "$vDir\playerglobal.swc" -Force
+        Copy-Item $src "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
+        $cfg = "C:\flex-sdk\frameworks\flex-config.xml"
+        if (Test-Path $cfg) {
+          (Get-Content $cfg -Raw) -replace '\{playerglobalHome\}','C:/flex-sdk/frameworks/libs/player' |
+            Set-Content $cfg -Encoding UTF8
+        }
+
     - name: Determine Version
-      id: version
       shell: pwsh
       run: |
         if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $version     = "${{ inputs.version }}"
-            $gameVersion = "${{ inputs.game_version }}"
+          $v = "${{ inputs.version }}"
+          $gv = "${{ inputs.game_version }}"
         } else {
-            $version     = "${{ github.ref_name }}".TrimStart('v')
-            $gameVersion = "2.2.1.1"
+          $v  = "${{ github.ref_name }}".TrimStart('v')
+          $gv = "2.2.1.1"
         }
-        echo "PROJECT_VERSION=$version"     >> $env:GITHUB_ENV
-        echo "GAME_VERSION=$gameVersion"    >> $env:GITHUB_ENV
-        Write-Host "Version: $version  GameVersion: $gameVersion"
+        "PROJECT_VERSION=$v"  >> $env:GITHUB_ENV
+        "GAME_VERSION=$gv"    >> $env:GITHUB_ENV
+
+    - name: Compile SWF
+      shell: pwsh
+      run: |
+        $env:Path = "C:\flex-sdk\bin;$env:Path"
+        New-Item -Force -ItemType Directory as3\bin | Out-Null
+
+        $srcPaths = "as3","as3/components","as3/data","as3/events","as3/views" |
+          ForEach-Object { "-source-path+=$_" }
+
+        $libs = @()
+        Get-ChildItem as3\libs -Filter *.swc -EA SilentlyContinue | ForEach-Object {
+          if ($_.Name -eq "playerglobal.swc") { $libs += "-library-path+=$($_.FullName)" }
+          else { $libs += "-external-library-path+=$($_.FullName)" }
+        }
+
+        $mxmlcArgs = $srcPaths + $libs + @(
+          "-output=as3/bin/WeatherPanel.swf",
+          "-target-player=32.0",
+          "-swf-version=39",
+          "-strict=true","-optimize=true","--",
+          "as3/WeatherMediator.as"
+        )
+
+        $p = Start-Process "C:\flex-sdk\bin\mxmlc.bat" $mxmlcArgs -NoNewWindow -Wait -PassThru `
+          -RedirectStandardOutput out.txt -RedirectStandardError err.txt
+        Get-Content out.txt,err.txt -EA SilentlyContinue | Write-Host
+        if ($p.ExitCode -ne 0) { exit 1 }
+        Write-Host "SWF OK: $([math]::Round((Get-Item as3/bin/WeatherPanel.swf).Length/1KB,2)) KB" -ForegroundColor Green
 
     - name: Create build.json
       shell: pwsh
       run: |
-        $json = @{
-            version  = 5
-            software = @{
-                animate = " "
-                python  = "C:/Python27/python.exe"
-            }
-            game = @{
-                force   = $false
-                folder  = "World_of_Tanks_EU"
-                version = "${{ env.GAME_VERSION }}"
-            }
-            info = @{
-                id          = "com.example.weather"
-                name        = "Weather Mod"
-                description = "Configurable weather preset randomizer for maps"
-                version     = "${{ env.PROJECT_VERSION }}"
-            }
-        } | ConvertTo-Json -Depth 4
-        $json | Out-File -FilePath build.json -Encoding UTF8
-        Write-Host "build.json:"
-        Get-Content build.json
+        @{
+          version=5
+          software=@{animate=" ";python="C:/Python27/python.exe"}
+          game=@{force=$false;folder="World_of_Tanks_EU";version="${{ env.GAME_VERSION }}"}
+          info=@{id="com.example.weather";name="Weather Mod";description="Weather preset randomizer";version="${{ env.PROJECT_VERSION }}"}
+        } | ConvertTo-Json -Depth 4 | Out-File build.json -Encoding UTF8
 
     - name: Run Build Script
       run: python build.py --distribute
-
-    - name: List artifacts
-      shell: pwsh
-      run: |
-        Write-Host "=== Build artifacts ==="
-        Get-ChildItem -Path "build" -Recurse | ForEach-Object {
-            $size = if ($_.PSIsContainer) { "[DIR]" } else { "$([math]::Round($_.Length/1KB, 2)) KB" }
-            Write-Host "  $($_.FullName) - $size"
-        }
 
     - name: Upload to Release
       uses: ncipollo/release-action@v1.14.0
