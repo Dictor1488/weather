@@ -1,34 +1,28 @@
 package weather.components
 {
-    import flash.display.Sprite;
     import flash.display.Loader;
-    import flash.display.Bitmap;
+    import flash.display.Sprite;
     import flash.events.Event;
     import flash.events.MouseEvent;
+    import flash.geom.Rectangle;
     import flash.net.URLRequest;
     import flash.text.TextField;
     import flash.text.TextFormat;
-    import flash.geom.Rectangle;
 
     import weather.data.MapVO;
     import weather.events.WeatherEvent;
 
-    /**
-     * Плитка однієї карти в сітці 4xN (Tab #2).
-     * 
-     * Розміри з скріна: ~210x100, усередині — мініатюра + назва + іконка "налаштувати".
-     * Клік будь-де по плитці → відкрити деталі цієї карти.
-     */
     public class MapTile extends Sprite
     {
-        public static const TILE_W:int = 210;
-        public static const TILE_H:int = 100;
+        public static const TILE_W:int = 212;
+        public static const TILE_H:int = 104;
 
         private var _vo:MapVO;
         private var _bg:Sprite;
         private var _thumb:Loader;
         private var _title:TextField;
         private var _hoverOverlay:Sprite;
+        private var _footer:Sprite;
 
         public function MapTile(vo:MapVO)
         {
@@ -46,13 +40,12 @@ package weather.components
         private function buildUI():void
         {
             _bg = new Sprite();
-            _bg.graphics.lineStyle(1, 0x3A3A3A);
-            _bg.graphics.beginFill(0x1A1A1A);
+            _bg.graphics.lineStyle(1, 0x3A3A3A, 1);
+            _bg.graphics.beginFill(0x1A1A1A, 1);
             _bg.graphics.drawRect(0, 0, TILE_W, TILE_H);
             _bg.graphics.endFill();
             addChild(_bg);
 
-            // Мініатюра на весь розмір плитки
             if (_vo.thumbSrc)
             {
                 _thumb = new Loader();
@@ -61,27 +54,42 @@ package weather.components
                 addChild(_thumb);
             }
 
-            // Градієнт-затемнення зверху для читабельності тексту
             var grad:Sprite = new Sprite();
-            grad.graphics.beginFill(0x000000, 0.5);
-            grad.graphics.drawRect(0, 0, TILE_W, 28);
+            grad.graphics.beginFill(0x000000, 0.45);
+            grad.graphics.drawRect(0, 0, TILE_W, 30);
             grad.graphics.endFill();
             addChild(grad);
 
-            // Назва карти
             _title = new TextField();
             _title.defaultTextFormat = new TextFormat("$FieldFont", 15, 0xFFFFFF, true, null, null, null, null, "center");
             _title.embedFonts = true;
             _title.selectable = false;
             _title.mouseEnabled = false;
             _title.width = TILE_W;
+            _title.height = 24;
             _title.y = 6;
             _title.text = _vo.label;
             addChild(_title);
 
-            // Оверлей hover
+            _footer = new Sprite();
+            _footer.graphics.beginFill(0x000000, 0.26);
+            _footer.graphics.drawRect(0, TILE_H - 20, TILE_W, 20);
+            _footer.graphics.endFill();
+            addChild(_footer);
+
+            var footerTF:TextField = new TextField();
+            footerTF.defaultTextFormat = new TextFormat("$FieldFont", 11, 0xD2D2D2, false, null, null, null, null, "center");
+            footerTF.embedFonts = true;
+            footerTF.selectable = false;
+            footerTF.mouseEnabled = false;
+            footerTF.width = TILE_W;
+            footerTF.height = 18;
+            footerTF.y = TILE_H - 18;
+            footerTF.text = "налаштувати";
+            addChild(footerTF);
+
             _hoverOverlay = new Sprite();
-            _hoverOverlay.graphics.beginFill(0xFFAA00, 0.18);
+            _hoverOverlay.graphics.beginFill(0xF4A11A, 0.16);
             _hoverOverlay.graphics.drawRect(0, 0, TILE_W, TILE_H);
             _hoverOverlay.graphics.endFill();
             _hoverOverlay.visible = false;
@@ -93,8 +101,7 @@ package weather.components
             _thumb.width = TILE_W;
             _thumb.height = TILE_H;
             _thumb.scrollRect = new Rectangle(0, 0, TILE_W, TILE_H);
-            // підняти градієнт і назву поверх
-            setChildIndex(_thumb, 1);
+            _thumb.alpha = 0.86;
         }
 
         private function onOver(e:MouseEvent):void { _hoverOverlay.visible = true; }

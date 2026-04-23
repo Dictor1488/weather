@@ -50,8 +50,8 @@ PRESET_ORDER = ['standard', 'midnight', 'overcast', 'sunset', 'midday']
 PRESET_LABELS = {
     'standard': u'Стандарт',
     'midnight': u'Ніч',
-    'overcast': u'Хмарно',
-    'sunset':   u'Захід',
+    'overcast': u'Похмуро',
+    'sunset':   u'Захід сонця',
     'midday':   u'Полудень',
 }
 
@@ -648,8 +648,8 @@ def _write_protanki_environments_json(space_name, active_preset_id):
             'environments': all_guids,
             'labels': {
                 '15755E11.4090266B.594778B6.B233C12C': u'\u041d\u0456\u0447',
-                '56BA3213.40FFB1DF.125FBCAD.173E8347': u'\u0425\u043c\u0430\u0440\u043d\u043e',
-                '6DEE1EBB.44F63FCC.AACF6185.7FBBC34E': u'\u0417\u0430\u0445\u0456\u0434',
+                '56BA3213.40FFB1DF.125FBCAD.173E8347': u'\u041f\u043e\u0445\u043c\u0443\u0440\u043e',
+                '6DEE1EBB.44F63FCC.AACF6185.7FBBC34E': u'\u0417\u0430\u0445\u0456\u0434 \u0441\u043e\u043d\u0446\u044f',
                 'BF040BCB.4BE1D04F.7D484589.135E881B': u'\u041f\u043e\u043b\u0443\u0434\u0435\u043d\u044c',
                 'default': u'\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442',
             },
@@ -944,6 +944,20 @@ def set_icon_position(x, y):
 # WeatherController — публічний API
 # ---------------------------------------------------------------------------
 
+def on_hotkey_changed(codes, hotkey_str=None):
+    global _cfg
+    try:
+        normalized = [int(code) for code in (codes or [])]
+    except Exception:
+        normalized = []
+    _cfg['hotkey'] = normalized
+    save_config()
+    return normalized
+
+
+def on_close_requested():
+    return True
+
 class WeatherController(object):
     def __init__(self):
         load_config()
@@ -1011,6 +1025,15 @@ class WeatherController(object):
     def getConfig(self):
         return get_config()
 
+    def on_hotkey_changed(self, codes, hotkey_str=None):
+        return on_hotkey_changed(codes, hotkey_str)
+
+    def on_close_requested(self):
+        return on_close_requested()
+
+    def build_payload(self, map_registry):
+        return build_payload(map_registry)
+
     # Зворотна сумісність з v7
     def setOverridePreset(self, preset_id):
         global _current_preset
@@ -1037,5 +1060,29 @@ class WeatherController(object):
         return [{'id': p, 'label': PRESET_LABELS[p], 'weight': int(weights.get(p, DEFAULT_WEIGHT))}
                 for p in PRESET_ORDER]
 
+
+
+
+def build_payload(map_registry):
+    presets = [{'id': p, 'label': PRESET_LABELS[p], 'weight': int(get_general_weights().get(p, DEFAULT_WEIGHT)), 'guid': PRESET_GUIDS.get(p), 'previewSrc': ''}
+               for p in PRESET_ORDER]
+    maps = []
+    for map_id, label, thumb in map_registry:
+        weights = get_map_weights(map_id)
+        maps.append({
+            'id': map_id,
+            'label': label,
+            'thumbSrc': thumb,
+            'useGlobal': False,
+            'presets': [{'id': p, 'label': PRESET_LABELS[p], 'weight': int(weights.get(p, DEFAULT_WEIGHT)), 'guid': PRESET_GUIDS.get(p), 'previewSrc': ''}
+                        for p in PRESET_ORDER]
+        })
+    hotkey = get_hotkey() or []
+    return {
+        'presets': presets,
+        'maps': maps,
+        'hotkey': '+'.join([str(x) for x in hotkey]) if hotkey else 'ALT+F12',
+        'hotkeyKeys': hotkey,
+    }
 
 g_controller = WeatherController()

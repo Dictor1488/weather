@@ -1,33 +1,27 @@
 package weather.views
 {
     import flash.display.Sprite;
+    import flash.events.KeyboardEvent;
     import flash.events.MouseEvent;
     import flash.text.TextField;
     import flash.text.TextFormat;
-
-    import scaleform.clik.controls.Button;
+    import flash.ui.Keyboard;
 
     import weather.components.PresetRow;
     import weather.data.PresetVO;
     import weather.events.WeatherEvent;
 
-    /**
-     * Панель "Загальні налаштування".
-     *
-     * FIX 1: хоткей тепер є інтерактивним — клік на чіпси відкриває
-     * режим захоплення, після призначення диспатчиться HOTKEY_CHANGED.
-     */
     public class GlobalSettingsPanel extends Sprite
     {
-        private static const CONTENT_X:int = 90;
-        private static const CONTENT_Y:int = 50;
-        private static const ROW_GAP:int   = 12;
+        private static const CONTENT_X:int = 96;
+        private static const CONTENT_Y:int = 54;
+        private static const ROW_GAP:int   = 14;
 
-        // FIX 1: зберігаємо поточні коди щоб передати в подію
         private var _hotkeyKeys:Array;
         private var _hotkeyStr:String;
         private var _capturing:Boolean = false;
         private var _chipContainer:Sprite;
+        private var _captureCodes:Array;
 
         public function GlobalSettingsPanel(presets:Vector.<PresetVO>,
                                             hotkey:String,
@@ -35,19 +29,20 @@ package weather.views
         {
             _hotkeyStr  = hotkey;
             _hotkeyKeys = hotkeyKeys ? hotkeyKeys.slice() : [];
+            _captureCodes = [];
             build(presets);
         }
 
         private function build(presets:Vector.<PresetVO>):void
         {
             var header:TextField = new TextField();
-            header.defaultTextFormat = new TextFormat("$FieldFont", 18, 0xFFFFFF, true);
+            header.defaultTextFormat = new TextFormat("$FieldFont", 20, 0xFFFFFF, true);
             header.embedFonts  = true;
             header.selectable  = false;
             header.autoSize    = "left";
             header.text        = "Загальні налаштування для всіх карт";
-            header.x           = CONTENT_X + 20;
-            header.y           = 10;
+            header.x           = CONTENT_X + 18;
+            header.y           = 8;
             addChild(header);
 
             var y:int = CONTENT_Y;
@@ -60,55 +55,59 @@ package weather.views
                 y += PresetRow.ROW_HEIGHT + ROW_GAP;
             }
 
-            // --- Секція хоткея ---
             var hkLabel:TextField = new TextField();
-            hkLabel.defaultTextFormat = new TextFormat("$FieldFont", 14, 0xC8C8C8);
+            hkLabel.defaultTextFormat = new TextFormat("$FieldFont", 15, 0xCCCCCC);
             hkLabel.embedFonts  = true;
             hkLabel.selectable  = false;
             hkLabel.autoSize    = "left";
-            hkLabel.text        = "Смена погоды в бою";
-            hkLabel.x           = CONTENT_X + 20;
-            hkLabel.y           = y + 20;
+            hkLabel.text        = "Зміна погоди в бою";
+            hkLabel.x           = CONTENT_X + 10;
+            hkLabel.y           = y + 18;
             addChild(hkLabel);
 
-            // Контейнер для чіпсів (перебудовується після зміни хоткея)
             _chipContainer = new Sprite();
-            _chipContainer.x = CONTENT_X + 400;
-            _chipContainer.y = y + 16;
+            _chipContainer.x = CONTENT_X + 520;
+            _chipContainer.y = y + 12;
             addChild(_chipContainer);
-            rebuildChips();
+            rebuildChipsFromString(_hotkeyStr);
 
-            // Кнопка "змінити" поруч із чіпсами
             var editBtn:Sprite = makeEditButton();
-            editBtn.x = CONTENT_X + 600;
-            editBtn.y = y + 16;
+            editBtn.x = CONTENT_X + 680;
+            editBtn.y = y + 12;
             addChild(editBtn);
         }
 
-        // -------------------------------------------------------
-        // FIX 1: перебудова відображення чіпсів після зміни
-        // -------------------------------------------------------
-        private function rebuildChips():void
+        private function rebuildChipsFromString(value:String):void
         {
             while (_chipContainer.numChildren > 0)
                 _chipContainer.removeChildAt(0);
 
-            var keys:Array = _hotkeyStr.split("+");
+            var keys:Array = value ? value.split("+") : [];
             var cx:int = 0;
-            for (var k:int = 0; k < keys.length; k++)
+            for (var i:int = 0; i < keys.length; i++)
             {
-                var chip:Sprite = makeKeyChip(String(keys[k]).toUpperCase());
+                var chip:Sprite = makeKeyChip(String(keys[i]).toUpperCase());
                 chip.x = cx;
                 _chipContainer.addChild(chip);
                 cx += chip.width + 8;
             }
         }
 
-        // -------------------------------------------------------
-        // FIX 1: кнопка "змінити хоткей"
-        // Scaleform не має вбудованого key-capture,
-        // тому ми реалізуємо його через stage keyDown listener.
-        // -------------------------------------------------------
+        private function rebuildChipsFromCodes(codes:Array):void
+        {
+            while (_chipContainer.numChildren > 0)
+                _chipContainer.removeChildAt(0);
+
+            var cx:int = 0;
+            for (var i:int = 0; i < codes.length; i++)
+            {
+                var chip:Sprite = makeKeyChip(getKeyName(int(codes[i])));
+                chip.x = cx;
+                _chipContainer.addChild(chip);
+                cx += chip.width + 8;
+            }
+        }
+
         private function makeEditButton():Sprite
         {
             var s:Sprite = new Sprite();
@@ -116,7 +115,7 @@ package weather.views
             s.useHandCursor = true;
 
             var tf:TextField = new TextField();
-            tf.defaultTextFormat = new TextFormat("$FieldFont", 13, 0xF4A11A);
+            tf.defaultTextFormat = new TextFormat("$FieldFont", 13, 0xF4A11A, true);
             tf.embedFonts  = true;
             tf.selectable  = false;
             tf.autoSize    = "left";
@@ -129,50 +128,102 @@ package weather.views
 
         private function onEditClick(e:MouseEvent):void
         {
-            if (_capturing) return;
+            if (_capturing || stage == null) return;
             _capturing = true;
+            _captureCodes = [];
+            showHint();
+            stage.addEventListener(KeyboardEvent.KEY_DOWN, onCaptureKeyDown);
+            stage.addEventListener(KeyboardEvent.KEY_UP, onCaptureKeyUp);
+        }
 
-            // Показуємо підказку
-            var keys:Array = [];
+        private function showHint():void
+        {
             while (_chipContainer.numChildren > 0)
                 _chipContainer.removeChildAt(0);
 
             var hint:TextField = new TextField();
-            hint.defaultTextFormat = new TextFormat("$FieldFont", 13, 0xFFAA00);
+            hint.defaultTextFormat = new TextFormat("$FieldFont", 13, 0xFFB84E, true);
             hint.embedFonts  = true;
             hint.selectable  = false;
             hint.autoSize    = "left";
-            hint.text        = "Натисніть комбінацію клавіш...";
+            hint.text        = "Натисни потрібну комбінацію...";
             _chipContainer.addChild(hint);
-
-            // FIX 1: слухаємо клавіші через stage
-            stage.addEventListener(flash.events.KeyboardEvent.KEY_DOWN, onCaptureKey);
         }
 
-        private function onCaptureKey(e:flash.events.KeyboardEvent):void
+        private function onCaptureKeyDown(e:KeyboardEvent):void
         {
-            // Накопичуємо натиснуті клавіші
-            // При відпусканні будь-якої — фіксуємо комбінацію
+            if (!_capturing) return;
+            var code:int = e.keyCode;
+            if (_captureCodes.indexOf(code) == -1)
+                _captureCodes.push(code);
+            _captureCodes.sort(Array.NUMERIC);
+            rebuildChipsFromCodes(_captureCodes);
         }
 
-        private function onCaptureKeyUp(e:flash.events.KeyboardEvent):void
+        private function onCaptureKeyUp(e:KeyboardEvent):void
         {
-            stage.removeEventListener(flash.events.KeyboardEvent.KEY_DOWN, onCaptureKey);
-            stage.removeEventListener(flash.events.KeyboardEvent.KEY_UP, onCaptureKeyUp);
+            if (!_capturing) return;
+            finalizeCapture();
+        }
+
+        private function finalizeCapture():void
+        {
+            if (stage != null)
+            {
+                stage.removeEventListener(KeyboardEvent.KEY_DOWN, onCaptureKeyDown);
+                stage.removeEventListener(KeyboardEvent.KEY_UP, onCaptureKeyUp);
+            }
             _capturing = false;
 
-            // _hotkeyKeys і _hotkeyStr оновлюються в HotkeyCapture-компоненті нижче
+            if (_captureCodes.length == 0)
+            {
+                rebuildChipsFromString(_hotkeyStr);
+                return;
+            }
+
+            _hotkeyKeys = _captureCodes.slice();
+            _hotkeyStr = buildHotkeyString(_hotkeyKeys);
             dispatchHotkeyChanged();
         }
 
         private function dispatchHotkeyChanged():void
         {
-            rebuildChips();
+            rebuildChipsFromString(_hotkeyStr);
             var ev:WeatherEvent = new WeatherEvent(WeatherEvent.HOTKEY_CHANGED);
-            // payload — масив int-кодів, mapId — рядок для відображення
-            ev.payload = _hotkeyKeys;
+            ev.payload = _hotkeyKeys.slice();
             ev.mapId   = _hotkeyStr;
             dispatchEvent(ev);
+        }
+
+        private function buildHotkeyString(codes:Array):String
+        {
+            var parts:Array = [];
+            for (var i:int = 0; i < codes.length; i++)
+                parts.push(getKeyName(int(codes[i])));
+            return parts.join("+");
+        }
+
+        private function getKeyName(code:int):String
+        {
+            switch (code)
+            {
+                case Keyboard.CONTROL: return "CTRL";
+                case Keyboard.ALTERNATE: return "ALT";
+                case Keyboard.SHIFT: return "SHIFT";
+                case Keyboard.SPACE: return "SPACE";
+                case Keyboard.ENTER: return "ENTER";
+                case Keyboard.ESCAPE: return "ESC";
+                case Keyboard.TAB: return "TAB";
+                case Keyboard.BACKSPACE: return "BACKSPACE";
+            }
+
+            if (code >= Keyboard.F1 && code <= Keyboard.F15)
+                return "F" + String(code - Keyboard.F1 + 1);
+            if (code >= 48 && code <= 57)
+                return String.fromCharCode(code);
+            if (code >= 65 && code <= 90)
+                return String.fromCharCode(code);
+            return "KEY_" + code;
         }
 
         private function makeKeyChip(key:String):Sprite
@@ -184,14 +235,14 @@ package weather.views
             tf.selectable  = false;
             tf.autoSize    = "left";
             tf.text = key;
-            var w:int = tf.width + 16;
-            var h:int = 22;
-            s.graphics.beginFill(0x3A2F15);
-            s.graphics.lineStyle(1, 0xF4A11A);
+            var w:int = tf.width + 18;
+            var h:int = 24;
+            s.graphics.beginFill(0x2D220D, 1);
+            s.graphics.lineStyle(1, 0xF4A11A, 1);
             s.graphics.drawRect(0, 0, w, h);
             s.graphics.endFill();
-            tf.x = 8;
-            tf.y = 2;
+            tf.x = 9;
+            tf.y = 3;
             s.addChild(tf);
             return s;
         }

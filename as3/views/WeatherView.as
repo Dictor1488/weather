@@ -5,8 +5,6 @@ package weather.views
     import flash.text.TextField;
     import flash.text.TextFormat;
 
-    import net.wg.infrastructure.base.AbstractView;
-
     import weather.data.PresetVO;
     import weather.data.MapVO;
     import weather.events.WeatherEvent;
@@ -19,16 +17,16 @@ package weather.views
         private var _globalPresets:Vector.<PresetVO>;
         private var _maps:Vector.<MapVO>;
         private var _hotkeyStr:String;
-        private var _hotkeyKeys:Array;   // FIX 1: масив int-кодів
+        private var _hotkeyKeys:Array;
 
         private var _titleTF:TextField;
         private var _closeBtn:Sprite;
         private var _tabGlobal:TabButton;
         private var _tabMaps:TabButton;
         private var _contentHolder:Sprite;
+        private var _topLine:Sprite;
         private var _currentTab:String;
 
-        // FIX 1: приймаємо hotkeyKeys додатково
         public function WeatherView(globalPresets:Vector.<PresetVO>,
                                     maps:Vector.<MapVO>,
                                     hotkey:String = "ALT+F12",
@@ -46,10 +44,16 @@ package weather.views
         private function buildChrome():void
         {
             var backdrop:Sprite = new Sprite();
-            backdrop.graphics.beginFill(0x0A0A0A, 0.9);
+            backdrop.graphics.beginFill(0x0A0A0A, 0.94);
             backdrop.graphics.drawRect(0, 0, 1280, 720);
             backdrop.graphics.endFill();
             addChild(backdrop);
+
+            var headerShade:Sprite = new Sprite();
+            headerShade.graphics.beginFill(0x000000, 0.18);
+            headerShade.graphics.drawRect(0, 0, 1280, 108);
+            headerShade.graphics.endFill();
+            addChild(headerShade);
 
             _titleTF = new TextField();
             _titleTF.defaultTextFormat = new TextFormat("$TitleFont", 22, 0xFFFFFF, true);
@@ -64,6 +68,7 @@ package weather.views
             _closeBtn = new Sprite();
             _closeBtn.buttonMode    = true;
             _closeBtn.useHandCursor = true;
+            _closeBtn.mouseChildren = false;
             var closeTF:TextField = new TextField();
             closeTF.defaultTextFormat = new TextFormat("$FieldFont", 14, 0xF4A11A, true);
             closeTF.embedFonts  = true;
@@ -71,32 +76,38 @@ package weather.views
             closeTF.autoSize    = "left";
             closeTF.text        = "ЗАКРИТИ  \u2715";
             _closeBtn.addChild(closeTF);
-            _closeBtn.x = 1280 - 110;
+            _closeBtn.x = 1280 - 125;
             _closeBtn.y = 24;
             _closeBtn.addEventListener(MouseEvent.CLICK, function(e:MouseEvent):void {
                 dispatchEvent(new WeatherEvent(WeatherEvent.CLOSE_REQUESTED));
             });
             addChild(_closeBtn);
 
-            _tabGlobal = new TabButton("ЗАГАЛЬНІ НАЛАШТУВАННЯ");
-            _tabGlobal.x = 400;
-            _tabGlobal.y = 70;
+            _tabGlobal = new TabButton("ЗАГАЛЬНІ НАЛАШТУВАННЯ", 222);
+            _tabGlobal.x = 360;
+            _tabGlobal.y = 66;
             _tabGlobal.addEventListener(MouseEvent.CLICK, function(e:MouseEvent):void {
                 showTab(TAB_GLOBAL);
             });
             addChild(_tabGlobal);
 
-            _tabMaps = new TabButton("НАЛАШТУВАННЯ ПО КАРТАХ");
-            _tabMaps.x = 620;
-            _tabMaps.y = 70;
+            _tabMaps = new TabButton("НАЛАШТУВАННЯ ПО КАРТАХ", 228);
+            _tabMaps.x = 594;
+            _tabMaps.y = 66;
             _tabMaps.addEventListener(MouseEvent.CLICK, function(e:MouseEvent):void {
                 showTab(TAB_MAPS);
             });
             addChild(_tabMaps);
 
+            _topLine = new Sprite();
+            _topLine.graphics.beginFill(0x252525, 0.85);
+            _topLine.graphics.drawRect(0, 108, 1280, 1);
+            _topLine.graphics.endFill();
+            addChild(_topLine);
+
             _contentHolder = new Sprite();
             _contentHolder.x = 0;
-            _contentHolder.y = 110;
+            _contentHolder.y = 124;
             addChild(_contentHolder);
         }
 
@@ -111,11 +122,9 @@ package weather.views
 
             if (tab == TAB_GLOBAL)
             {
-                // FIX 1: передаємо і рядок і коди клавіш
                 var panel:GlobalSettingsPanel = new GlobalSettingsPanel(
                     _globalPresets, _hotkeyStr, _hotkeyKeys
                 );
-                // слухаємо зміну хоткея з панелі
                 panel.addEventListener(WeatherEvent.HOTKEY_CHANGED, onHotkeyChanged);
                 _contentHolder.addChild(panel);
             }
@@ -135,10 +144,16 @@ package weather.views
             while (_contentHolder.numChildren > 0)
                 _contentHolder.removeChildAt(0);
 
-            _contentHolder.addChild(new MapDetailPanel(map));
+            var detail:MapDetailPanel = new MapDetailPanel(map);
+            detail.addEventListener(WeatherEvent.BACK_TO_MAPS, onBackToMaps);
+            _contentHolder.addChild(detail);
         }
 
-        // FIX 1: пробрасуємо подію вгору до Mediator'а
+        private function onBackToMaps(e:WeatherEvent):void
+        {
+            showTab(TAB_MAPS);
+        }
+
         private function onHotkeyChanged(e:WeatherEvent):void
         {
             dispatchEvent(e.clone());
@@ -161,34 +176,58 @@ class TabButton extends Sprite
 {
     private var _tf:TextField;
     private var _underline:Sprite;
+    private var _bg:Sprite;
+    private var _w:int;
 
-    public function TabButton(text:String)
+    public function TabButton(text:String, widthHint:int = 220)
     {
         buttonMode    = true;
         useHandCursor = true;
         mouseChildren = false;
+        _w = widthHint;
+
+        _bg = new Sprite();
+        addChild(_bg);
 
         _tf = new TextField();
-        _tf.defaultTextFormat = new TextFormat("$FieldFont", 14, 0x888888, true);
+        _tf.defaultTextFormat = new TextFormat("$FieldFont", 14, 0x8D8D8D, true);
         _tf.embedFonts  = true;
         _tf.selectable  = false;
-        _tf.autoSize    = "left";
+        _tf.width       = _w;
+        _tf.height      = 28;
         _tf.text        = text;
+        _tf.y           = 7;
         addChild(_tf);
 
         _underline = new Sprite();
-        _underline.graphics.beginFill(0xF4A11A);
-        _underline.graphics.drawRect(0, _tf.height + 6, _tf.width, 2);
-        _underline.graphics.endFill();
-        _underline.visible = false;
         addChild(_underline);
+
+        redraw(false);
+    }
+
+    private function redraw(sel:Boolean):void
+    {
+        _bg.graphics.clear();
+        _bg.graphics.lineStyle(1, sel ? 0x3C2A10 : 0x2A2A2A, sel ? 0.95 : 0.6);
+        _bg.graphics.beginFill(sel ? 0x16110B : 0x111111, sel ? 0.98 : 0.88);
+        _bg.graphics.drawRect(0, 0, _w, 34);
+        _bg.graphics.endFill();
+
+        _underline.graphics.clear();
+        if (sel)
+        {
+            _underline.graphics.beginFill(0xF4A11A, 1);
+            _underline.graphics.drawRect(0, 34, _w, 2);
+            _underline.graphics.endFill();
+        }
+
+        _tf.textColor = sel ? 0xF7D3A1 : 0x7E7E7E;
     }
 
     public function set selected(v:Boolean):void
     {
-        _underline.visible = v;
-        _tf.textColor      = v ? 0xFFFFFF : 0x888888;
+        redraw(v);
     }
 
-    public function get selected():Boolean { return _underline.visible; }
+    public function get selected():Boolean { return _underline.width > 0; }
 }

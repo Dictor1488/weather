@@ -1,36 +1,38 @@
-# Weather Mods Panel — AS3 + Python для World of Tanks
+# Weather Mods Panel — українська збірка інтерфейсу
 
-Панель керування погодними пресетами на картах. Інтегрується з уже встановленими `environments_*.wotmod` модами (midday / sunset / overcast / midnight).
+У цій збірці:
+- увесь інтерфейс переведений українською;
+- `Пасмурно` замінено на `Похмуро`;
+- додано окремий пункт у нижньому меню модів через `modsListApi`;
+- `open_weather_window()` тепер намагається відкрити окреме вікно `weather/WeatherPanel.swf`;
+- оновлено AS3-екрани під стиль зі скрінів;
+- додано локальний payload builder для DAAPI-вікна.
 
-## Що робить
+## Файли для заміни
 
-- Вкладка **"Загальні налаштування"** — зважений рандомайзер пресетів для всіх карт одразу
-- Вкладка **"Налаштування по картах"** — сітка 4×N, клік по карті → індивідуальні ваги
-- Хоткей **ALT+F12** — перемикання пресета прямо в бою
-- Зберігає вибір у `mods/configs/weather_mod.json`
+Замінюй ці файли у своєму проєкті:
 
-## Структура
+- `as3/WeatherMediator.as`
+- `as3/components/MapTile.as`
+- `as3/components/PresetRow.as`
+- `as3/events/WeatherEvent.as`
+- `as3/views/GlobalSettingsPanel.as`
+- `as3/views/MapDetailPanel.as`
+- `as3/views/MapGridPanel.as`
+- `as3/views/WeatherView.as`
+- `python/gui/mods/__init__.py`
+- `python/gui/mods/weather_controller.py`
+- `python/gui/mods/weather_window.py`
 
-```
-weather_mod/
-├── as3/                          # Flash/Scaleform UI
-│   ├── data/
-│   │   ├── PresetVO.as           # Value object пресета (id, weight, guid, preview)
-│   │   └── MapVO.as              # Value object карти (id, label, thumb, presets)
-│   ├── events/
-│   │   └── WeatherEvent.as       # Типізовані кастомні події
-│   ├── components/
-│   │   ├── PresetRow.as          # Рядок "Лейбл | Слайдер | вес: N | preview"
-│   │   └── MapTile.as            # Плитка карти в сітці
-│   ├── views/
-│   │   ├── WeatherView.as        # Корінь: tabs + close + content holder
-│   │   ├── GlobalSettingsPanel.as  # Вкладка "Загальні" (5 слайдерів + hotkey)
-│   │   ├── MapGridPanel.as       # Вкладка "По картах" (сітка 4×N)
-│   │   └── MapDetailPanel.as     # Деталі однієї карти (5 слайдерів)
-│   └── WeatherMediator.as        # DAAPI-міст Flash ⇄ Python
-│
-└── python/
-    ├── weather_controller.py     # Core: конфіг, рандомайзер, патч space.settings
-    ├── weather_window.py         # DAAPI view з py_* колбеками
-    └── __init__.py               # Хуки на завантаження карти та хоткей
-```
+## Важливо
+
+Щоб окреме вікно реально відкривалося, потрібно зібрати SWF і покласти його в:
+
+`res_mods/<версія>/gui/flash/weather/WeatherPanel.swf`
+
+або в ту структуру, яку ти використовуєш у своїй збірці.
+
+## Іконка для нижнього меню модів
+
+У код вже вбудовано base64-іконку з `modsList.png`.
+Якщо `modsListApi` у клієнті відсутній, окремий пункт меню не з'явиться.
