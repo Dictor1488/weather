@@ -190,6 +190,14 @@ def main():
     if pathlib.Path('resources/in').is_dir():
         copytree('resources/in', str(temp_dir / 'res'))
 
+    # SWF — копіюємо в res/gui/flash/weather/
+    swf_src = pathlib.Path('as3/bin/WeatherPanel.swf')
+    if swf_src.is_file():
+        swf_dest = temp_dir / 'res' / 'gui' / 'flash' / 'weather'
+        swf_dest.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(swf_src), str(swf_dest / 'WeatherPanel.swf'))
+        logger.info('SWF copied: WeatherPanel.swf -> res/gui/flash/weather/')
+
     # Створюємо .wotmod
     zip_folder(str(temp_dir), str(build_dir / package_name))
     logger.info("Created: %s", build_dir / package_name)
