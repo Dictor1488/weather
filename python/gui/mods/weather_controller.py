@@ -812,12 +812,44 @@ def _try_live_switch(preset_id):
         real_inst._switchEnvironment(guid)
         LOG.info('live_switch: _switchEnvironment(%s) OK', guid)
 
-        # Діагностика: шукаємо прямий BigWorld API для environment
+        # Діагностика реального LSEnvironmentSwitcher
         try:
-            bw_env_attrs = [a for a in dir(BigWorld) if 'nviron' in a or 'nvironment' in a.lower()]
-            LOG.info('live_switch: BigWorld environ attrs: %s', bw_env_attrs)
-        except Exception:
-            pass
+            import LSArenaPhasesComponent as _ls2
+            sw2 = getattr(_ls2, 'LSEnvironmentSwitcher', None)
+            # Шукаємо в BigWorld.entities
+            found_instances = []
+            try:
+                for eid in list(BigWorld.entities.keys())[:50]:
+                    e = BigWorld.entities.get(eid)
+                    if e is None:
+                        continue
+                    # Перевіряємо чи entity сама є LSEnvironmentSwitcher
+                    if sw2 and isinstance(e, sw2):
+                        found_instances.append('entity_%s_is_sw' % eid)
+                    # Або шукаємо атрибути
+                    for attr in dir(e):
+                        try:
+                            val = getattr(e, attr, None)
+                            if sw2 and isinstance(val, sw2):
+                                found_instances.append('entity_%s.%s' % (eid, attr))
+                                # Спробуємо викликати на ньому
+                                val._switchEnvironment(guid)
+                                LOG.info('live_switch: REAL INSTANCE found and called: entity_%s.%s', eid, attr)
+                        except Exception:
+                            pass
+            except Exception as de:
+                LOG.info('live_switch: diag entity scan ERR: %s', de)
+            LOG.info('live_switch: found real instances: %s', found_instances)
+            # Логуємо типи перших entities
+            try:
+                sample = [(eid, type(BigWorld.entities.get(eid)).__name__)
+                          for eid in list(BigWorld.entities.keys())[:10]
+                          if BigWorld.entities.get(eid)]
+                LOG.info('live_switch: entity sample: %s', sample)
+            except Exception as de:
+                LOG.info('live_switch: entity sample ERR: %s', de)
+        except Exception as de:
+            LOG.info('live_switch: diag ERR: %s', de)
 
         return True
     except Exception as e:
