@@ -812,44 +812,24 @@ def _try_live_switch(preset_id):
         real_inst._switchEnvironment(guid)
         LOG.info('live_switch: _switchEnvironment(%s) OK', guid)
 
-        # Діагностика реального LSEnvironmentSwitcher
+        # Діагностика: що є в Avatar і Space для environment
         try:
-            import LSArenaPhasesComponent as _ls2
-            sw2 = getattr(_ls2, 'LSEnvironmentSwitcher', None)
-            # Шукаємо в BigWorld.entities
-            found_instances = []
-            try:
-                for eid in list(BigWorld.entities.keys())[:50]:
-                    e = BigWorld.entities.get(eid)
-                    if e is None:
-                        continue
-                    # Перевіряємо чи entity сама є LSEnvironmentSwitcher
-                    if sw2 and isinstance(e, sw2):
-                        found_instances.append('entity_%s_is_sw' % eid)
-                    # Або шукаємо атрибути
-                    for attr in dir(e):
-                        try:
-                            val = getattr(e, attr, None)
-                            if sw2 and isinstance(val, sw2):
-                                found_instances.append('entity_%s.%s' % (eid, attr))
-                                # Спробуємо викликати на ньому
-                                val._switchEnvironment(guid)
-                                LOG.info('live_switch: REAL INSTANCE found and called: entity_%s.%s', eid, attr)
-                        except Exception:
-                            pass
-            except Exception as de:
-                LOG.info('live_switch: diag entity scan ERR: %s', de)
-            LOG.info('live_switch: found real instances: %s', found_instances)
-            # Логуємо типи перших entities
-            try:
-                sample = [(eid, type(BigWorld.entities.get(eid)).__name__)
-                          for eid in list(BigWorld.entities.keys())[:10]
-                          if BigWorld.entities.get(eid)]
-                LOG.info('live_switch: entity sample: %s', sample)
-            except Exception as de:
-                LOG.info('live_switch: entity sample ERR: %s', de)
+            player = BigWorld.player()
+            if player:
+                # Атрибути Avatar що стосуються environment/space
+                av_env = [a for a in dir(player) if any(k in a.lower() for k in ['environ', 'space', 'weather', 'preset'])]
+                LOG.info('live_switch: Avatar env attrs: %s', av_env)
+                # Спробуємо BigWorld.wg_setSpaceEnvironment
+                if hasattr(BigWorld, 'wg_setSpaceEnvironment'):
+                    LOG.info('live_switch: wg_setSpaceEnvironment EXISTS!')
+                # Всі wg_ методи BigWorld
+                wg_methods = [a for a in dir(BigWorld) if a.startswith('wg_') and 'pace' in a.lower()]
+                LOG.info('live_switch: BigWorld wg_*space* methods: %s', wg_methods)
+                # Що є в BigWorld взагалі з space
+                space_methods = [a for a in dir(BigWorld) if 'pace' in a.lower() or 'nviron' in a.lower()]
+                LOG.info('live_switch: BigWorld space/environ methods: %s', space_methods)
         except Exception as de:
-            LOG.info('live_switch: diag ERR: %s', de)
+            LOG.info('live_switch: Avatar diag ERR: %s', de)
 
         return True
     except Exception as e:
