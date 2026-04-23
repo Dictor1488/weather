@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-DAAPI-міст між Flash (WeatherMediator.as) та weather_controller.
+DAAPI-міст між Flash (WeatherMediator.as) та weather_controller v8.
 """
 
 try:
@@ -13,60 +13,73 @@ except ImportError:
         def _populate(self): pass
         def _dispose(self): pass
 
-from weather_controller import g_controller, PRESET_ORDER, PRESET_LABELS, PRESET_GUIDS, DEFAULT_WEIGHT
+from weather_controller import (
+    g_controller,
+    PRESET_ORDER,
+    PRESET_LABELS,
+    PRESET_GUIDS,
+    DEFAULT_WEIGHT,
+)
+
+# Шлях до превʼю іконок пресетів (з pro_env папки)
+# Формат: guid (з крапками) -> шлях до png в res/
+PRESET_PREVIEW = {
+    'standard': 'gui/maps/icons/pro.environment/default.png',
+    'midnight': 'gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png',
+    'overcast': 'gui/maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png',
+    'sunset':   'gui/maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png',
+    'midday':   'gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png',
+}
 
 MAP_REGISTRY = [
-    ("01_karelia",             u"Карелія",            "gui/maps/icons/map/list/01_karelia.png"),
-    ("02_malinovka",           u"Малинівка",          "gui/maps/icons/map/list/02_malinovka.png"),
-    ("04_himmelsdorf",         u"Хіммельсдорф",       "gui/maps/icons/map/list/04_himmelsdorf.png"),
-    ("05_prohorovka",          u"Прохорівка",         "gui/maps/icons/map/list/05_prohorovka.png"),
-    ("06_ensk",                u"Єнськ",              "gui/maps/icons/map/list/06_ensk.png"),
-    ("07_lakeville",           u"Ласвілль",          "gui/maps/icons/map/list/07_lakeville.png"),
-    ("08_ruinberg",            u"Руїнберг",          "gui/maps/icons/map/list/08_ruinberg.png"),
-    ("10_hills",               u"Круча",              "gui/maps/icons/map/list/10_hills.png"),
-    ("11_murovanka",           u"Мурованка",          "gui/maps/icons/map/list/11_murovanka.png"),
-    ("13_erlenberg",           u"Ерленберг",          "gui/maps/icons/map/list/13_erlenberg.png"),
-    ("14_siegfried_line",      u"Лінія Зигфріда",     "gui/maps/icons/map/list/14_siegfried_line.png"),
-    ("15_komarin",             u"Застава",            "gui/maps/icons/map/list/15_komarin.png"),
-    ("17_munster",             u"Крафтверк",          "gui/maps/icons/map/list/17_munster.png"),
-    ("18_cliff",               u"Перевал",            "gui/maps/icons/map/list/18_cliff.png"),
-    ("19_monastery",           u"Монастир",           "gui/maps/icons/map/list/19_monastery.png"),
-    ("23_westfeld",            u"Вестфілд",           "gui/maps/icons/map/list/23_westfeld.png"),
-    ("28_desert",              u"Загублене місто",    "gui/maps/icons/map/list/28_desert.png"),
-    ("29_el_hallouf",          u"Ель-Халлуф",         "gui/maps/icons/map/list/29_el_hallouf.png"),
-    ("31_airfield",            u"Летовище",           "gui/maps/icons/map/list/31_airfield.png"),
-    ("33_fjord",               u"Фіорди",             "gui/maps/icons/map/list/33_fjord.png"),
-    ("34_redshire",            u"Редшир",             "gui/maps/icons/map/list/34_redshire.png"),
-    ("35_steppes",             u"Степи",              "gui/maps/icons/map/list/35_steppes.png"),
-    ("36_fishing_bay",         u"Рибальська бухта",   "gui/maps/icons/map/list/36_fishing_bay.png"),
-    ("38_mannerheim_line",     u"Лінія Маннергейма",  "gui/maps/icons/map/list/38_mannerheim_line.png"),
-    ("39_crimea",              u"Стара гавань",       "gui/maps/icons/map/list/39_crimea.png"),
-    ("40_nord_libya",          u"Піщана ріка",        "gui/maps/icons/map/list/40_nord_libya.png"),
-    ("42_north_login",         u"Копальні",           "gui/maps/icons/map/list/42_north_login.png"),
-    ("44_north_america",       u"Лайв Окс",           "gui/maps/icons/map/list/44_north_america.png"),
-    ("45_north_america2",      u"Хайвей",             "gui/maps/icons/map/list/45_north_america2.png"),
-    ("47_canada_a",            u"Кордон імперії",     "gui/maps/icons/map/list/47_canada_a.png"),
-    ("49_wasatch",             u"Нормандія",          "gui/maps/icons/map/list/49_wasatch.png"),
-    ("53_japan",               u"Студзянки",          "gui/maps/icons/map/list/53_japan.png"),
-    ("54_Britain",             u"Оверлорд",           "gui/maps/icons/map/list/54_Britain.png"),
-    ("57_maps_city",           u"Берлін",             "gui/maps/icons/map/list/57_maps_city.png"),
-    ("58_underwater",          u"Тундра",             "gui/maps/icons/map/list/58_underwater.png"),
-    ("59_asia",                u"Клондайк",           "gui/maps/icons/map/list/59_asia.png"),
-    ("60_order",               u"Провінція",          "gui/maps/icons/map/list/60_order.png"),
-    ("62_arktika",             u"Устрична затока",    "gui/maps/icons/map/list/62_arktika.png"),
-    ("65_riverfront",          u"Вайдпарк",           "gui/maps/icons/map/list/65_riverfront.png"),
-    ("66_water_e1_nation",     u"Промзона",           "gui/maps/icons/map/list/66_water_e1_nation.png"),
-    ("67_haven",               u"Фата-моргана",       "gui/maps/icons/map/list/67_haven.png"),
-    ("68_yard",                u"Париж",              "gui/maps/icons/map/list/68_yard.png"),
+    ('01_karelia',             u'Карелія',            'gui/maps/icons/map/list/01_karelia.png'),
+    ('02_malinovka',           u'Малинівка',          'gui/maps/icons/map/list/02_malinovka.png'),
+    ('04_himmelsdorf',         u'Хіммельсдорф',       'gui/maps/icons/map/list/04_himmelsdorf.png'),
+    ('05_prohorovka',          u'Прохорівка',         'gui/maps/icons/map/list/05_prohorovka.png'),
+    ('06_ensk',                u'Єнськ',              'gui/maps/icons/map/list/06_ensk.png'),
+    ('07_lakeville',           u'Ласвілль',           'gui/maps/icons/map/list/07_lakeville.png'),
+    ('08_ruinberg',            u'Руїнберг',           'gui/maps/icons/map/list/08_ruinberg.png'),
+    ('10_hills',               u'Копальні',           'gui/maps/icons/map/list/10_hills.png'),
+    ('11_murovanka',           u'Мурованка',          'gui/maps/icons/map/list/11_murovanka.png'),
+    ('13_erlenberg',           u'Ерленберг',          'gui/maps/icons/map/list/13_erlenberg.png'),
+    ('14_siegfried_line',      u'Лінія Зигфріда',     'gui/maps/icons/map/list/14_siegfried_line.png'),
+    ('17_munchen',             u'Мюнхен',             'gui/maps/icons/map/list/17_munchen.png'),
+    ('18_cliff',               u'Круча',              'gui/maps/icons/map/list/18_cliff.png'),
+    ('19_monastery',           u'Монастир',           'gui/maps/icons/map/list/19_monastery.png'),
+    ('23_westfeld',            u'Вестфілд',           'gui/maps/icons/map/list/23_westfeld.png'),
+    ('28_desert',              u'Піщана ріка',        'gui/maps/icons/map/list/28_desert.png'),
+    ('29_el_hallouf',          u'Ель-Халлуф',         'gui/maps/icons/map/list/29_el_hallouf.png'),
+    ('31_airfield',            u'Летовище',           'gui/maps/icons/map/list/31_airfield.png'),
+    ('33_fjord',               u'Фіорди',             'gui/maps/icons/map/list/33_fjord.png'),
+    ('34_redshire',            u'Редшир',             'gui/maps/icons/map/list/34_redshire.png'),
+    ('35_steppes',             u'Степи',              'gui/maps/icons/map/list/35_steppes.png'),
+    ('36_fishing_bay',         u'Рибальська бухта',   'gui/maps/icons/map/list/36_fishing_bay.png'),
+    ('37_caucasus',            u'Кавказ',             'gui/maps/icons/map/list/37_caucasus.png'),
+    ('38_mannerheim_line',     u'Лінія Маннергейма',  'gui/maps/icons/map/list/38_mannerheim_line.png'),
+    ('44_north_america',       u'Лайв Окс',           'gui/maps/icons/map/list/44_north_america.png'),
+    ('45_north_america',       u'Хайвей',             'gui/maps/icons/map/list/45_north_america.png'),
+    ('47_canada_a',            u'Перлинна річка',     'gui/maps/icons/map/list/47_canada_a.png'),
+    ('59_asia_great_wall',     u'Велика стіна',       'gui/maps/icons/map/list/59_asia_great_wall.png'),
+    ('60_asia_miao',           u'Тихий берег',        'gui/maps/icons/map/list/60_asia_miao.png'),
+    ('63_tundra',              u'Тундра',             'gui/maps/icons/map/list/63_tundra.png'),
+    ('90_minsk',               u'Мінськ',             'gui/maps/icons/map/list/90_minsk.png'),
+    ('95_lost_city_ctf',       u'Загублене місто',    'gui/maps/icons/map/list/95_lost_city_ctf.png'),
+    ('99_poland',              u'Студзянки',          'gui/maps/icons/map/list/99_poland.png'),
+    ('101_dday',               u'Нормандія (D-Day)',  'gui/maps/icons/map/list/101_dday.png'),
+    ('105_germany',            u'Берлін',             'gui/maps/icons/map/list/105_germany.png'),
+    ('112_eiffel_tower_ctf',   u'Париж',              'gui/maps/icons/map/list/112_eiffel_tower_ctf.png'),
+    ('114_czech',              u'Промзона',           'gui/maps/icons/map/list/114_czech.png'),
+    ('115_sweden',             u'Кордон імперії',     'gui/maps/icons/map/list/115_sweden.png'),
+    ('121_lost_paradise_v',    u'Перевал',            'gui/maps/icons/map/list/121_lost_paradise_v.png'),
+    ('127_japort',             u'Стара гавань',       'gui/maps/icons/map/list/127_japort.png'),
+    ('128_last_frontier_v',    u'Фата-моргана',       'gui/maps/icons/map/list/128_last_frontier_v.png'),
+    ('208_bf_epic_normandy',   u'Оверлорд',           'gui/maps/icons/map/list/208_bf_epic_normandy.png'),
+    ('209_wg_epic_suburbia',   u'Крафтверк',          'gui/maps/icons/map/list/209_wg_epic_suburbia.png'),
+    ('210_bf_epic_desert',     u'Застава',            'gui/maps/icons/map/list/210_bf_epic_desert.png'),
+    ('212_epic_random_valley', u'Долина',             'gui/maps/icons/map/list/212_epic_random_valley.png'),
+    ('217_er_alaska',          u'Клондайк',           'gui/maps/icons/map/list/217_er_alaska.png'),
+    ('222_er_clime',           u'Вайдпарк',           'gui/maps/icons/map/list/222_er_clime.png'),
 ]
-
-
-def _normalize_hotkey(codes):
-    try:
-        normalized = [int(code) for code in (codes or [])]
-    except Exception:
-        normalized = []
-    return normalized
 
 
 def _build_presets(weights):
@@ -74,52 +87,56 @@ def _build_presets(weights):
     weights = weights or {}
     for preset_id in PRESET_ORDER:
         data.append({
-            'id': preset_id,
-            'label': PRESET_LABELS.get(preset_id, preset_id),
-            'guid': PRESET_GUIDS.get(preset_id),
-            'previewSrc': '',
-            'weight': int(weights.get(preset_id, DEFAULT_WEIGHT))
+            'id':         preset_id,
+            'label':      PRESET_LABELS.get(preset_id, preset_id),
+            'guid':       PRESET_GUIDS.get(preset_id, ''),
+            'previewSrc': PRESET_PREVIEW.get(preset_id, ''),
+            'weight':     int(weights.get(preset_id, DEFAULT_WEIGHT)),
         })
     return data
 
 
-def _build_payload(map_registry):
+def _build_hotkey_str(hotkey_dict):
+    """Перетворює hotkey dict в рядок типу 'ALT+F12'."""
+    try:
+        key  = hotkey_dict.get('key', 'KEY_F12')
+        mods = hotkey_dict.get('mods', [])
+        parts = list(mods) + [key.replace('KEY_', '')]
+        return '+'.join(parts)
+    except Exception:
+        return 'F12'
+
+
+def _build_payload():
     general = g_controller.getGeneralWeights() or {}
     maps = []
-    for map_id, label, thumb in map_registry:
+    for map_id, label, thumb in MAP_REGISTRY:
         map_weights = g_controller.getMapWeights(map_id) or {}
         maps.append({
-            'id': map_id,
-            'label': label,
-            'thumbSrc': thumb,
+            'id':        map_id,
+            'label':     label,
+            'thumbSrc':  thumb,
             'useGlobal': False,
-            'presets': _build_presets(map_weights)
+            'presets':   _build_presets(map_weights),
         })
 
-    hotkey_codes = _normalize_hotkey(g_controller.getHotkey())
-    hotkey_str = 'ALT+F12'
-    if hotkey_codes:
-        parts = []
-        for code in hotkey_codes:
-            if code == 18:
-                parts.append('ALT')
-            elif code == 17:
-                parts.append('CTRL')
-            elif code == 16:
-                parts.append('SHIFT')
-            elif 112 <= code <= 126:
-                parts.append('F%s' % (code - 111))
-            elif 48 <= code <= 57 or 65 <= code <= 90:
-                parts.append(chr(code))
-            else:
-                parts.append('KEY_%s' % code)
-        hotkey_str = '+'.join(parts)
+    hk = g_controller.getHotkey()
+    hotkey_str  = _build_hotkey_str(hk)
+    hotkey_keys = []
+    try:
+        import Keys
+        key_name = hk.get('key', 'KEY_F12')
+        code = getattr(Keys, key_name, 0)
+        if code:
+            hotkey_keys.append(code)
+    except Exception:
+        pass
 
     return {
-        'presets': _build_presets(general),
-        'maps': maps,
-        'hotkey': hotkey_str,
-        'hotkeyKeys': hotkey_codes,
+        'presets':    _build_presets(general),
+        'maps':       maps,
+        'hotkey':     hotkey_str,
+        'hotkeyKeys': hotkey_keys,
     }
 
 
@@ -131,33 +148,48 @@ class WeatherWindowMeta(AbstractLobbyView):
 
     def _populate(self):
         super(WeatherWindowMeta, self)._populate()
-        payload = _build_payload(MAP_REGISTRY)
-        self.flashObject.as_setData(payload)
+        try:
+            payload = _build_payload()
+            self.flashObject.as_setData(payload)
+        except Exception:
+            import logging
+            logging.getLogger('weather_mod').exception('WeatherWindowMeta._populate failed')
 
     def py_onWeightChanged(self, mapId, presetId, value):
-        map_id = mapId if mapId else None
-        weights = self._ctrl.getGeneralWeights() if map_id is None else self._ctrl.getMapWeights(map_id)
-        if weights is None:
-            weights = {}
-        weights[str(presetId)] = int(float(value))
-        if map_id is None:
+        map_id = str(mapId) if mapId else None
+        if not map_id:
+            weights = self._ctrl.getGeneralWeights() or {}
+            weights[str(presetId)] = int(float(value))
             self._ctrl.setGeneralWeights(weights)
         else:
+            weights = self._ctrl.getMapWeights(map_id) or {}
+            weights[str(presetId)] = int(float(value))
             self._ctrl.setMapWeights(map_id, weights)
 
     def py_onMapSelected(self, mapId):
-        pass
+        pass  # Flash сам перемикає на detail view
 
     def py_onTabChanged(self, tab):
         pass
 
     def py_onCloseRequested(self):
         self._ctrl.on_close_requested()
-        self.destroy()
+        try:
+            self.destroy()
+        except Exception:
+            pass
 
     def py_onHotkeyChanged(self, keyCodes, hotkeyStr):
-        codes = _normalize_hotkey(keyCodes)
-        self._ctrl.on_hotkey_changed(codes, str(hotkeyStr))
+        try:
+            parts = str(hotkeyStr).split('+')
+            key  = 'KEY_' + parts[-1] if parts else 'KEY_F12'
+            mods = parts[:-1] if len(parts) > 1 else []
+            self._ctrl.on_hotkey_changed(list(keyCodes or []), str(hotkeyStr))
+            from weather_controller import set_hotkey
+            set_hotkey(True, mods, key)
+        except Exception:
+            import logging
+            logging.getLogger('weather_mod').exception('py_onHotkeyChanged failed')
 
     def _dispose(self):
         self._ctrl.on_close_requested()
