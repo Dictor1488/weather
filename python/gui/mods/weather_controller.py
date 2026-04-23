@@ -767,22 +767,60 @@ def set_preset(preset_id):
     return True
 
 
+def _get_loaded_environment_guids():
+    """
+    Повертає список guid-ів environments які реально завантажені в поточний простір.
+    Читає з mods/configs/protanki/environments.json який ми самі пишемо.
+    """
+    try:
+        game_root = _resolve_game_root()
+        path = os.path.normpath(
+            os.path.join(game_root, 'mods', 'configs', 'protanki', 'environments.json'))
+        if os.path.isfile(path):
+            with open(path, 'r') as f:
+                data = json.load(f)
+            return data.get('environments', [])
+    except Exception:
+        pass
+    return []
+
+
 def _try_live_switch(preset_id):
     """
-    Спроба перемкнути environment live через LSEnvironmentSwitcher._switchEnvironment.
-    Повертає True якщо вдалось — тоді рестарт не потрібен.
-    Для standard — повертає до дефолтного guid карти.
+    Спроба перемкнути environment live.
+    Порядок спроб:
+      1. weatherPresetID + __applyTimeAndWeatherSettings (прямий Avatar API)
+      2. LSEnvironmentSwitcher._switchEnvironment (для LS режимів)
     """
     if not IN_GAME:
         return False
     if preset_id == 'standard':
-        # Для standard беремо дефолтний guid поточної карти
         guid = _read_default_guid(_last_space_name) if _last_space_name else None
     else:
         guid = PRESET_GUIDS.get(preset_id)
     if not guid:
         LOG.warning('_try_live_switch: no guid for preset=%s space=%s', preset_id, _last_space_name)
         return False
+
+    # Спроба 1: через weatherPresetID і applyTimeAndWeatherSettings
+    try:
+        player = BigWorld.player()
+        if player and hasattr(player, 'weatherPresetID'):
+            # Спробуємо знайти preset ID для guid
+            # weatherPresetID — числовий індекс, guid — рядок
+            # Спробуємо через __applyTimeAndWeatherSettings
+            apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
+            if apply_fn:
+                # Спробуємо різні сигнатури
+                for args in [(guid,), (preset_id,), (guid, True), (guid, False)]:
+                    try:
+                        apply_fn(*args)
+                        LOG.info('_try_live_switch: __applyTimeAndWeatherSettings%s OK', args)
+                        return True
+                    except Exception as e:
+                        LOG.info('_try_live_switch: __applyTimeAndWeatherSettings%s ERR: %s', args, str(e)[:80])
+    except Exception as e:
+        LOG.info('_try_live_switch: weatherPresetID attempt ERR: %s', e)
     try:
         player = BigWorld.player()
         if player is None:
@@ -809,28 +847,17 @@ def _try_live_switch(preset_id):
             real_inst._spaceID = space_id
             real_inst._callbackDelayer = None
 
+        # Перевіряємо чи цей guid реально є в завантажених environments
+        # Якщо нема — шукаємо перший доступний
+        loaded = _get_loaded_environment_guids()
+        if loaded and guid not in loaded:
+            LOG.warning('live_switch: guid %s not loaded, trying fallback from %s', guid, loaded)
+            # Беремо перший доступний guid з завантажених
+            guid = loaded[0]
+            LOG.info('live_switch: fallback guid: %s', guid)
+
         real_inst._switchEnvironment(guid)
         LOG.info('live_switch: _switchEnvironment(%s) OK', guid)
-
-        # Діагностика: що є в Avatar і Space для environment
-        try:
-            player = BigWorld.player()
-            if player:
-                # Атрибути Avatar що стосуються environment/space
-                av_env = [a for a in dir(player) if any(k in a.lower() for k in ['environ', 'space', 'weather', 'preset'])]
-                LOG.info('live_switch: Avatar env attrs: %s', av_env)
-                # Спробуємо BigWorld.wg_setSpaceEnvironment
-                if hasattr(BigWorld, 'wg_setSpaceEnvironment'):
-                    LOG.info('live_switch: wg_setSpaceEnvironment EXISTS!')
-                # Всі wg_ методи BigWorld
-                wg_methods = [a for a in dir(BigWorld) if a.startswith('wg_') and 'pace' in a.lower()]
-                LOG.info('live_switch: BigWorld wg_*space* methods: %s', wg_methods)
-                # Що є в BigWorld взагалі з space
-                space_methods = [a for a in dir(BigWorld) if 'pace' in a.lower() or 'nviron' in a.lower()]
-                LOG.info('live_switch: BigWorld space/environ methods: %s', space_methods)
-        except Exception as de:
-            LOG.info('live_switch: Avatar diag ERR: %s', de)
-
         return True
     except Exception as e:
         LOG.info('live_switch: failed: %s', e)
