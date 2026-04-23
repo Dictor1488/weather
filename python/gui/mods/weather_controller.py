@@ -501,29 +501,26 @@ def _uninstall_weather_spaces():
 
 def _install_preset_to_resmods(preset_id):
     """
-    Розпаковує space.settings з spaces_wg.wotmod в res_mods/spaces/
-    із підставленими <environment> та <environmentOverride> тегами.
-
-    Це той самий механізм що використовує Skybox Randomizer:
-    розпакований файл в res_mods/ має пріоритет над wotmod.
-    Але ТІЛЬКИ якщо виклик відбувається ДО того як WoT кешує VFS.
-    Тому викликаємо при старті і після кожного бою.
+    Модифікує space.settings в пам'яті VFS через ResMgr.openSection + writeString.
+    Не зберігає на диск — змінює DataSection об'єкт напряму.
+    WoT читає цей об'єкт при завантаженні простору.
+    
+    Також записує в res_mods/ як запасний варіант.
     """
     import shutil
 
     try:
         version_dir = _find_latest_version_dir('res_mods')
         if not version_dir:
-            LOG.warning('install_preset: no res_mods version dir')
             return False
 
-        # Спочатку видаляємо старі spaces/
+        # Очищаємо старі spaces/
         spaces_dir = os.path.join(version_dir, 'spaces')
         if os.path.isdir(spaces_dir):
             shutil.rmtree(spaces_dir)
 
         if not preset_id or preset_id == 'standard':
-            LOG.info('install_preset: standard - spaces/ removed')
+            LOG.info('install_preset: standard - spaces/ cleared')
             _set_installed_preset('standard')
             return True
 
@@ -533,60 +530,65 @@ def _install_preset_to_resmods(preset_id):
             LOG.warning('install_preset: preset not in registry: %s', preset_id)
             return False
 
-        # Відкриваємо spaces_wg.wotmod як шаблон
+        spaces_data = preset_data.get('spaces', {})
+        count_disk = 0
+        count_vfs  = 0
+
         spaces_wg_path = _get_spaces_wg_package_path()
-        if not spaces_wg_path:
-            LOG.warning('install_preset: spaces_wg package not found')
-            return False
 
-        count = 0
-        try:
-            zf = zipfile.ZipFile(spaces_wg_path, 'r')
-        except Exception as e:
-            LOG.error('install_preset: cannot open spaces_wg: %s', e)
-            return False
+        for space_name, sd in spaces_data.items():
+            env_name = sd.get('env_name')
+            guid     = sd.get('guid')
+            if not env_name or not guid:
+                continue
 
-        try:
-            spaces_data = preset_data.get('spaces', {})
-            for space_name, sd in spaces_data.items():
-                env_name = sd.get('env_name')
-                guid = sd.get('guid')
-                if not env_name or not guid:
-                    continue
+            # --- Метод 1: ResMgr DataSection в пам'яті (без збереження) ---
+            if IN_GAME:
+                try:
+                    vfs_path = u'spaces/%s/space.settings' % space_name
+                    section = ResMgr.openSection(vfs_path)
+                    if section is not None:
+                        section.writeString('environment', env_name)
+                        section.writeString('environmentOverride', guid)
+                        count_vfs += 1
+                        # Логуємо тільки першу карту щоб не спамити
+                        if count_vfs == 1:
+                            LOG.info('install_preset: VFS patch %s env=%s guid=%s',
+                                     space_name, env_name, guid)
+                except Exception as e:
+                    if count_vfs == 0:
+                        LOG.warning('install_preset: VFS patch ERR: %s', e)
 
-                # Шаблон з spaces_wg
+            # --- Метод 2: Запис на диск в res_mods/ ---
+            if not spaces_wg_path:
+                continue
+            try:
+                zf = zipfile.ZipFile(spaces_wg_path, 'r')
                 member = 'res/spaces/%s/space.settings' % space_name
                 try:
                     template_bytes = zf.read(member)
+                    template_text  = _decode_xml_bytes(template_bytes)
+                    patched        = _patch_space_settings_template(template_text, env_name, guid)
+                    if patched:
+                        dest = os.path.normpath(
+                            os.path.join(version_dir, 'spaces', space_name, 'space.settings'))
+                        if not os.path.isdir(os.path.dirname(dest)):
+                            os.makedirs(os.path.dirname(dest))
+                        raw = patched.encode('utf-8') if isinstance(patched, type(u'')) else patched
+                        with open(dest, 'wb') as f:
+                            f.write(raw)
+                        count_disk += 1
                 except Exception:
-                    continue
-
-                template_text = _decode_xml_bytes(template_bytes)
-                patched = _patch_space_settings_template(template_text, env_name, guid)
-                if not patched:
-                    continue
-
-                # Записуємо в res_mods/spaces/MAP/space.settings
-                dest = os.path.normpath(
-                    os.path.join(version_dir, 'spaces', space_name, 'space.settings'))
-                dest_dir = os.path.dirname(dest)
-                if not os.path.isdir(dest_dir):
-                    os.makedirs(dest_dir)
-
-                raw = patched.encode('utf-8') if isinstance(patched, type(u'')) else patched
-                with open(dest, 'wb') as f:
-                    f.write(raw)
-                count += 1
-
-            LOG.info('install_preset: installed %d spaces for preset=%s', count, preset_id)
-            _set_installed_preset(preset_id)
-            return count > 0
-
-        finally:
-            try:
-                zf.close()
+                    pass
+                finally:
+                    try: zf.close()
+                    except: pass
             except Exception:
                 pass
+
+        LOG.info('install_preset: preset=%s vfs=%d disk=%d', preset_id, count_vfs, count_disk)
+        _set_installed_preset(preset_id)
+        return count_vfs > 0 or count_disk > 0
 
     except Exception:
         LOG.error('install_preset failed\n%s', traceback.format_exc())
