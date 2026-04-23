@@ -687,6 +687,29 @@ def get_presets_for_space(space_name):
     return available
 
 
+def _delayed_change_environment(guid, delay=3.0):
+    """
+    Викликає game.onChangeEnvironments через delay секунд після входу в бій.
+    На цей момент WoT вже завантажив environments.json і всі guid-и доступні.
+    """
+    if not IN_GAME:
+        return
+    def _do_change():
+        try:
+            import game
+            fn = getattr(game, 'onChangeEnvironments', None)
+            if fn:
+                result = fn(guid)
+                LOG.info('_delayed_change: onChangeEnvironments(%s) = %s', guid, result)
+        except Exception as e:
+            LOG.info('_delayed_change: ERR: %s', e)
+    try:
+        BigWorld.callback(delay, _do_change)
+        LOG.info('_delayed_change: scheduled in %.1fs for guid=%s', delay, guid)
+    except Exception as e:
+        LOG.info('_delayed_change: callback ERR: %s', e)
+
+
 def apply_preset(space_name, preset_id):
     """
     Записує environments.xml, space.settings і environments.json для карти.
@@ -695,6 +718,13 @@ def apply_preset(space_name, preset_id):
     LOG.info('apply_preset: space=%s preset=%s', space_name, preset_id)
     ok1 = write_environments_xml(space_name, preset_id)
     ok2 = write_space_settings(space_name, preset_id)
+
+    # Плануємо відкладений live switch після завантаження карти
+    if IN_GAME and preset_id and preset_id != 'standard':
+        guid = PRESET_GUIDS.get(preset_id)
+        if guid:
+            _delayed_change_environment(guid, delay=5.0)
+
     LOG.info('apply_preset: environments_xml=%s space_settings=%s', ok1, ok2)
     return ok1
 
@@ -854,14 +884,23 @@ def _try_live_switch(preset_id):
                     except Exception as e:
                         LOG.info('_try_live_switch: delegate ERR: %s', e)
 
-            # Звичайний виклик - перший успішний = повертаємо True
-            for args in [(guid,), ([guid],), (guid, True), ({'environments': [guid]},)]:
-                try:
-                    result = fn(*args)
-                    LOG.info('_try_live_switch: fn%s = %s OK', args, repr(result)[:100])
-                    return True  # Перший успішний виклик без exception
-                except Exception as e:
-                    LOG.info('_try_live_switch: fn%s ERR: %s', args, str(e)[:100])
+            # Отримуємо список вже завантажених guid-ів
+            loaded = _get_loaded_environment_guids()
+            LOG.info('_try_live_switch: loaded envs: %s', loaded)
+            LOG.info('_try_live_switch: target guid: %s, in loaded: %s', guid, guid in loaded)
+
+            # Якщо guid не завантажений - не можемо перемкнути
+            if loaded and guid not in loaded:
+                LOG.info('_try_live_switch: guid not loaded, cannot switch live')
+                return False
+
+            # Викликаємо onChangeEnvironments з guid
+            try:
+                result = fn(guid)
+                LOG.info('_try_live_switch: fn(%s) = %s OK', guid, repr(result)[:100])
+                return True
+            except Exception as e:
+                LOG.info('_try_live_switch: fn(%s) ERR: %s', guid, str(e)[:100])
 
             # Логуємо source якщо Python
             try:
