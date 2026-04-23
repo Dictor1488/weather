@@ -4,20 +4,25 @@ DAAPI-міст між Flash (WeatherMediator.as) та weather_controller v8.
 """
 
 try:
-    # WoT 2.x — BaseDAAPIModule
-    from gui.Scaleform.framework.entities.BaseDAAPIModule import BaseDAAPIModule as AbstractLobbyView
+    # WoT 2.2.x — View (найновіший базовий клас)
+    from gui.Scaleform.framework.entities.View import View as AbstractLobbyView
     IN_GAME = True
 except ImportError:
     try:
-        # WoT 1.x — AbstractLobbyView
-        from gui.Scaleform.daapi.view.lobby.AbstractLobbyView import AbstractLobbyView
+        # WoT 2.x — BaseDAAPIModule
+        from gui.Scaleform.framework.entities.BaseDAAPIModule import BaseDAAPIModule as AbstractLobbyView
         IN_GAME = True
     except ImportError:
-        IN_GAME = False
-        class AbstractLobbyView(object):
-            def __init__(self, *args, **kw): pass
-            def _populate(self): pass
-            def _dispose(self): pass
+        try:
+            # WoT 1.x — AbstractLobbyView
+            from gui.Scaleform.daapi.view.lobby.AbstractLobbyView import AbstractLobbyView
+            IN_GAME = True
+        except ImportError:
+            IN_GAME = False
+            class AbstractLobbyView(object):
+                def __init__(self, *args, **kw): pass
+                def _populate(self): pass
+                def _dispose(self): pass
 
 from weather_controller import (
     g_controller,
