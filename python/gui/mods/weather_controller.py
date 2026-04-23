@@ -17,6 +17,7 @@ Weather controller v8.0
   де HEADER містить: magic, назви полів activeEnvironment/environment, offsets
 """
 
+import binascii
 import json
 import os
 import re
@@ -80,7 +81,7 @@ SPACES_WG_RE = re.compile(r'^environments[._]spaces_wg.*\.wotmod$', re.I)
 # Заголовок незмінний (guid завжди 35 символів у форматі XXXXXXXX.XXXXXXXX.XXXXXXXX.XXXXXXXX)
 # ---------------------------------------------------------------------------
 
-_ENVIRONMENTS_XML_HEADER = bytes.fromhex(
+_ENVIRONMENTS_XML_HEADER = binascii.unhexlify(
     '454ea162'                          # magic: EN\xa1b
     '00'                                # null
     '616374697665456e7669726f6e6d656e74'  # 'activeEnvironment'
@@ -174,12 +175,16 @@ def _find_latest_version_dir(root_name):
 # ---------------------------------------------------------------------------
 
 def _find_wotmod(pattern_re, search_dir):
-    """Шукає wotmod файл за regex в папці."""
+    """Шукає wotmod файл за regex в папці і в підпапці weather_packs/."""
     if not search_dir or not os.path.isdir(search_dir):
         return None
-    for name in _safe_listdir(search_dir):
-        if pattern_re.match(name):
-            return os.path.join(search_dir, name)
+    weather_packs = os.path.join(search_dir, 'weather_packs')
+    for folder in [weather_packs, search_dir]:
+        if not os.path.isdir(folder):
+            continue
+        for name in _safe_listdir(folder):
+            if pattern_re.match(name):
+                return os.path.join(folder, name)
     return None
 
 
