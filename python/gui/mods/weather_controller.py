@@ -77,6 +77,45 @@ PRESET_WOTMOD_RE = {
 SPACES_WG_RE = re.compile(r'^environments[._]spaces_wg.*\.wotmod$', re.I)
 
 # ---------------------------------------------------------------------------
+# Дефолтні guid-и карт (читаються з оригінального environments.xml через ResMgr)
+# ---------------------------------------------------------------------------
+
+_default_guid_cache = {}  # space_name -> guid (стандартний WoT environment)
+
+
+def _read_default_guid(space_name):
+    """
+    Читає стандартний guid environment для карти через ResMgr.
+    ResMgr читає з оригінальних pkg файлів (не з res_mods/).
+    Кешує результат.
+    """
+    if space_name in _default_guid_cache:
+        return _default_guid_cache[space_name]
+    guid = None
+    try:
+        if IN_GAME:
+            section = ResMgr.openSection(
+                'spaces/%s/environments/environments.xml' % space_name)
+            if section:
+                # activeEnvironment або environment
+                for key in ('activeEnvironment', 'environment'):
+                    val = section.readString(key, '')
+                    if val and len(val) == 35:
+                        guid = val
+                        break
+                ResMgr.purge('spaces/%s/environments/environments.xml' % space_name)
+    except Exception as e:
+        LOG.warning('_read_default_guid %s: %s', space_name, e)
+    if guid:
+        _default_guid_cache[space_name] = guid
+        LOG.info('_read_default_guid: %s -> %s', space_name, guid)
+    else:
+        LOG.warning('_read_default_guid: no guid for %s', space_name)
+    return guid
+
+
+
+# ---------------------------------------------------------------------------
 # Бінарний WoT XML для environments.xml
 # Заголовок незмінний (guid завжди 35 символів у форматі XXXXXXXX.XXXXXXXX.XXXXXXXX.XXXXXXXX)
 # ---------------------------------------------------------------------------
@@ -659,11 +698,17 @@ def _try_live_switch(preset_id):
     """
     Спроба перемкнути environment live через LSEnvironmentSwitcher._switchEnvironment.
     Повертає True якщо вдалось — тоді рестарт не потрібен.
+    Для standard — повертає до дефолтного guid карти.
     """
     if not IN_GAME:
         return False
-    guid = PRESET_GUIDS.get(preset_id)
+    if preset_id == 'standard':
+        # Для standard беремо дефолтний guid поточної карти
+        guid = _read_default_guid(_last_space_name) if _last_space_name else None
+    else:
+        guid = PRESET_GUIDS.get(preset_id)
     if not guid:
+        LOG.warning('_try_live_switch: no guid for preset=%s space=%s', preset_id, _last_space_name)
         return False
     try:
         player = BigWorld.player()
