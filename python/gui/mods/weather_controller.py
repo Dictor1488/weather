@@ -601,14 +601,86 @@ def _get_preset_for_map(space_name):
     return _weighted_choice(_cfg.get('generalWeights', {}))
 
 
+def _write_protanki_environments_json(space_name, active_preset_id):
+    """
+    Пише mods/configs/protanki/environments.json з усіма guid-ами пресетів.
+    WoT читає цей файл і завантажує ВСІ перелічені environments в простір —
+    тільки тоді _switchEnvironment може між ними перемикати live.
+
+    active_preset_id — пресет з вагою 100 (буде обраний при завантаженні).
+    """
+    try:
+        game_root = _resolve_game_root()
+        path = os.path.normpath(
+            os.path.join(game_root, 'mods', 'configs', 'protanki', 'environments.json'))
+
+        # Збираємо всі guid-и пресетів для цієї карти
+        all_guids = []
+        for preset_id in PRESET_ORDER:
+            if preset_id == 'standard':
+                continue
+            guid = PRESET_GUIDS.get(preset_id)
+            if guid:
+                all_guids.append(guid)
+
+        if not all_guids:
+            return False
+
+        # Визначаємо активний guid
+        if active_preset_id and active_preset_id != 'standard':
+            active_guid = PRESET_GUIDS.get(active_preset_id)
+        else:
+            active_guid = _read_default_guid(space_name) if space_name else None
+
+        # Якщо стандарт — додаємо його guid теж
+        if active_guid and active_guid not in all_guids:
+            all_guids.append(active_guid)
+
+        # Ваги: активний = 100, решта = 11 (завантажуються але не обрані)
+        common_weights = {'default': 0}
+        for guid in all_guids:
+            common_weights[guid] = 100 if guid == active_guid else 11
+
+        payload = {
+            'enabled': True,
+            'environments': all_guids,
+            'labels': {
+                '15755E11.4090266B.594778B6.B233C12C': u'\u041d\u0456\u0447',
+                '56BA3213.40FFB1DF.125FBCAD.173E8347': u'\u0425\u043c\u0430\u0440\u043d\u043e',
+                '6DEE1EBB.44F63FCC.AACF6185.7FBBC34E': u'\u0417\u0430\u0445\u0456\u0434',
+                'BF040BCB.4BE1D04F.7D484589.135E881B': u'\u041f\u043e\u043b\u0443\u0434\u0435\u043d\u044c',
+                'default': u'\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442',
+            },
+            'randomizer': {
+                'advanced': {},
+                'common': common_weights,
+            },
+            'toogleKeyset': [-1, 88],
+        }
+
+        folder = os.path.dirname(path)
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+        with open(path, 'w') as f:
+            json.dump(payload, f, indent=4, ensure_ascii=False)
+        LOG.info('_write_protanki_environments_json: %s guids=%s active=%s',
+                 space_name, all_guids, active_guid)
+        return True
+    except Exception:
+        LOG.error('_write_protanki_environments_json failed\n%s', traceback.format_exc())
+        return False
+
+
 def apply_preset(space_name, preset_id):
     """
-    Записує environments.xml і space.settings для карти.
-    Це має бути викликано ДО того як WoT завантажить простір.
+    Записує environments.xml, space.settings і environments.json для карти.
+    environments.json завантажує ВСІ пресети в простір — для live перемикання.
     """
     LOG.info('apply_preset: space=%s preset=%s', space_name, preset_id)
     ok1 = write_environments_xml(space_name, preset_id)
     ok2 = write_space_settings(space_name, preset_id)
+    # Пишемо environments.json з усіма guid-ами щоб WoT завантажив їх всі
+    _write_protanki_environments_json(space_name, preset_id)
     LOG.info('apply_preset: environments_xml=%s space_settings=%s', ok1, ok2)
     return ok1
 
