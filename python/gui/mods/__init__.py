@@ -289,6 +289,37 @@ def _install_battle_space_hook():
         else:
             log.warning('Avatar.PlayerAvatar.onEnterWorld not found')
 
+        # ----------------------------------------------------------------
+        # Хук onLeaveWorld: КЛЮЧОВИЙ для наступного бою
+        # Skybox Randomizer використовує саме цей момент:
+        # після виходу з бою — записуємо space.settings для НАСТУПНОГО
+        # входу. Файл буде на місці ДО того як движок читає space.settings.
+        # ----------------------------------------------------------------
+        if hasattr(cls, 'onLeaveWorld'):
+            orig_lw = cls.onLeaveWorld
+
+            def make_lw_wrapper(orig):
+                def wrapped_lw(self, *a, **kw):
+                    try:
+                        space_name = _get_space_name_from_avatar(self)
+                        _log().info('onLeaveWorld hook: space=%s -> pre-patching ALL maps for next battle', space_name)
+                        # Патчимо ВСІ карти одразу — бо наступний бій може бути на будь-якій карті
+                        from weather_controller import write_environments_json_for_preset, get_current_override_preset, _apply_resmgr_patch_all
+                        preset_id = get_current_override_preset()
+                        write_environments_json_for_preset(preset_id, space_name)
+                        _apply_resmgr_patch_all(preset_id)
+                        _log().info('onLeaveWorld: all maps patched for preset=%s', preset_id)
+                    except Exception:
+                        _log().exception('onLeaveWorld hook failed')
+                    return orig(self, *a, **kw)
+                return wrapped_lw
+
+            cls.onLeaveWorld = make_lw_wrapper(orig_lw)
+            _BATTLE_SPACE_HOOKS.append((cls, 'onLeaveWorld', orig_lw))
+            log.info('Installed POST-BATTLE hook: Avatar.PlayerAvatar.onLeaveWorld')
+        else:
+            log.warning('Avatar.PlayerAvatar.onLeaveWorld not found')
+
     except Exception:
         log.exception('Failed to install Avatar hook')
 
