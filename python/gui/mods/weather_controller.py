@@ -267,29 +267,50 @@ def _get_spaces_wg_package_path():
     _spaces_wg_package_path = _find_spaces_wg_package_path()
     return _spaces_wg_package_path
 
+def _get_weather_packs_dir():
+    """
+    Папка де лежать пресет-wotmod файли.
+    Skybox Randomizer і протанки кладуть пресети ПОРЯД з 2.2.1.0/
+    а не всередині. Наприклад: mods/weather_packs/
+    Також перевіряємо стандартне розміщення всередині mods/2.2.1.0/
+    """
+    game_root = _resolve_game_root()
+    # Пріоритет 1: mods/weather_packs/ (окрема папка поряд з версією)
+    packs_dir = os.path.normpath(os.path.join(game_root, 'mods', 'weather_packs'))
+    if os.path.isdir(packs_dir):
+        LOG.info('weather_packs dir: %s', packs_dir)
+        return packs_dir
+    # Пріоритет 2: стандартний mods/2.2.1.0/
+    version_dir = _find_latest_version_dir('mods')
+    if version_dir:
+        LOG.info('weather_packs fallback to mods version dir: %s', version_dir)
+        return version_dir
+    return None
+
+
 def scan_environment_packages():
     packages = []
-    version_dir = _find_latest_version_dir('mods')
-    if not version_dir:
+    packs_dir = _get_weather_packs_dir()
+    if not packs_dir:
         return packages
     seen = set()
-    for folder in [version_dir, os.path.join(version_dir, 'environments')]:
-        if not os.path.isdir(folder):
+    for name in _safe_listdir(packs_dir):
+        lower = name.lower()
+        if not lower.endswith('.wotmod'):
             continue
-        for name in _safe_listdir(folder):
-            lower = name.lower()
-            if not lower.endswith('.wotmod') or not (lower.startswith('environments.') or lower.startswith('environments_')):
-                continue
-            preset_id = _detect_preset_from_filename(name)
-            if not preset_id:
-                continue
-            full_path = os.path.normpath(os.path.join(folder, name))
-            if full_path in seen:
-                continue
-            seen.add(full_path)
-            packages.append({'preset_id': preset_id, 'path': full_path, 'name': name})
-    LOG.info('scan_environment_packages: found=%s', len(packages))
+        if not (lower.startswith('environments.') or lower.startswith('environments_')):
+            continue
+        preset_id = _detect_preset_from_filename(name)
+        if not preset_id:
+            continue
+        full_path = os.path.normpath(os.path.join(packs_dir, name))
+        if full_path in seen:
+            continue
+        seen.add(full_path)
+        packages.append({'preset_id': preset_id, 'path': full_path, 'name': name})
+    LOG.info('scan_environment_packages: found=%s in %s', len(packages), packs_dir)
     return packages
+
 
 def _read_package_registry_entry(package_info):
     result = {
@@ -413,61 +434,157 @@ def get_preset_guid(preset_id, space_name=None):
 # Конфіг
 # ---------------------------------------------------------------------------
 
-def _apply_resmgr_patch_for_space(space_name, env_name, preset_guid):
-    """Патчить space.settings в VFS через ResMgr.writeString + section.save."""
+def _get_installed_preset():
+    """Читає який пресет зараз встановлений в res_mods/ (з маркер-файлу)."""
     try:
-        vfs_path = u'spaces/%s/space.settings' % space_name
-        section = ResMgr.openSection(vfs_path)
-        if section is None:
-            LOG.warning('resmgr_patch: openSection None for %s', vfs_path)
+        version_dir = _find_latest_version_dir('res_mods')
+        if not version_dir:
+            return None
+        marker = os.path.join(version_dir, 'spaces', '.weather_preset')
+        if os.path.isfile(marker):
+            with open(marker, 'r') as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return None
+
+
+def _set_installed_preset(preset_id):
+    """Зберігає маркер поточного встановленого пресету."""
+    try:
+        version_dir = _find_latest_version_dir('res_mods')
+        if not version_dir:
+            return
+        spaces_dir = os.path.join(version_dir, 'spaces')
+        if not os.path.isdir(spaces_dir):
+            os.makedirs(spaces_dir)
+        marker = os.path.join(spaces_dir, '.weather_preset')
+        with open(marker, 'w') as f:
+            f.write(preset_id or 'standard')
+    except Exception:
+        pass
+
+
+def _uninstall_weather_spaces():
+    """Видаляє spaces/ папку з res_mods/ (скидає до стандарту)."""
+    try:
+        version_dir = _find_latest_version_dir('res_mods')
+        if not version_dir:
+            return
+        spaces_dir = os.path.join(version_dir, 'spaces')
+        if os.path.isdir(spaces_dir):
+            import shutil
+            shutil.rmtree(spaces_dir)
+            LOG.info('uninstall_weather: removed res_mods/spaces/')
+    except Exception:
+        LOG.error('uninstall_weather failed\n%s', traceback.format_exc())
+
+
+def _install_preset_to_resmods(preset_id):
+    """
+    Розпаковує space.settings з spaces_wg.wotmod в res_mods/spaces/
+    із підставленими <environment> та <environmentOverride> тегами.
+
+    Це той самий механізм що використовує Skybox Randomizer:
+    розпакований файл в res_mods/ має пріоритет над wotmod.
+    Але ТІЛЬКИ якщо виклик відбувається ДО того як WoT кешує VFS.
+    Тому викликаємо при старті і після кожного бою.
+    """
+    import shutil
+
+    try:
+        version_dir = _find_latest_version_dir('res_mods')
+        if not version_dir:
+            LOG.warning('install_preset: no res_mods version dir')
             return False
 
-        if env_name:
-            section.writeString('environment', env_name)
-        if preset_guid:
-            section.writeString('environmentOverride', preset_guid)
+        # Спочатку видаляємо старі spaces/
+        spaces_dir = os.path.join(version_dir, 'spaces')
+        if os.path.isdir(spaces_dir):
+            shutil.rmtree(spaces_dir)
 
-        # Зберігаємо в res_mods/spaces/
-        # Спробуємо зберегти в VFS шлях - це може оновити кеш VFS
-        # і рушій прочитає нові дані при завантаженні простору
-        result_vfs = section.save(vfs_path)
-        LOG.info('resmgr_patch: %s vfs_save=%s', space_name, result_vfs)
+        if not preset_id or preset_id == 'standard':
+            LOG.info('install_preset: standard - spaces/ removed')
+            _set_installed_preset('standard')
+            return True
 
-        # Також зберігаємо в res_mods як запасний варіант
-        version_dir = _find_latest_version_dir('res_mods')
-        if version_dir:
-            save_path = os.path.normpath(
-                os.path.join(version_dir, 'spaces', space_name, 'space.settings'))
-            _ensure_dir(save_path)
-            result = section.save(save_path)
-            LOG.info('resmgr_patch: %s resmods_save=%s', space_name, result)
+        registry = get_environment_registry()
+        preset_data = registry.get(preset_id)
+        if not preset_data:
+            LOG.warning('install_preset: preset not in registry: %s', preset_id)
+            return False
 
-        return True
+        # Відкриваємо spaces_wg.wotmod як шаблон
+        spaces_wg_path = _get_spaces_wg_package_path()
+        if not spaces_wg_path:
+            LOG.warning('install_preset: spaces_wg package not found')
+            return False
+
+        count = 0
+        try:
+            zf = zipfile.ZipFile(spaces_wg_path, 'r')
+        except Exception as e:
+            LOG.error('install_preset: cannot open spaces_wg: %s', e)
+            return False
+
+        try:
+            spaces_data = preset_data.get('spaces', {})
+            for space_name, sd in spaces_data.items():
+                env_name = sd.get('env_name')
+                guid = sd.get('guid')
+                if not env_name or not guid:
+                    continue
+
+                # Шаблон з spaces_wg
+                member = 'res/spaces/%s/space.settings' % space_name
+                try:
+                    template_bytes = zf.read(member)
+                except Exception:
+                    continue
+
+                template_text = _decode_xml_bytes(template_bytes)
+                patched = _patch_space_settings_template(template_text, env_name, guid)
+                if not patched:
+                    continue
+
+                # Записуємо в res_mods/spaces/MAP/space.settings
+                dest = os.path.normpath(
+                    os.path.join(version_dir, 'spaces', space_name, 'space.settings'))
+                dest_dir = os.path.dirname(dest)
+                if not os.path.isdir(dest_dir):
+                    os.makedirs(dest_dir)
+
+                raw = patched.encode('utf-8') if isinstance(patched, type(u'')) else patched
+                with open(dest, 'wb') as f:
+                    f.write(raw)
+                count += 1
+
+            LOG.info('install_preset: installed %d spaces for preset=%s', count, preset_id)
+            _set_installed_preset(preset_id)
+            return count > 0
+
+        finally:
+            try:
+                zf.close()
+            except Exception:
+                pass
+
     except Exception:
-        LOG.error('resmgr_patch failed\n%s', traceback.format_exc())
+        LOG.error('install_preset failed\n%s', traceback.format_exc())
         return False
 
 
+def _apply_resmgr_patch_for_space(space_name, env_name, preset_guid):
+    """Залишено для сумісності. Використовує новий механізм."""
+    preset_id = _current_override_preset or 'standard'
+    return _install_preset_to_resmods(preset_id)
+
+
 def _apply_resmgr_patch_all(preset_id):
-    """Патчить space.settings для всіх карт через ResMgr."""
+    """Встановлює пресет для всіх карт через розпаковку в res_mods/."""
     if not IN_GAME:
         return
-    registry = get_environment_registry()
-    if not preset_id or preset_id == 'standard':
-        LOG.info('resmgr_patch_all: standard, skip')
-        return
-    preset_data = registry.get(preset_id)
-    if not preset_data:
-        LOG.warning('resmgr_patch_all: preset not in registry: %s', preset_id)
-        return
-    count = 0
-    for space_name, sd in preset_data.get('spaces', {}).items():
-        env_name = sd.get('env_name')
-        guid = sd.get('guid')
-        if env_name and guid:
-            if _apply_resmgr_patch_for_space(space_name, env_name, guid):
-                count += 1
-    LOG.info('resmgr_patch_all: done preset=%s patched=%d', preset_id, count)
+    _install_preset_to_resmods(preset_id)
 
 
 def load_config():
@@ -495,13 +612,18 @@ def load_config():
     load_environment_registry(force=True)
     logger.info('config loaded from %s, preset=%s', CONFIG_PATH, saved_preset)
 
-    # Патчимо space.settings через ResMgr VFS при старті
-    # writeString змінює значення в пам'яті VFS, section.save(path) зберігає
+    # Встановлюємо пресет в res_mods/spaces/ при старті гри
+    # Файли мають бути там ДО того як WoT кешує VFS
     if IN_GAME:
         try:
-            _apply_resmgr_patch_all(saved_preset)
+            installed = _get_installed_preset()
+            if installed != saved_preset:
+                logger.info('load_config: installing preset=%s (was=%s)', saved_preset, installed)
+                _install_preset_to_resmods(saved_preset)
+            else:
+                logger.info('load_config: preset=%s already installed', saved_preset)
         except Exception as e:
-            logger.warning('ResMgr patch ERR: %s', e)
+            logger.warning('install_preset ERR: %s', e)
 
     return _cfg
 
@@ -1075,74 +1197,20 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
 
 def apply_environment_via_packages(space_name, preset_id):
     """
-    Застосовує пресет для вказаної карти.
-
-    При заході в бій:
-      - пише environments.json (для randomizer системи WoT)
-      - пише space.settings в res_mods (запасний варіант)
-      - основне застосування відбувається через патч wotmod при збірці пресету
-
-    В бою (F12):
-      - намагається live-застосування через LSEnvironmentSwitcher / ArenaType
-      - логує діагностику для знаходження правильного API
+    Застосовує пресет.
+    Розпаковує space.settings в res_mods/spaces/ — як Skybox Randomizer.
+    Зміни вступають в силу при НАСТУПНОМУ вході в бій.
     """
     try:
         LOG.info('apply_env: space=%s preset=%s', space_name, preset_id)
-        if not space_name:
-            return False
 
         # Завжди пишемо environments.json
         write_environments_json_for_preset(preset_id, space_name)
 
-        if not preset_id or preset_id == 'standard':
-            LOG.info('apply_env: standard preset — environments.json cleared')
-            return True
-
-        actual_preset_id, resolved = resolve_environment_with_fallback(space_name, preset_id)
-        if not resolved:
-            LOG.warning('apply_env: no resolved environment for space=%s preset=%s',
-                        space_name, preset_id)
-            return False
-
-        env_name    = resolved.get('env_name')
-        preset_guid = resolved.get('guid')
-        LOG.info('apply_env: resolved preset=%s env_name=%s guid=%s',
-                 actual_preset_id, env_name, preset_guid)
-
-        # Пишемо space.settings в res_mods (запасний)
-        templates = _get_spaces_wg_templates(space_name)
-        space_settings_path = find_space_settings_path(space_name)
-        if space_settings_path and templates.get('space_settings'):
-            settings_content = _patch_space_settings_template(
-                templates.get('space_settings'), env_name, preset_guid)
-            if settings_content:
-                ok = _write_text_file(space_settings_path, settings_content)
-                LOG.info('apply_env: res_mods space.settings write=%s path=%s',
-                         ok, space_settings_path)
-
-        # Live-зміна (тільки якщо реально в бою)
-        in_battle = False
-        if IN_GAME:
-            try:
-                player = BigWorld.player()
-                in_battle = player is not None and getattr(player, 'arena', None) is not None
-            except Exception:
-                pass
-
-        if in_battle:
-            live = _try_live_apply(space_name, actual_preset_id, env_name, preset_guid)
-            LOG.info('apply_env: live apply = %s', live)
-            if not live:
-                try:
-                    from gui import SystemMessages
-                    SystemMessages.pushMessage(
-                        u'[Weather] %s — застосується при наступному заході в бій' %
-                        PRESET_LABELS.get(preset_id, preset_id),
-                        SystemMessages.SM_TYPE.Information)
-                except Exception:
-                    pass
-
-        return True
+        # Встановлюємо пресет (розпаковуємо space.settings в res_mods/)
+        ok = _install_preset_to_resmods(preset_id)
+        LOG.info('apply_env: install_preset=%s', ok)
+        return ok
 
     except Exception:
         LOG.error('apply_environment_via_packages failed\n%s', traceback.format_exc())
