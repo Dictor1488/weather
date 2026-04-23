@@ -249,7 +249,13 @@ def _find_spaces_wg_package_path():
     version_dir = _find_latest_version_dir('mods')
     if not version_dir:
         return None
-    for folder in [os.path.join(version_dir, 'environments'), version_dir]:
+    search_dirs = [
+        os.path.join(version_dir, 'environments'),
+        version_dir,
+        os.path.join(version_dir, 'weather_packs'),
+        os.path.join(os.path.dirname(version_dir), 'weather_packs'),
+    ]
+    for folder in search_dirs:
         if not os.path.isdir(folder):
             continue
         for name in _safe_listdir(folder):
