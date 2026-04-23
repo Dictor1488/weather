@@ -811,6 +811,14 @@ def _try_live_switch(preset_id):
 
         real_inst._switchEnvironment(guid)
         LOG.info('live_switch: _switchEnvironment(%s) OK', guid)
+
+        # Діагностика: шукаємо прямий BigWorld API для environment
+        try:
+            bw_env_attrs = [a for a in dir(BigWorld) if 'nviron' in a or 'nvironment' in a.lower()]
+            LOG.info('live_switch: BigWorld environ attrs: %s', bw_env_attrs)
+        except Exception:
+            pass
+
         return True
     except Exception as e:
         LOG.info('live_switch: failed: %s', e)
