@@ -249,11 +249,15 @@ def _find_spaces_wg_package_path():
     version_dir = _find_latest_version_dir('mods')
     if not version_dir:
         return None
+    game_root = _resolve_game_root()
+    res_mods_dir = _find_latest_version_dir('res_mods')
     search_dirs = [
         os.path.join(version_dir, 'environments'),
         version_dir,
         os.path.join(version_dir, 'weather_packs'),
         os.path.join(os.path.dirname(version_dir), 'weather_packs'),
+        # res_mods/ - WoT не завантажує wotmod звідти але ми можемо читати
+        res_mods_dir or '',
     ]
     for folder in search_dirs:
         if not os.path.isdir(folder):
@@ -821,11 +825,9 @@ def find_space_settings_path(space_name):
 
 def _find_environments_json_path():
     try:
-        version_dir = _find_latest_version_dir('res_mods')
-        if not version_dir:
-            return None
+        game_root = _resolve_game_root()
         return os.path.normpath(
-            os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json'))
+            os.path.join(game_root, 'mods', 'configs', 'protanki', 'environments.json'))
     except Exception:
         LOG.error('_find_environments_json_path failed\n%s', traceback.format_exc())
         return None
@@ -833,26 +835,14 @@ def _find_environments_json_path():
 
 def _get_all_environments_json_paths():
     """
-    Повертає всі шляхи для запису environments.json.
-    Правильний шлях: mods/configs/protanki/environments.json
-    (поряд з папкою версії, не всередині неї)
+    Єдиний правильний шлях: mods/configs/protanki/environments.json
+    Саме звідти WoT читає environments конфігурацію.
     """
-    paths = []
-    try:
-        game_root = _resolve_game_root()
-        # ПРАВИЛЬНИЙ шлях - поряд з 2.2.1.0/, не всередині
-        correct_path = os.path.normpath(
-            os.path.join(game_root, 'mods', 'configs', 'protanki', 'environments.json'))
-        paths.append(correct_path)
-        # Також res_mods як запасний
-        version_dir = _find_latest_version_dir('res_mods')
-        if version_dir:
-            paths.append(os.path.normpath(
-                os.path.join(version_dir, 'scripts', 'client', 'mods', 'environments.json')))
-        LOG.info('environments.json paths: %s', paths)
-    except Exception as e:
-        LOG.warning('_get_all_environments_json_paths ERR: %s', e)
-    return paths
+    path = _find_environments_json_path()
+    if path:
+        LOG.info('environments.json path: %s', path)
+        return [path]
+    return []
 
 def _guid_to_dot(guid):
     return guid.replace('-', '.')
@@ -930,10 +920,35 @@ def write_environments_json_for_preset(preset_id, space_name=None):
                 # (дозволяє _switchEnvironment перемикати між ними live)
                 common_weights[guid] = 11
 
+        # Стандартні labels з усіх відомих environments (як у протанків)
+        standard_labels = {
+            u'06281693.441FF75B.375216BB.E411A2A8': u'Ясно',
+            u'15F47933.4E6E5BE8.E2EB478F.89029B8C': u'Ранок',
+            u'1A7E3138.41EF442E.1A57B58A.D44182DC': u'Гроза',
+            u'223750A4.40C2BD06.AF87E783.D7B4534F': u'День',
+            u'34914F06.48667C11.906E1DB7.E74B4B4E': u'Ніч',
+            u'45EE16E1.4B7703A1.061C5EA1.F9F06CD2': u'Стандарт',
+            u'48453FF2.4D2F249B.BB601080.E8EE14A5': u'Після дощу',
+            u'4A802317.46F231A6.5489B3A3.EAB3DB0D': u'Ранок',
+            u'4DC1F509.48AB67BE.77C7219C.38F1DFD3': u'Гроза',
+            u'5A4748DE.45EF1A55.B8625195.26203548': u'Ясно',
+            u'617A112A.4CF5634D.79C99BA0.6AA0248B': u'Стандарт',
+            u'646C5C8A.411C3A18.DDB87AB2.3BB159FD': u'Сонячно',
+            u'7A58F739.49257772.355A8199.286DCDF3': u'Сонячно',
+            u'9334392F.482EB7A0.0185DBAB.98AC941E': u'День',
+            u'E9DF07E5.4BFED5C9.0D36C29A.66B00300': u'Сонячно',
+            u'F5C19677.469BACEA.D30E93A4.B6111A7A': u'Ясно',
+            u'F5C19677.469BACEA.D30E93A4.B6112A7A': u'Вечір',
+            u'FC440602.48F17E07.35942D91.256F8018': u'Після дощу',
+            u'default': u'Стандарт',
+        }
+        # Додаємо наші labels поверх стандартних
+        standard_labels.update(labels)
+
         payload = {
             'enabled':    True,
             'environments': all_guids,
-            'labels':     labels,
+            'labels':     standard_labels,
             'randomizer': {'advanced': {}, 'common': common_weights},
             'toogleKeyset': [-1, 88],
         }
@@ -1226,21 +1241,14 @@ def _try_live_apply(space_name, preset_id, env_name, preset_guid):
 
 def apply_environment_via_packages(space_name, preset_id):
     """
-    Застосовує пресет.
-    Розпаковує space.settings в res_mods/spaces/ — як Skybox Randomizer.
-    Зміни вступають в силу при НАСТУПНОМУ вході в бій.
+    Застосовує пресет через environments.json в mods/configs/protanki/.
+    WoT читає цей файл і завантажує відповідні environments.
     """
     try:
         LOG.info('apply_env: space=%s preset=%s', space_name, preset_id)
-
-        # Завжди пишемо environments.json
-        write_environments_json_for_preset(preset_id, space_name)
-
-        # Встановлюємо пресет (розпаковуємо space.settings в res_mods/)
-        ok = _install_preset_to_resmods(preset_id)
-        LOG.info('apply_env: install_preset=%s', ok)
+        ok = write_environments_json_for_preset(preset_id, space_name)
+        LOG.info('apply_env: write_json=%s', ok)
         return ok
-
     except Exception:
         LOG.error('apply_environment_via_packages failed\n%s', traceback.format_exc())
         return False
