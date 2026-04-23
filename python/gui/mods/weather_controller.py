@@ -723,12 +723,6 @@ def apply_preset(space_name, preset_id):
     ok1 = write_environments_xml(space_name, preset_id)
     ok2 = write_space_settings(space_name, preset_id)
 
-    # Плануємо відкладений live switch після завантаження карти
-    if IN_GAME and preset_id and preset_id != 'standard':
-        guid = PRESET_GUIDS.get(preset_id)
-        if guid:
-            _delayed_change_environment(guid, delay=5.0)
-
     LOG.info('apply_preset: environments_xml=%s space_settings=%s', ok1, ok2)
     return ok1
 
@@ -842,91 +836,7 @@ def _get_loaded_environment_guids():
 
 
 def _try_live_switch(preset_id):
-    """
-    Спроба live перемикання через:
-    1. game.onChangeEnvironments
-    2. visual_script_client.arena_blocks.SetEnvironment
-    3. arena.gameSpace
-    """
-    if not IN_GAME:
-        return False
-    if preset_id == 'standard':
-        guid = _read_default_guid(_last_space_name) if _last_space_name else None
-    else:
-        guid = PRESET_GUIDS.get(preset_id)
-    if not guid:
-        return False
-
-    # game.onChangeEnvironments — розбираємо bytecode щоб зрозуміти що вона робить
-    try:
-        import game
-        fn = getattr(game, 'onChangeEnvironments', None)
-        if fn:
-            # Розбираємо bytecode функції
-            try:
-                code = fn.func_code
-                LOG.info('_try_live_switch: co_consts=%s', code.co_consts)
-                LOG.info('_try_live_switch: co_names=%s', code.co_names)
-                LOG.info('_try_live_switch: co_varnames=%s', code.co_varnames)
-                # Глобальні змінні які використовує функція
-                used_globals = {k: repr(v)[:80] for k, v in fn.func_globals.items()
-                                if k in code.co_names}
-                LOG.info('_try_live_switch: used_globals=%s', used_globals)
-            except Exception as e:
-                LOG.info('_try_live_switch: bytecode ERR: %s', e)
-            # Все одно викликаємо
-            loaded = _get_loaded_environment_guids()
-            if loaded and guid not in loaded:
-                return False
-            fn(guid)
-            LOG.info('_try_live_switch: onChangeEnvironments(%s) OK', guid)
-            return True
-    except Exception as e:
-        LOG.info('_try_live_switch: game.onChangeEnvironments ERR: %s', e)
-
-    # Спроба 2: visual_script_client.arena_blocks.SetEnvironment
-    try:
-        import visual_script_client.arena_blocks as ab
-        se = getattr(ab, 'SetEnvironment', None)
-        if se:
-            LOG.info('_try_live_switch: SetEnvironment class: %s, attrs: %s', se, dir(se))
-            # Спробуємо інстанціювати або викликати
-            try:
-                import inspect
-                LOG.info('_try_live_switch: SetEnvironment signature: %s',
-                         inspect.getargspec(se.__init__))
-            except Exception:
-                pass
-    except Exception as e:
-        LOG.info('_try_live_switch: arena_blocks ERR: %s', e)
-
-    # Спроба 3: arena.gameSpace
-    try:
-        player = BigWorld.player()
-        if player:
-            arena = getattr(player, 'arena', None)
-            if arena:
-                game_space = getattr(arena, 'gameSpace', None)
-                if game_space is not None:
-                    LOG.info('_try_live_switch: arena.gameSpace type: %s, attrs: %s',
-                             type(game_space).__name__, sorted(dir(game_space)))
-                    # Шукаємо environment методи
-                    env_methods = [a for a in dir(game_space)
-                                   if 'nviron' in a.lower() or 'preset' in a.lower() or 'weather' in a.lower()]
-                    LOG.info('_try_live_switch: gameSpace env methods: %s', env_methods)
-                    for m in env_methods:
-                        fn = getattr(game_space, m, None)
-                        if callable(fn):
-                            for args in [(guid,), (guid, True)]:
-                                try:
-                                    fn(*args)
-                                    LOG.info('_try_live_switch: gameSpace.%s%s OK', m, args)
-                                    return True
-                                except Exception as e:
-                                    LOG.info('_try_live_switch: gameSpace.%s%s ERR: %s', m, args, str(e)[:80])
-    except Exception as e:
-        LOG.info('_try_live_switch: gameSpace ERR: %s', e)
-
+    """Live перемикання недоступне через Python API в WoT."""
     return False
 
 
