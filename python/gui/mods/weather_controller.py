@@ -632,7 +632,11 @@ def _write_protanki_environments_json(space_name, active_preset_id):
         else:
             active_guid = _read_default_guid(space_name) if space_name else None
 
-        # Якщо стандарт — додаємо його guid теж
+        # Завжди додаємо дефолтний guid карти (standard preset)
+        default_guid = _read_default_guid(space_name) if space_name else None
+        if default_guid and default_guid not in all_guids:
+            all_guids.append(default_guid)
+            LOG.info('_write_protanki_env_json: added default guid %s', default_guid)
         if active_guid and active_guid not in all_guids:
             all_guids.append(active_guid)
 
@@ -853,64 +857,20 @@ def _try_live_switch(preset_id):
     if not guid:
         return False
 
-    # Спроба 1: game.onChangeEnvironments
+    # game.onChangeEnvironments — основний механізм live перемикання
     try:
         import game
         fn = getattr(game, 'onChangeEnvironments', None)
         if fn:
-            # Логуємо тип об'єкта - чи це Event/Signal чи звичайна функція
-            LOG.info('_try_live_switch: onChangeEnvironments type=%s, repr=%s',
-                     type(fn).__name__, repr(fn)[:200])
-            LOG.info('_try_live_switch: onChangeEnvironments dir=%s', dir(fn))
-
-            # Якщо це Event (має __call__ і підписників)
-            if hasattr(fn, 'fire'):
-                try:
-                    fn.fire(guid)
-                    LOG.info('_try_live_switch: fire(%s) OK', guid)
-                    return True
-                except Exception as e:
-                    LOG.info('_try_live_switch: fire ERR: %s', e)
-
-            # Якщо це список callbacks (WoT Event pattern)
-            if hasattr(fn, '__len__') or hasattr(fn, '_delegates'):
-                delegates = getattr(fn, '_delegates', [])
-                LOG.info('_try_live_switch: delegates: %s', delegates)
-                for d in delegates:
-                    try:
-                        d(guid)
-                        LOG.info('_try_live_switch: delegate(%s) OK', guid)
-                        return True
-                    except Exception as e:
-                        LOG.info('_try_live_switch: delegate ERR: %s', e)
-
-            # Отримуємо список вже завантажених guid-ів
             loaded = _get_loaded_environment_guids()
-            LOG.info('_try_live_switch: loaded envs: %s', loaded)
-            LOG.info('_try_live_switch: target guid: %s, in loaded: %s', guid, guid in loaded)
-
-            # Якщо guid не завантажений - не можемо перемкнути
             if loaded and guid not in loaded:
-                LOG.info('_try_live_switch: guid not loaded, cannot switch live')
+                LOG.info('_try_live_switch: guid %s not loaded', guid)
                 return False
-
-            # Викликаємо onChangeEnvironments з guid
-            try:
-                result = fn(guid)
-                LOG.info('_try_live_switch: fn(%s) = %s OK', guid, repr(result)[:100])
-                return True
-            except Exception as e:
-                LOG.info('_try_live_switch: fn(%s) ERR: %s', guid, str(e)[:100])
-
-            # Логуємо source якщо Python
-            try:
-                import inspect
-                src = inspect.getsource(fn)
-                LOG.info('_try_live_switch: source: %s', src[:500])
-            except Exception as e:
-                LOG.info('_try_live_switch: getsource ERR: %s', e)
+            result = fn(guid)
+            LOG.info('_try_live_switch: onChangeEnvironments(%s) OK', guid)
+            return True
     except Exception as e:
-        LOG.info('_try_live_switch: game module ERR: %s', e)
+        LOG.info('_try_live_switch: game.onChangeEnvironments ERR: %s', e)
 
     # Спроба 2: visual_script_client.arena_blocks.SetEnvironment
     try:
