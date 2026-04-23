@@ -673,6 +673,20 @@ def _write_protanki_environments_json(space_name, active_preset_id):
         return False
 
 
+def get_presets_for_space(space_name):
+    """Повертає список пресетів які мають environment для цієї карти."""
+    available = ['standard']  # standard завжди доступний
+    for preset_id, pattern in PRESET_WOTMOD_RE.items():
+        mods_dir = _get_mods_dir()
+        wotmod = _find_wotmod(pattern, mods_dir) if mods_dir else None
+        if not wotmod:
+            continue
+        spaces = _get_spaces_from_wotmod(wotmod)
+        if space_name in spaces:
+            available.append(preset_id)
+    return available
+
+
 def apply_preset(space_name, preset_id):
     """
     Записує environments.xml, space.settings і environments.json для карти.
@@ -711,10 +725,18 @@ def on_space_entered(space_name):
     LOG.info('on_space_entered: space=%s current_preset=%s', space_name, _current_preset)
 
     # Якщо пресет не встановлений — вибираємо за вагами
-    # Якщо встановлений (включно з 'standard') — поважаємо вибір гравця
     if not _current_preset:
         _current_preset = _get_preset_for_map(space_name) or 'standard'
         save_config()
+
+    # Перевіряємо чи поточний пресет підтримує цю карту
+    supported = get_presets_for_space(space_name)
+    if _current_preset not in supported:
+        # Вибираємо перший доступний (крім standard якщо є інші)
+        fallback = next((p for p in supported if p != 'standard'), 'standard')
+        LOG.info('on_space_entered: preset %s not supported for %s, fallback to %s',
+                 _current_preset, space_name, fallback)
+        return apply_preset(space_name, fallback)
 
     return apply_preset(space_name, _current_preset)
 
