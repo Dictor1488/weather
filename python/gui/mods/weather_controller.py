@@ -857,16 +857,28 @@ def _try_live_switch(preset_id):
     if not guid:
         return False
 
-    # game.onChangeEnvironments — основний механізм live перемикання
+    # game.onChangeEnvironments — розбираємо bytecode щоб зрозуміти що вона робить
     try:
         import game
         fn = getattr(game, 'onChangeEnvironments', None)
         if fn:
+            # Розбираємо bytecode функції
+            try:
+                code = fn.func_code
+                LOG.info('_try_live_switch: co_consts=%s', code.co_consts)
+                LOG.info('_try_live_switch: co_names=%s', code.co_names)
+                LOG.info('_try_live_switch: co_varnames=%s', code.co_varnames)
+                # Глобальні змінні які використовує функція
+                used_globals = {k: repr(v)[:80] for k, v in fn.func_globals.items()
+                                if k in code.co_names}
+                LOG.info('_try_live_switch: used_globals=%s', used_globals)
+            except Exception as e:
+                LOG.info('_try_live_switch: bytecode ERR: %s', e)
+            # Все одно викликаємо
             loaded = _get_loaded_environment_guids()
             if loaded and guid not in loaded:
-                LOG.info('_try_live_switch: guid %s not loaded', guid)
                 return False
-            result = fn(guid)
+            fn(guid)
             LOG.info('_try_live_switch: onChangeEnvironments(%s) OK', guid)
             return True
     except Exception as e:
