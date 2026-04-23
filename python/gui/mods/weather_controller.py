@@ -828,22 +828,48 @@ def _try_live_switch(preset_id):
         import game
         fn = getattr(game, 'onChangeEnvironments', None)
         if fn:
-            LOG.info('_try_live_switch: game.onChangeEnvironments found, calling with %s', guid)
-            # Пробуємо різні сигнатури
-            for args in [(guid,), ([guid],), ({'guid': guid},), (guid, True)]:
+            # Логуємо тип об'єкта - чи це Event/Signal чи звичайна функція
+            LOG.info('_try_live_switch: onChangeEnvironments type=%s, repr=%s',
+                     type(fn).__name__, repr(fn)[:200])
+            LOG.info('_try_live_switch: onChangeEnvironments dir=%s', dir(fn))
+
+            # Якщо це Event (має __call__ і підписників)
+            if hasattr(fn, 'fire'):
                 try:
-                    fn(*args)
-                    LOG.info('_try_live_switch: game.onChangeEnvironments%s OK', args)
+                    fn.fire(guid)
+                    LOG.info('_try_live_switch: fire(%s) OK', guid)
                     return True
                 except Exception as e:
-                    LOG.info('_try_live_switch: game.onChangeEnvironments%s ERR: %s', args, str(e)[:100])
-            # Логуємо сигнатуру
+                    LOG.info('_try_live_switch: fire ERR: %s', e)
+
+            # Якщо це список callbacks (WoT Event pattern)
+            if hasattr(fn, '__len__') or hasattr(fn, '_delegates'):
+                delegates = getattr(fn, '_delegates', [])
+                LOG.info('_try_live_switch: delegates: %s', delegates)
+                for d in delegates:
+                    try:
+                        d(guid)
+                        LOG.info('_try_live_switch: delegate(%s) OK', guid)
+                        return True
+                    except Exception as e:
+                        LOG.info('_try_live_switch: delegate ERR: %s', e)
+
+            # Звичайний виклик - пробуємо різні аргументи
+            for args in [(guid,), ([guid],), (guid, True), ({'environments': [guid]},)]:
+                try:
+                    result = fn(*args)
+                    LOG.info('_try_live_switch: fn%s = %s', args, repr(result)[:100])
+                    # Якщо не кинув exception - можливо спрацювало
+                except Exception as e:
+                    LOG.info('_try_live_switch: fn%s ERR: %s', args, str(e)[:100])
+
+            # Логуємо source якщо Python
             try:
                 import inspect
-                LOG.info('_try_live_switch: onChangeEnvironments signature: %s',
-                         inspect.getargspec(fn))
-            except Exception:
-                pass
+                src = inspect.getsource(fn)
+                LOG.info('_try_live_switch: source: %s', src[:500])
+            except Exception as e:
+                LOG.info('_try_live_switch: getsource ERR: %s', e)
     except Exception as e:
         LOG.info('_try_live_switch: game module ERR: %s', e)
 
