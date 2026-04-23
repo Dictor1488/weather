@@ -258,12 +258,12 @@ def _install_battle_space_hook():
                         # v8: write_environments_xml + environments.json для НАСТУПНОГО бою
                         from weather_controller import (write_environments_xml,
                                                         write_space_settings,
-                                                        _write_protanki_environments_json)
+                                                        _write_environments_json)
                         if space_name:
                             write_environments_xml(space_name, preset_id)
                             write_space_settings(space_name, preset_id)
                             # environments.json з усіма guid-ами — WoT прочитає при наступному вході
-                            _write_protanki_environments_json(space_name, preset_id)
+                            _write_environments_json(space_name, preset_id)
                     except Exception:
                         _log().exception('onLeaveWorld hook failed')
                     return orig(self, *a, **kw)
@@ -428,21 +428,35 @@ def _register_weather_view():
 
 
 def _register_mods_list_entry():
+    """
+    modsListApi реєструється пізніше ніж init() —
+    тому чекаємо на лобі через g_eventBus або onAccountBecomePlayer.
+    """
+    def _do_register():
+        try:
+            from gui.mods.modsListApi import g_modsListApi
+            g_modsListApi.addMod(
+                id='weather_panel',
+                name=u'Погода на картах',
+                description=u'Налаштування погодних пресетів для кожної карти',
+                icon='gui/maps/icons/pro.environment/modsList.png',
+                enabled=True,
+                login=False,
+                lobby=True,
+                callback=open_weather_window,
+            )
+            _log().info('modsListApi entry registered OK')
+        except Exception as e:
+            _log().warning('modsListApi not available: %s', e)
+
+    if not IN_GAME:
+        return
+    # Реєструємо через callback щоб дати час modsListApi ініціалізуватись
     try:
-        from gui.mods.modsListApi import g_modsListApi
-        g_modsListApi.addMod(
-            id='weather_panel',
-            name=u'Погода на картах',
-            description=u'Налаштування погодних пресетів для кожної карти',
-            icon='gui/maps/icons/pro.environment/modsList.png',
-            enabled=True,
-            login=False,
-            lobby=True,
-            callback=open_weather_window,
-        )
-        _log().info('modsListApi entry registered')
+        import BigWorld
+        BigWorld.callback(1.0, _do_register)
     except Exception:
-        _log().warning('modsListApi not available or entry registration failed')
+        _do_register()
 
 
 def open_weather_window():
