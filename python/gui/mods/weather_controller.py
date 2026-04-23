@@ -824,66 +824,41 @@ def _try_live_switch(preset_id):
         LOG.warning('_try_live_switch: no guid for preset=%s space=%s', preset_id, _last_space_name)
         return False
 
-    # Спроба 1: через weatherPresetID і applyTimeAndWeatherSettings
+    # Спроба 1: діагностика weatherPresetID і __applyTimeAndWeatherSettings
     try:
         player = BigWorld.player()
         if player and hasattr(player, 'weatherPresetID'):
-            # Спробуємо знайти preset ID для guid
-            # weatherPresetID — числовий індекс, guid — рядок
-            # Спробуємо через __applyTimeAndWeatherSettings
+            current_id = player.weatherPresetID
+            LOG.info('_try_live_switch: weatherPresetID=%s type=%s', current_id, type(current_id).__name__)
             apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
             if apply_fn:
-                # Спробуємо різні сигнатури
-                for args in [(guid,), (preset_id,), (guid, True), (guid, False)]:
+                # Логуємо сигнатуру функції
+                import inspect
+                try:
+                    sig = inspect.getargspec(apply_fn)
+                    LOG.info('_try_live_switch: __applyTimeAndWeather argspec=%s', sig)
+                except Exception:
+                    pass
+                # Пробуємо числові індекси (0..4) — weatherPresetID це індекс
+                for idx in [0, 1, 2, 3, 4]:
+                    try:
+                        apply_fn(idx)
+                        LOG.info('_try_live_switch: __applyTimeAndWeatherSettings(%d) OK (no exception)', idx)
+                    except Exception as e:
+                        LOG.info('_try_live_switch: __applyTimeAndWeatherSettings(%d) ERR: %s', idx, str(e)[:80])
+                # Перевіряємо чи змінився weatherPresetID після виклику
+                LOG.info('_try_live_switch: weatherPresetID after calls=%s', player.weatherPresetID)
+                # Спроба з guid напряму
+                for args in [(guid,), (guid, True)]:
                     try:
                         apply_fn(*args)
-                        LOG.info('_try_live_switch: __applyTimeAndWeatherSettings%s OK', args)
-                        return True
+                        new_id = player.weatherPresetID
+                        LOG.info('_try_live_switch: after %s weatherPresetID=%s', args, new_id)
                     except Exception as e:
-                        LOG.info('_try_live_switch: __applyTimeAndWeatherSettings%s ERR: %s', args, str(e)[:80])
+                        LOG.info('_try_live_switch: %s ERR: %s', args, str(e)[:80])
     except Exception as e:
         LOG.info('_try_live_switch: weatherPresetID attempt ERR: %s', e)
-    try:
-        player = BigWorld.player()
-        if player is None:
-            return False
-        space_id = getattr(player, 'spaceID', None)
-        if space_id is None:
-            return False
-        import LSArenaPhasesComponent as _ls
-        sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
-        if sw_class is None:
-            LOG.info('live_switch: LSEnvironmentSwitcher not found')
-            return False
-
-        # Створюємо екземпляр з CallbackDelayer
-        real_inst = None
-        try:
-            from helpers.CallbackDelayer import CallbackDelayer
-            real_inst = sw_class.__new__(sw_class)
-            real_inst._spaceID = space_id
-            real_inst._callbackDelayer = CallbackDelayer()
-        except Exception as e2:
-            LOG.info('live_switch: CallbackDelayer ERR: %s', e2)
-            real_inst = sw_class.__new__(sw_class)
-            real_inst._spaceID = space_id
-            real_inst._callbackDelayer = None
-
-        # Перевіряємо чи цей guid реально є в завантажених environments
-        # Якщо нема — шукаємо перший доступний
-        loaded = _get_loaded_environment_guids()
-        if loaded and guid not in loaded:
-            LOG.warning('live_switch: guid %s not loaded, trying fallback from %s', guid, loaded)
-            # Беремо перший доступний guid з завантажених
-            guid = loaded[0]
-            LOG.info('live_switch: fallback guid: %s', guid)
-
-        real_inst._switchEnvironment(guid)
-        LOG.info('live_switch: _switchEnvironment(%s) OK', guid)
-        return True
-    except Exception as e:
-        LOG.info('live_switch: failed: %s', e)
-        return False
+    return False
 
 
 def _do_restart():
