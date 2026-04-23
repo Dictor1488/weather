@@ -691,28 +691,6 @@ def get_presets_for_space(space_name):
     return available
 
 
-def _delayed_change_environment(guid, delay=3.0):
-    """
-    Викликає game.onChangeEnvironments через delay секунд після входу в бій.
-    На цей момент WoT вже завантажив environments.json і всі guid-и доступні.
-    """
-    if not IN_GAME:
-        return
-    def _do_change():
-        try:
-            import game
-            fn = getattr(game, 'onChangeEnvironments', None)
-            if fn:
-                result = fn(guid)
-                LOG.info('_delayed_change: onChangeEnvironments(%s) = %s', guid, result)
-        except Exception as e:
-            LOG.info('_delayed_change: ERR: %s', e)
-    try:
-        BigWorld.callback(delay, _do_change)
-        LOG.info('_delayed_change: scheduled in %.1fs for guid=%s', delay, guid)
-    except Exception as e:
-        LOG.info('_delayed_change: callback ERR: %s', e)
-
 
 def apply_preset(space_name, preset_id):
     """
@@ -787,20 +765,15 @@ def cycle_preset():
 
     LOG.info('cycle_preset: %s -> %s', current, next_preset)
 
-    # Пишемо файли для всіх карт
     apply_preset_all_maps(next_preset)
-
-    # Спочатку пробуємо live перемикання — без рестарту
-    if _try_live_switch(next_preset):
-        msg = u'[Weather] %s' % PRESET_LABELS.get(next_preset, next_preset)
-    else:
-        # Live не вийшло — рестартуємо
-        _do_restart()
-        msg = u'[Weather] %s — перезапуск...' % PRESET_LABELS.get(next_preset, next_preset)
+    _do_restart()
 
     try:
         from gui import SystemMessages
-        SystemMessages.pushMessage(msg, SystemMessages.SM_TYPE.Information)
+        label = PRESET_LABELS.get(next_preset, next_preset)
+        SystemMessages.pushMessage(
+            u'[Weather] %s' % label,
+            SystemMessages.SM_TYPE.Information)
     except Exception:
         pass
 
@@ -816,23 +789,6 @@ def set_preset(preset_id):
     _do_restart()
     return True
 
-
-def _get_loaded_environment_guids():
-    """
-    Повертає список guid-ів environments які реально завантажені в поточний простір.
-    Читає з mods/configs/protanki/environments.json який ми самі пишемо.
-    """
-    try:
-        game_root = _resolve_game_root()
-        path = os.path.normpath(
-            os.path.join(game_root, 'mods', 'configs', 'protanki', 'environments.json'))
-        if os.path.isfile(path):
-            with open(path, 'r') as f:
-                data = json.load(f)
-            return data.get('environments', [])
-    except Exception:
-        pass
-    return []
 
 
 def _try_live_switch(preset_id):
@@ -989,6 +945,20 @@ class WeatherController(object):
 
     def getConfig(self):
         return get_config()
+
+    def on_close_requested(self):
+        """Викликається коли Flash вікно закривається."""
+        save_config()
+
+    def on_hotkey_changed(self, codes, hotkey_str):
+        """Викликається коли гравець змінює хоткей у Flash UI."""
+        try:
+            key = hotkey_str.split('+')[-1] if hotkey_str else 'KEY_F12'
+            mods = hotkey_str.split('+')[:-1] if hotkey_str else []
+            set_hotkey(True, mods, key)
+            LOG.info('hotkey changed: %s', hotkey_str)
+        except Exception:
+            pass
 
     # Зворотна сумісність з v7
     def setOverridePreset(self, preset_id):
