@@ -626,15 +626,20 @@ def cycle_preset():
 
     LOG.info('cycle_preset: %s -> %s', current, next_preset)
 
-    # Пишемо файли для всіх карт і рестартуємо
+    # Пишемо файли для всіх карт
     apply_preset_all_maps(next_preset)
-    _do_restart()
+
+    # Спочатку пробуємо live перемикання — без рестарту
+    if _try_live_switch(next_preset):
+        msg = u'[Weather] %s' % PRESET_LABELS.get(next_preset, next_preset)
+    else:
+        # Live не вийшло — рестартуємо
+        _do_restart()
+        msg = u'[Weather] %s — перезапуск...' % PRESET_LABELS.get(next_preset, next_preset)
 
     try:
         from gui import SystemMessages
-        SystemMessages.pushMessage(
-            u'[Weather] %s — перезапуск...' % PRESET_LABELS.get(next_preset, next_preset),
-            SystemMessages.SM_TYPE.Information)
+        SystemMessages.pushMessage(msg, SystemMessages.SM_TYPE.Information)
     except Exception:
         pass
 
@@ -651,6 +656,44 @@ def set_preset(preset_id):
     return True
 
 
+def _try_live_switch(preset_id):
+    """
+    Спроба перемкнути environment live через LSEnvironmentSwitcher._switchEnvironment.
+    Повертає True якщо вдалось — тоді рестарт не потрібен.
+    """
+    if not IN_GAME:
+        return False
+    guid = PRESET_GUIDS.get(preset_id)
+    if not guid:
+        return False
+    try:
+        player = BigWorld.player()
+        if player is None:
+            return False
+        space_id = getattr(player, 'spaceID', None)
+        if space_id is None:
+            return False
+        import LSArenaPhasesComponent as _ls
+        sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
+        if sw_class is None:
+            LOG.info('live_switch: LSEnvironmentSwitcher not found')
+            return False
+        inst = sw_class.__new__(sw_class)
+        inst._spaceID = space_id
+        inst._callbackDelayer = None
+        try:
+            from helpers import CallbackDelayer
+            inst._callbackDelayer = CallbackDelayer.CallbackDelayer()
+        except Exception:
+            pass
+        inst._switchEnvironment(guid)
+        LOG.info('live_switch: _switchEnvironment(%s) OK', guid)
+        return True
+    except Exception as e:
+        LOG.info('live_switch: failed: %s', e)
+        return False
+
+
 def _do_restart():
     """Перезапускає WoT клієнт щоб він перечитав res_mods/."""
     if not IN_GAME:
@@ -660,7 +703,6 @@ def _do_restart():
         BigWorld.restartGame()
     except Exception as e:
         LOG.warning('restartGame failed: %s', e)
-        # Fallback: деякі версії WoT
         try:
             BigWorld.quit()
         except Exception:
