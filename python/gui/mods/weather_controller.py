@@ -809,50 +809,87 @@ def _get_loaded_environment_guids():
 
 def _try_live_switch(preset_id):
     """
-    Повний scan всіх Python об'єктів в пошуку environment API.
+    Спроба live перемикання через:
+    1. game.onChangeEnvironments
+    2. visual_script_client.arena_blocks.SetEnvironment
+    3. arena.gameSpace
     """
     if not IN_GAME:
         return False
-    try:
-        import sys
+    if preset_id == 'standard':
+        guid = _read_default_guid(_last_space_name) if _last_space_name else None
+    else:
+        guid = PRESET_GUIDS.get(preset_id)
+    if not guid:
+        return False
 
-        # Всі модулі що мають 'environ' в назві методів
-        interesting = {}
-        for mod_name, mod in list(sys.modules.items()):
-            if mod is None or not mod_name:
-                continue
+    # Спроба 1: game.onChangeEnvironments
+    try:
+        import game
+        fn = getattr(game, 'onChangeEnvironments', None)
+        if fn:
+            LOG.info('_try_live_switch: game.onChangeEnvironments found, calling with %s', guid)
+            # Пробуємо різні сигнатури
+            for args in [(guid,), ([guid],), ({'guid': guid},), (guid, True)]:
+                try:
+                    fn(*args)
+                    LOG.info('_try_live_switch: game.onChangeEnvironments%s OK', args)
+                    return True
+                except Exception as e:
+                    LOG.info('_try_live_switch: game.onChangeEnvironments%s ERR: %s', args, str(e)[:100])
+            # Логуємо сигнатуру
             try:
-                attrs = [a for a in dir(mod) if 'nviron' in a.lower() or 'preset' in a.lower()]
-                if attrs:
-                    interesting[mod_name] = attrs
+                import inspect
+                LOG.info('_try_live_switch: onChangeEnvironments signature: %s',
+                         inspect.getargspec(fn))
             except Exception:
                 pass
-        LOG.info('_full_scan: modules with environ/preset: %s', interesting)
+    except Exception as e:
+        LOG.info('_try_live_switch: game module ERR: %s', e)
 
-        # Player атрибути повністю
+    # Спроба 2: visual_script_client.arena_blocks.SetEnvironment
+    try:
+        import visual_script_client.arena_blocks as ab
+        se = getattr(ab, 'SetEnvironment', None)
+        if se:
+            LOG.info('_try_live_switch: SetEnvironment class: %s, attrs: %s', se, dir(se))
+            # Спробуємо інстанціювати або викликати
+            try:
+                import inspect
+                LOG.info('_try_live_switch: SetEnvironment signature: %s',
+                         inspect.getargspec(se.__init__))
+            except Exception:
+                pass
+    except Exception as e:
+        LOG.info('_try_live_switch: arena_blocks ERR: %s', e)
+
+    # Спроба 3: arena.gameSpace
+    try:
         player = BigWorld.player()
         if player:
-            LOG.info('_full_scan: player all attrs: %s', sorted(dir(player)))
-
-            # Arena
             arena = getattr(player, 'arena', None)
             if arena:
-                LOG.info('_full_scan: arena all attrs: %s', sorted(dir(arena)))
-                arena_type = getattr(arena, 'arenaType', None)
-                if arena_type:
-                    LOG.info('_full_scan: arenaType attrs: %s', sorted(dir(arena_type)))
-
-            # Space object
-            space_id = getattr(player, 'spaceID', None)
-            if space_id and hasattr(BigWorld, 'Space'):
-                try:
-                    space_obj = BigWorld.Space(space_id)
-                    LOG.info('_full_scan: Space(%s) attrs: %s', space_id, sorted(dir(space_obj)))
-                except Exception as e:
-                    LOG.info('_full_scan: Space ERR: %s', e)
-
+                game_space = getattr(arena, 'gameSpace', None)
+                if game_space is not None:
+                    LOG.info('_try_live_switch: arena.gameSpace type: %s, attrs: %s',
+                             type(game_space).__name__, sorted(dir(game_space)))
+                    # Шукаємо environment методи
+                    env_methods = [a for a in dir(game_space)
+                                   if 'nviron' in a.lower() or 'preset' in a.lower() or 'weather' in a.lower()]
+                    LOG.info('_try_live_switch: gameSpace env methods: %s', env_methods)
+                    for m in env_methods:
+                        fn = getattr(game_space, m, None)
+                        if callable(fn):
+                            for args in [(guid,), (guid, True)]:
+                                try:
+                                    fn(*args)
+                                    LOG.info('_try_live_switch: gameSpace.%s%s OK', m, args)
+                                    return True
+                                except Exception as e:
+                                    LOG.info('_try_live_switch: gameSpace.%s%s ERR: %s', m, args, str(e)[:80])
     except Exception as e:
-        LOG.info('_full_scan: ERR: %s', e)
+        LOG.info('_try_live_switch: gameSpace ERR: %s', e)
+
     return False
 
 
