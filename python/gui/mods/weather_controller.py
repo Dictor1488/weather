@@ -794,15 +794,52 @@ def _try_live_switch(preset_id):
         if sw_class is None:
             LOG.info('live_switch: LSEnvironmentSwitcher not found')
             return False
-        inst = sw_class.__new__(sw_class)
-        inst._spaceID = space_id
-        inst._callbackDelayer = None
+
+        # Спроба 1: знайти реальний екземпляр через BigWorld.entities
+        real_inst = None
         try:
-            from helpers import CallbackDelayer
-            inst._callbackDelayer = CallbackDelayer.CallbackDelayer()
-        except Exception:
-            pass
-        inst._switchEnvironment(guid)
+            for eid, e in BigWorld.entities.items():
+                if e is None:
+                    continue
+                for attr in dir(e):
+                    if 'nvironment' not in attr:
+                        continue
+                    val = getattr(e, attr, None)
+                    if isinstance(val, sw_class):
+                        real_inst = val
+                        LOG.info('live_switch: found real inst on entity %s.%s', eid, attr)
+                        break
+                if real_inst:
+                    break
+        except Exception as e2:
+            LOG.info('live_switch: entity search ERR: %s', e2)
+
+        # Спроба 2: через компоненти простору
+        if real_inst is None:
+            try:
+                for comp in (BigWorld.getSpaceComponents(space_id) or []):
+                    if isinstance(comp, sw_class):
+                        real_inst = comp
+                        LOG.info('live_switch: found via getSpaceComponents')
+                        break
+            except Exception as e2:
+                LOG.info('live_switch: getSpaceComponents ERR: %s', e2)
+
+        # Спроба 3: новий екземпляр з CallbackDelayer
+        if real_inst is None:
+            try:
+                from helpers.CallbackDelayer import CallbackDelayer
+                real_inst = sw_class.__new__(sw_class)
+                real_inst._spaceID = space_id
+                real_inst._callbackDelayer = CallbackDelayer()
+                LOG.info('live_switch: new inst with CallbackDelayer')
+            except Exception as e2:
+                LOG.info('live_switch: CallbackDelayer ERR: %s', e2)
+                real_inst = sw_class.__new__(sw_class)
+                real_inst._spaceID = space_id
+                real_inst._callbackDelayer = None
+
+        real_inst._switchEnvironment(guid)
         LOG.info('live_switch: _switchEnvironment(%s) OK', guid)
         return True
     except Exception as e:
