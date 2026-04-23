@@ -397,16 +397,31 @@ def _register_weather_view():
         return
     try:
         from weather_window import WeatherWindowMeta
-        from gui.Scaleform.framework import g_entitiesFactories, ViewSettings, ScopeTemplates
+        from gui.Scaleform.framework import g_entitiesFactories, ScopeTemplates
 
-        # ViewTypes — переїхав в різних версіях WoT
+        # Спроба 1: WoT 2.x — GroupedViewSettings
+        try:
+            from gui.Scaleform.framework.entities.GroupedView import GroupedViewSettings
+            settings = GroupedViewSettings(
+                WEATHER_PANEL_ALIAS, WeatherWindowMeta, WEATHER_PANEL_SWF,
+                3, None, None, ScopeTemplates.DEFAULT_SCOPE
+            )
+            g_entitiesFactories.addSettings(settings)
+            _VIEW_REGISTERED = True
+            _log().info('Weather view registered (GroupedViewSettings): %s', WEATHER_PANEL_ALIAS)
+            return
+        except Exception as e:
+            _log().info('_register: GroupedViewSettings failed: %s', e)
+
+        # Спроба 2: ViewSettings з ViewTypes
+        from gui.Scaleform.framework import ViewSettings
         ViewTypes = None
-        for path in ('gui.Scaleform.framework',
-                     'gui.Scaleform.framework.entities.View',
-                     'gui.Scaleform.framework.view_types'):
+        for mod_path in ('gui.Scaleform.framework',
+                         'gui.Scaleform.framework.entities.View',
+                         'gui.Scaleform.framework.view_types'):
             try:
                 import importlib
-                m = importlib.import_module(path)
+                m = importlib.import_module(mod_path)
                 if hasattr(m, 'ViewTypes'):
                     ViewTypes = m.ViewTypes
                     break
@@ -415,14 +430,13 @@ def _register_weather_view():
         if ViewTypes is None:
             class ViewTypes(object):
                 WINDOW = 3
-
         settings = ViewSettings(
             WEATHER_PANEL_ALIAS, WeatherWindowMeta, WEATHER_PANEL_SWF,
             ViewTypes.WINDOW, None, ScopeTemplates.DEFAULT_SCOPE
         )
         g_entitiesFactories.addSettings(settings)
         _VIEW_REGISTERED = True
-        _log().info('Weather view registered: %s', WEATHER_PANEL_ALIAS)
+        _log().info('Weather view registered (ViewSettings): %s', WEATHER_PANEL_ALIAS)
     except Exception:
         _log().exception('Weather view registration failed')
 
