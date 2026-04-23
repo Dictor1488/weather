@@ -50,8 +50,8 @@ PRESET_ORDER = ['standard', 'midnight', 'overcast', 'sunset', 'midday']
 PRESET_LABELS = {
     'standard': u'Стандарт',
     'midnight': u'Ніч',
-    'overcast': u'Похмуро',
-    'sunset':   u'Захід сонця',
+    'overcast': u'Хмарно',
+    'sunset':   u'Захід',
     'midday':   u'Полудень',
 }
 
@@ -648,8 +648,8 @@ def _write_protanki_environments_json(space_name, active_preset_id):
             'environments': all_guids,
             'labels': {
                 '15755E11.4090266B.594778B6.B233C12C': u'\u041d\u0456\u0447',
-                '56BA3213.40FFB1DF.125FBCAD.173E8347': u'\u041f\u043e\u0445\u043c\u0443\u0440\u043e',
-                '6DEE1EBB.44F63FCC.AACF6185.7FBBC34E': u'\u0417\u0430\u0445\u0456\u0434 \u0441\u043e\u043d\u0446\u044f',
+                '56BA3213.40FFB1DF.125FBCAD.173E8347': u'\u0425\u043c\u0430\u0440\u043d\u043e',
+                '6DEE1EBB.44F63FCC.AACF6185.7FBBC34E': u'\u0417\u0430\u0445\u0456\u0434',
                 'BF040BCB.4BE1D04F.7D484589.135E881B': u'\u041f\u043e\u043b\u0443\u0434\u0435\u043d\u044c',
                 'default': u'\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442',
             },
@@ -809,10 +809,9 @@ def _get_loaded_environment_guids():
 
 def _try_live_switch(preset_id):
     """
-    Спроба перемкнути environment live.
-    Порядок спроб:
-      1. weatherPresetID + __applyTimeAndWeatherSettings (прямий Avatar API)
-      2. LSEnvironmentSwitcher._switchEnvironment (для LS режимів)
+    Спроба live перемикання через Flash компонент протанків.
+    Протанки використовують EnvironmentsSettingsUI.as_setEnvironment(guid)
+    або пряму подію OVERRIDE_INGAME через DAAPI.
     """
     if not IN_GAME:
         return False
@@ -821,43 +820,92 @@ def _try_live_switch(preset_id):
     else:
         guid = PRESET_GUIDS.get(preset_id)
     if not guid:
-        LOG.warning('_try_live_switch: no guid for preset=%s space=%s', preset_id, _last_space_name)
         return False
 
-    # Спроба 1: діагностика weatherPresetID і __applyTimeAndWeatherSettings
+    # Спроба через DAAPI — відправляємо подію в протанки компонент
     try:
-        player = BigWorld.player()
-        if player and hasattr(player, 'weatherPresetID'):
-            current_id = player.weatherPresetID
-            LOG.info('_try_live_switch: weatherPresetID=%s type=%s', current_id, type(current_id).__name__)
-            apply_fn = getattr(player, '_PlayerAvatar__applyTimeAndWeatherSettings', None)
-            if apply_fn:
-                # Логуємо сигнатуру функції
-                import inspect
+        from gui.app_loader import g_appLoader
+        app = g_appLoader.getApp()
+        if app is None:
+            return False
+
+        # Шукаємо EnvironmentsSettingsUI або EnvironmentsBackground
+        view = None
+        for mgr_name in ('containerManager', 'viewsManager', '_containerManager'):
+            mgr = getattr(app, mgr_name, None)
+            if mgr is None:
+                continue
+            for alias in ('EnvironmentsSettingsUI', 'EnvironmentsBackground',
+                          'protanki-components-environment', 'environmentsSettings'):
                 try:
-                    sig = inspect.getargspec(apply_fn)
-                    LOG.info('_try_live_switch: __applyTimeAndWeather argspec=%s', sig)
+                    v = (mgr.getViewByAlias(alias)
+                         if hasattr(mgr, 'getViewByAlias') else None)
+                    if v is not None:
+                        view = v
+                        LOG.info('_try_live_switch: found view %s via %s.%s', type(v).__name__, mgr_name, alias)
+                        break
                 except Exception:
                     pass
-                # Пробуємо числові індекси (0..4) — weatherPresetID це індекс
-                for idx in [0, 1, 2, 3, 4]:
-                    try:
-                        apply_fn(idx)
-                        LOG.info('_try_live_switch: __applyTimeAndWeatherSettings(%d) OK (no exception)', idx)
-                    except Exception as e:
-                        LOG.info('_try_live_switch: __applyTimeAndWeatherSettings(%d) ERR: %s', idx, str(e)[:80])
-                # Перевіряємо чи змінився weatherPresetID після виклику
-                LOG.info('_try_live_switch: weatherPresetID after calls=%s', player.weatherPresetID)
-                # Спроба з guid напряму
-                for args in [(guid,), (guid, True)]:
-                    try:
-                        apply_fn(*args)
-                        new_id = player.weatherPresetID
-                        LOG.info('_try_live_switch: after %s weatherPresetID=%s', args, new_id)
-                    except Exception as e:
-                        LOG.info('_try_live_switch: %s ERR: %s', args, str(e)[:80])
+            if view:
+                break
+
+        if view is None:
+            # Логуємо всі views в containerManager
+            try:
+                for mgr_name in ('containerManager', '_containerManager', 'viewsManager'):
+                    mgr = getattr(app, mgr_name, None)
+                    if mgr is None:
+                        continue
+                    all_views = []
+                    for fn in ('getViews', 'getViewsByType', 'getAllViews'):
+                        try:
+                            vlist = getattr(mgr, fn)()
+                            all_views.extend([type(v).__name__ for v in (vlist or [])])
+                        except Exception:
+                            pass
+                    if all_views:
+                        LOG.info('_try_live_switch: %s views: %s', mgr_name, all_views[:20])
+            except Exception as e:
+                LOG.info('_try_live_switch: view list ERR: %s', e)
+            # Логуємо всі BigWorld wg_ методи
+            try:
+                all_bw = [a for a in dir(BigWorld) if not a.startswith('__')]
+                LOG.info('_try_live_switch: BigWorld all methods: %s', all_bw)
+            except Exception as e:
+                LOG.info('_try_live_switch: BigWorld dir ERR: %s', e)
+            return False
+
+        flash = getattr(view, 'flashObject', None)
+        if flash is None:
+            return False
+
+        # Спроба викликати методи Flash об'єкта
+        for method in ('as_setEnvironment', 'as_overrideIngame',
+                       'as_switchEnvironment', 'as_setActiveEnvironment'):
+            fn = getattr(flash, method, None)
+            if fn:
+                try:
+                    fn(guid)
+                    LOG.info('_try_live_switch: flash.%s(%s) OK', method, guid)
+                    return True
+                except Exception as e:
+                    LOG.info('_try_live_switch: flash.%s ERR: %s', method, str(e)[:80])
+
+        # Спроба через call
+        try:
+            flash.call('overrideIngame', [guid])
+            LOG.info('_try_live_switch: flash.call(overrideIngame) OK')
+            return True
+        except Exception as e:
+            LOG.info('_try_live_switch: flash.call ERR: %s', str(e)[:80])
+
+        # Логуємо всі доступні методи flash
+        flash_methods = [a for a in dir(flash) if not a.startswith('__')]
+        LOG.info('_try_live_switch: flash methods: %s', flash_methods[:30])
+
     except Exception as e:
-        LOG.info('_try_live_switch: weatherPresetID attempt ERR: %s', e)
+        LOG.info('_try_live_switch: ERR: %s', e)
+
     return False
 
 
@@ -944,20 +992,6 @@ def set_icon_position(x, y):
 # WeatherController — публічний API
 # ---------------------------------------------------------------------------
 
-def on_hotkey_changed(codes, hotkey_str=None):
-    global _cfg
-    try:
-        normalized = [int(code) for code in (codes or [])]
-    except Exception:
-        normalized = []
-    _cfg['hotkey'] = normalized
-    save_config()
-    return normalized
-
-
-def on_close_requested():
-    return True
-
 class WeatherController(object):
     def __init__(self):
         load_config()
@@ -1025,15 +1059,6 @@ class WeatherController(object):
     def getConfig(self):
         return get_config()
 
-    def on_hotkey_changed(self, codes, hotkey_str=None):
-        return on_hotkey_changed(codes, hotkey_str)
-
-    def on_close_requested(self):
-        return on_close_requested()
-
-    def build_payload(self, map_registry):
-        return build_payload(map_registry)
-
     # Зворотна сумісність з v7
     def setOverridePreset(self, preset_id):
         global _current_preset
@@ -1060,29 +1085,5 @@ class WeatherController(object):
         return [{'id': p, 'label': PRESET_LABELS[p], 'weight': int(weights.get(p, DEFAULT_WEIGHT))}
                 for p in PRESET_ORDER]
 
-
-
-
-def build_payload(map_registry):
-    presets = [{'id': p, 'label': PRESET_LABELS[p], 'weight': int(get_general_weights().get(p, DEFAULT_WEIGHT)), 'guid': PRESET_GUIDS.get(p), 'previewSrc': ''}
-               for p in PRESET_ORDER]
-    maps = []
-    for map_id, label, thumb in map_registry:
-        weights = get_map_weights(map_id)
-        maps.append({
-            'id': map_id,
-            'label': label,
-            'thumbSrc': thumb,
-            'useGlobal': False,
-            'presets': [{'id': p, 'label': PRESET_LABELS[p], 'weight': int(weights.get(p, DEFAULT_WEIGHT)), 'guid': PRESET_GUIDS.get(p), 'previewSrc': ''}
-                        for p in PRESET_ORDER]
-        })
-    hotkey = get_hotkey() or []
-    return {
-        'presets': presets,
-        'maps': maps,
-        'hotkey': '+'.join([str(x) for x in hotkey]) if hotkey else 'ALT+F12',
-        'hotkeyKeys': hotkey,
-    }
 
 g_controller = WeatherController()
