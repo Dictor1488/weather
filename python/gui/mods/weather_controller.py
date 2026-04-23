@@ -636,10 +636,12 @@ def _write_protanki_environments_json(space_name, active_preset_id):
         if active_guid and active_guid not in all_guids:
             all_guids.append(active_guid)
 
-        # Ваги: активний = 100, решта = 11 (завантажуються але не обрані)
+        # Ваги: активний = 100, решта = 11
+        # Якщо active_guid=None (standard без відомої карти) — всі по 11,
+        # активний environment визначається з environments.xml
         common_weights = {'default': 0}
         for guid in all_guids:
-            common_weights[guid] = 100 if guid == active_guid else 11
+            common_weights[guid] = 100 if (active_guid and guid == active_guid) else 11
 
         payload = {
             'enabled': True,
@@ -708,13 +710,11 @@ def on_space_entered(space_name):
     _last_space_name = space_name
     LOG.info('on_space_entered: space=%s current_preset=%s', space_name, _current_preset)
 
-    # Якщо override не встановлений — вибираємо за вагами
-    preset = _current_preset
-    if not preset or preset == 'standard':
-        preset = _get_preset_for_map(space_name)
-        if preset and preset != 'standard':
-            _current_preset = preset
-            save_config()
+    # Якщо пресет не встановлений — вибираємо за вагами
+    # Якщо встановлений (включно з 'standard') — поважаємо вибір гравця
+    if not _current_preset:
+        _current_preset = _get_preset_for_map(space_name) or 'standard'
+        save_config()
 
     return apply_preset(space_name, _current_preset)
 
