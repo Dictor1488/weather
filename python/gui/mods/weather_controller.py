@@ -854,12 +854,12 @@ def _try_live_switch(preset_id):
                     except Exception as e:
                         LOG.info('_try_live_switch: delegate ERR: %s', e)
 
-            # Звичайний виклик - пробуємо різні аргументи
+            # Звичайний виклик - перший успішний = повертаємо True
             for args in [(guid,), ([guid],), (guid, True), ({'environments': [guid]},)]:
                 try:
                     result = fn(*args)
-                    LOG.info('_try_live_switch: fn%s = %s', args, repr(result)[:100])
-                    # Якщо не кинув exception - можливо спрацювало
+                    LOG.info('_try_live_switch: fn%s = %s OK', args, repr(result)[:100])
+                    return True  # Перший успішний виклик без exception
                 except Exception as e:
                     LOG.info('_try_live_switch: fn%s ERR: %s', args, str(e)[:100])
 
