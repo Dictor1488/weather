@@ -150,8 +150,7 @@ def _resolve_game_root():
             continue
         seen.add(c)
         if _has_game_layout(c):
-            LOG.info('game root: %s', c)
-            return c
+                    return c
     return os.path.abspath(os.getcwd())
 
 
@@ -166,7 +165,7 @@ def _find_latest_version_dir(root_name):
     if not dirs:
         return None
     dirs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-    LOG.info('%s version dir: %s', root_name, dirs[0])
+    LOG.debug('%s version dir: %s', root_name, dirs[0])
     return dirs[0]
 
 
@@ -202,7 +201,7 @@ def _find_spaces_wg_wotmod():
         return None
     path = _find_wotmod(SPACES_WG_RE, mods_dir)
     if path:
-        LOG.info('spaces_wg wotmod: %s', path)
+        LOG.debug('spaces_wg wotmod: %s', path)
     else:
         LOG.warning('spaces_wg wotmod not found in %s', mods_dir)
     return path
@@ -214,7 +213,7 @@ def _find_preset_wotmod(preset_id):
         return None
     path = _find_wotmod(PRESET_WOTMOD_RE[preset_id], mods_dir)
     if path:
-        LOG.info('preset wotmod %s: %s', preset_id, path)
+        LOG.debug('preset wotmod %s: %s', preset_id, path)
     else:
         LOG.warning('preset wotmod %s not found in %s', preset_id, mods_dir)
     return path
