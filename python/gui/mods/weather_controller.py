@@ -822,13 +822,68 @@ def _try_live_switch(preset_id):
     if not guid:
         return False
 
-    # Спроба через BigWorld.wg_setSpaceItemsVisibilityMask або подібне
+    # Спроба через ctypes — пряме звернення до BigWorld engine
     try:
-        # Логуємо всі BigWorld методи одноразово для діагностики
-        all_bw = sorted([a for a in dir(BigWorld) if not a.startswith('__')])
-        LOG.info('_try_live_switch: BigWorld methods: %s', all_bw)
+        import ctypes
+        import ctypes.util
+
+        # Знаходимо BigWorld DLL
+        bw_dll = None
+        for dll_name in ['BigWorld.dll', 'bigworld.dll', 'WorldOfTanks.exe']:
+            try:
+                bw_dll = ctypes.windll.LoadLibrary(dll_name)
+                LOG.info('_try_live_switch: loaded %s', dll_name)
+                break
+            except Exception as e:
+                LOG.info('_try_live_switch: LoadLibrary(%s) ERR: %s', dll_name, str(e)[:60])
+
+        if bw_dll is None:
+            # Спроба через handle поточного процесу
+            try:
+                bw_dll = ctypes.windll.kernel32
+                handle = ctypes.windll.kernel32.GetModuleHandleW(None)
+                LOG.info('_try_live_switch: process handle: 0x%x', handle)
+            except Exception as e:
+                LOG.info('_try_live_switch: GetModuleHandle ERR: %s', e)
+
+        # Шукаємо через Python C API — BigWorld module object
+        try:
+            import sys
+            bw_module = sys.modules.get('BigWorld')
+            if bw_module:
+                LOG.info('_try_live_switch: BigWorld module: %s', type(bw_module))
+                # Шукаємо через PyObject структуру
+                bw_addr = id(bw_module)
+                LOG.info('_try_live_switch: BigWorld module addr: 0x%x', bw_addr)
+        except Exception as e:
+            LOG.info('_try_live_switch: module addr ERR: %s', e)
+
+        # Спроба через ResMgr і Python bindings
+        try:
+            # Перевіряємо чи є PyBigWorld або wg_BigWorld
+            for mod_name in ['PyBigWorld', 'wg_BigWorld', 'Pixie', 'Moo', 'Romp']:
+                if mod_name in sys.modules:
+                    m = sys.modules[mod_name]
+                    env_attrs = [a for a in dir(m) if 'nviron' in a.lower() or 'preset' in a.lower()]
+                    if env_attrs:
+                        LOG.info('_try_live_switch: %s environ attrs: %s', mod_name, env_attrs)
+        except Exception as e:
+            LOG.info('_try_live_switch: module scan ERR: %s', e)
+
+        # Спроба через Space об'єкт
+        try:
+            player = BigWorld.player()
+            if player:
+                space_id = getattr(player, 'spaceID', None)
+                # Space клас в BigWorld
+                if hasattr(BigWorld, 'Space'):
+                    space = BigWorld.Space
+                    LOG.info('_try_live_switch: BigWorld.Space: %s', dir(space))
+        except Exception as e:
+            LOG.info('_try_live_switch: Space ERR: %s', e)
+
     except Exception as e:
-        LOG.info('_try_live_switch: BigWorld dir ERR: %s', e)
+        LOG.info('_try_live_switch: ctypes ERR: %s', e)
     return False
 
 
