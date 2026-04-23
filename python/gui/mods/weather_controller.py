@@ -270,21 +270,34 @@ def _get_spaces_wg_package_path():
 def _get_weather_packs_dir():
     """
     Папка де лежать пресет-wotmod файли.
-    Skybox Randomizer і протанки кладуть пресети ПОРЯД з 2.2.1.0/
-    а не всередині. Наприклад: mods/weather_packs/
-    Також перевіряємо стандартне розміщення всередині mods/2.2.1.0/
+    Перевіряємо кілька можливих розташувань.
     """
     game_root = _resolve_game_root()
-    # Пріоритет 1: mods/weather_packs/ (окрема папка поряд з версією)
-    packs_dir = os.path.normpath(os.path.join(game_root, 'mods', 'weather_packs'))
-    if os.path.isdir(packs_dir):
-        LOG.info('weather_packs dir: %s', packs_dir)
-        return packs_dir
-    # Пріоритет 2: стандартний mods/2.2.1.0/
     version_dir = _find_latest_version_dir('mods')
+
+    candidates = []
+    # Пріоритет 1: mods/2.2.1.0/weather_packs/ (всередині версії)
     if version_dir:
-        LOG.info('weather_packs fallback to mods version dir: %s', version_dir)
-        return version_dir
+        candidates.append(os.path.normpath(os.path.join(version_dir, 'weather_packs')))
+    # Пріоритет 2: mods/weather_packs/ (поряд з версією)
+    if game_root:
+        candidates.append(os.path.normpath(os.path.join(game_root, 'mods', 'weather_packs')))
+    # Пріоритет 3: mods/2.2.1.0/ сам по собі
+    if version_dir:
+        candidates.append(version_dir)
+
+    for path in candidates:
+        if os.path.isdir(path):
+            # Перевіряємо чи є там environment wotmod файли
+            has_packs = any(
+                f.lower().startswith('environments') and f.lower().endswith('.wotmod')
+                for f in _safe_listdir(path)
+            )
+            if has_packs:
+                LOG.info('weather_packs dir: %s', path)
+                return path
+
+    LOG.warning('weather_packs: no dir with environment wotmods found')
     return None
 
 
