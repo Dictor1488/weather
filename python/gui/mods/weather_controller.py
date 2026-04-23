@@ -824,9 +824,38 @@ def _try_live_switch(preset_id):
 
     # Спроба через DAAPI — відправляємо подію в протанки компонент
     try:
-        from gui.app_loader import g_appLoader
-        app = g_appLoader.getApp()
+        app = None
+        # Різні способи отримати app в різних версіях WoT
+        try:
+            from gui.app_loader import g_appLoader
+            app = g_appLoader.getApp()
+        except ImportError:
+            pass
         if app is None:
+            try:
+                from gui.Scaleform.framework import g_entitiesFactories
+                import gui.Scaleform.daapi.view.lobby.LobbyView as _lv
+                app = getattr(_lv, '_app', None)
+            except Exception:
+                pass
+        if app is None:
+            try:
+                from gui import g_guiResetters
+                for r in (g_guiResetters or []):
+                    a = getattr(r, '_app', None) or getattr(r, 'app', None)
+                    if a is not None:
+                        app = a
+                        break
+            except Exception:
+                pass
+        if app is None:
+            try:
+                import BigWorld as _BW
+                app = getattr(_BW, 'app', None)
+            except Exception:
+                pass
+        if app is None:
+            LOG.info('_try_live_switch: app not found')
             return False
 
         # Шукаємо EnvironmentsSettingsUI або EnvironmentsBackground
