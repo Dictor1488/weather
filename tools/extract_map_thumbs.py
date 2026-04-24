@@ -3,15 +3,20 @@
 Extract WoT map preview images from res/packages/*.pkg into mod GUI resources.
 
 Usage:
+  python tools/extract_map_thumbs.py
   python tools/extract_map_thumbs.py --game D:/World_of_Tanks_EU
 
 Output:
   resources/in/gui/maps/icons/weather/maps/<map_id>.png
 
-The script scans every <map_id>.pkg, searches for PNG/JPG files that look like
-map previews/minimaps/loading images, and copies the best candidate into the
-mod resources. DDS files are intentionally ignored because Scaleform cannot
-show them directly.
+The script can auto-detect the World of Tanks folder. Detection order:
+  1. --game argument
+  2. WOT_FOLDER environment variable
+  3. Current working directory / parent directories
+  4. Common install folders on all available Windows drives
+
+A valid game folder must contain:
+  res/packages/
 """
 
 from __future__ import print_function
@@ -44,6 +49,78 @@ BAD_HINTS = (
     'normal', 'height', 'splat', 'blend', 'mask', 'noise', 'detail', 'terrain',
     'flora', 'water', 'sky', 'shadow', 'lightmap', 'ao', 'color_grading', 'lut',
 )
+
+COMMON_INSTALL_DIRS = (
+    'World_of_Tanks_EU',
+    'World_of_Tanks',
+    'Games/World_of_Tanks_EU',
+    'Games/World_of_Tanks',
+    'Wargaming/World_of_Tanks_EU',
+    'Wargaming/World_of_Tanks',
+    'Program Files/World_of_Tanks_EU',
+    'Program Files/World_of_Tanks',
+    'Program Files (x86)/World_of_Tanks_EU',
+    'Program Files (x86)/World_of_Tanks',
+)
+
+
+def is_game_folder(path):
+    return bool(path and os.path.isdir(os.path.join(path, 'res', 'packages')))
+
+
+def normalize_path(path):
+    if not path:
+        return None
+    return os.path.abspath(os.path.normpath(os.path.expandvars(os.path.expanduser(path))))
+
+
+def iter_parent_dirs(path):
+    path = normalize_path(path)
+    seen = set()
+    while path and path not in seen:
+        seen.add(path)
+        yield path
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+
+
+def iter_windows_drives():
+    # No external dependencies: just test common drive letters.
+    for letter in 'CDEFGHIJKLMNOPQRSTUVWXYZ':
+        root = letter + ':\\'
+        if os.path.isdir(root):
+            yield root
+
+
+def find_game_folder(explicit=None):
+    candidates = []
+
+    if explicit:
+        candidates.append(explicit)
+
+    env_path = os.environ.get('WOT_FOLDER') or os.environ.get('WOWS_FOLDER')
+    if env_path:
+        candidates.append(env_path)
+
+    cwd = os.getcwd()
+    for parent in iter_parent_dirs(cwd):
+        candidates.append(parent)
+
+    for drive in iter_windows_drives():
+        for rel in COMMON_INSTALL_DIRS:
+            candidates.append(os.path.join(drive, rel))
+
+    seen = set()
+    for candidate in candidates:
+        candidate = normalize_path(candidate)
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        if is_game_folder(candidate):
+            return candidate
+    return None
 
 
 def score_member(name, map_id):
@@ -127,13 +204,20 @@ def extract_one(packages_dir, out_dir, map_id):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--game', required=True, help='World_of_Tanks_EU folder')
+    parser.add_argument('--game', default=None, help='World of Tanks folder. Optional; auto-detected when omitted.')
     parser.add_argument('--out', default='resources/in/gui/maps/icons/weather/maps')
     args = parser.parse_args()
 
-    packages_dir = os.path.join(args.game, 'res', 'packages')
-    if not os.path.isdir(packages_dir):
-        raise SystemExit('Packages folder not found: %s' % packages_dir)
+    game_folder = find_game_folder(args.game)
+    if not game_folder:
+        raise SystemExit(
+            'World of Tanks folder not found. Pass --game "C:/Games/World_of_Tanks_EU" '
+            'or set WOT_FOLDER environment variable.'
+        )
+
+    packages_dir = os.path.join(game_folder, 'res', 'packages')
+    print('Game folder:', game_folder)
+    print('Packages:', packages_dir)
 
     ok = 0
     for map_id in MAP_IDS:
