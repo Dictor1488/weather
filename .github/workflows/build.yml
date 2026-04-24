@@ -195,7 +195,8 @@ jobs:
                 "-optimize=true"
             )
 
-            $mxmlcArgs += @("--")
+            # +configname=none вимикає flex-config.xml який перевизначає всі аргументи
+            $mxmlcArgs += @("+configname=none", "--")
             $mxmlcArgs += $mainClassPath
             Write-Host "Running: mxmlc $($mxmlcArgs -join ' ')"
             $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs `
