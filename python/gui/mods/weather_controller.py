@@ -785,14 +785,12 @@ def cycle_preset():
 
 
 def set_preset(preset_id):
-    """Встановлює пресет і застосовує (з рестартом)."""
-    global _current_preset
+    """Встановлює пресет: спочатку live switch, якщо не вийшло — restart fallback."""
     if preset_id not in PRESET_ORDER:
         return False
-    _current_preset = preset_id
-    save_config()
-    apply_preset_all_maps(preset_id)
-    _do_restart()
+    live_ok = set_preset_live(preset_id)
+    if not live_ok:
+        _do_restart()
     return True
 
 
@@ -886,85 +884,119 @@ def _create_switcher_on_battle_start(space_id):
     return False
 
 
-def _try_live_switch(preset_id):
-    """
-    Live перемикання через BigWorld.spaces[spaceID].setEnvironment(name).
-    Знайдено в декомпільованому scripts/client/GeneralSpaceData.py і
-    visual_script_client/arena_blocks.py.
-    """
+def _get_current_space():
+    """Повертає поточний BigWorld Space для гравця."""
     if not IN_GAME:
-        return False
-
+        return None
     try:
         player = BigWorld.player()
         if player is None:
-            return False
+            return None
         space_id = getattr(player, 'spaceID', None)
         if space_id is None:
-            return False
-
-        space = BigWorld.spaces.get(space_id) if hasattr(BigWorld.spaces, 'get') else BigWorld.spaces[space_id]
-        if space is None:
-            LOG.info('_try_live_switch: space not found for id=%s', space_id)
-            return False
-
-        # Діагностика методів Space
+            return None
         try:
-            space_methods = [m for m in dir(space) if not m.startswith('_')]
-            LOG.info('_try_live_switch: space type=%s methods=%s',
-                     type(space).__name__, space_methods)
-            # Поточне значення environment
-            cur_env = getattr(space, 'environment', None)
-            LOG.info('_try_live_switch: current space.environment=%r', cur_env)
-        except Exception as de:
-            LOG.info('_try_live_switch: diag ERR: %s', de)
-
-        if preset_id == 'standard':
-            # Прямо встановлюємо атрибут
-            try:
-                space.environment = ''
-            except Exception:
-                pass
-            try:
-                space.resetEnvironment()
-            except Exception:
-                pass
-            LOG.info('_try_live_switch: standard applied')
-            return True
-
-        guid = PRESET_GUIDS.get(preset_id)
-        if not guid:
-            return False
-
-        # Спроба 1: прямо встановити атрибут environment (обхід серверної реплікації)
-        try:
-            space.environment = guid
-            new_env = getattr(space, 'environment', None)
-            LOG.info('_try_live_switch: direct space.environment = %r -> %r', guid, new_env)
-        except Exception as e:
-            LOG.info('_try_live_switch: direct attr ERR: %s', e)
-
-        # Спроба 2: викликати set_environment (callback для реплікації)
-        try:
-            space.set_environment(None)
-            LOG.info('_try_live_switch: set_environment(None) called')
-        except Exception as e:
-            LOG.info('_try_live_switch: set_environment ERR: %s', e)
-
-        # Спроба 3: getEnvironment (можливо він повертає щось корисне)
-        try:
-            ge = space.getEnvironment()
-            LOG.info('_try_live_switch: getEnvironment() = %r', ge)
-        except Exception as e:
-            LOG.info('_try_live_switch: getEnvironment ERR: %s', e)
-
-        return True
-
+            return BigWorld.spaces.get(space_id)
+        except Exception:
+            return BigWorld.spaces[space_id]
     except Exception as e:
-        LOG.info('_try_live_switch: ERR: %s', e)
-        import traceback
-        LOG.info('_try_live_switch: trace: %s', traceback.format_exc())
+        LOG.info('_get_current_space: ERR: %s', e)
+    return None
+
+
+def _try_live_switch(preset_id):
+    """
+    Live перемикання environment/skyDome.
+
+    Це саме той API, який використовує клієнтський visual script block
+    scripts/client/visual_script_client/arena_blocks.py::SetEnvironment:
+
+        BigWorld.spaces[BigWorld.player().spaceID].setEnvironment(name)
+
+    Важливо: одного запису `space.environment = guid` недостатньо.
+    Потрібно прямо викликати C++/BigWorld метод `setEnvironment(name)`.
+    """
+    space = _get_current_space()
+    if space is None:
+        LOG.info('_try_live_switch: no current space')
+        return False
+
+    try:
+        LOG.info('_try_live_switch: preset=%s space=%s env_before=%r',
+                 preset_id, type(space).__name__, getattr(space, 'environment', None))
+    except Exception:
+        pass
+
+    # Повернення до дефолтного environment карти.
+    if not preset_id or preset_id == 'standard':
+        ok = False
+        try:
+            space.resetEnvironment()
+            ok = True
+            LOG.info('_try_live_switch: resetEnvironment() OK')
+        except Exception as e:
+            LOG.info('_try_live_switch: resetEnvironment ERR: %s', e)
+        try:
+            space.environment = ''
+        except Exception:
+            pass
+        return ok
+
+    guid_dot = PRESET_GUIDS.get(preset_id)
+    if not guid_dot:
+        LOG.info('_try_live_switch: no guid for preset=%s', preset_id)
+        return False
+
+    # У WoT XML GUID зазвичай з крапками, а директорія в пакеті — з дефісами.
+    # Основний варіант — dot GUID; hyphen GUID лишаємо як fallback.
+    guid_dash = guid_dot.replace('.', '-')
+    candidates = [guid_dot, guid_dash]
+
+    for env_name in candidates:
+        try:
+            if hasattr(space, 'setEnvironment'):
+                space.setEnvironment(env_name)
+                try:
+                    space.environment = env_name
+                except Exception:
+                    pass
+                LOG.info('_try_live_switch: setEnvironment(%r) OK', env_name)
+                try:
+                    LOG.info('_try_live_switch: env_after=%r getEnvironment=%r',
+                             getattr(space, 'environment', None),
+                             space.getEnvironment() if hasattr(space, 'getEnvironment') else None)
+                except Exception:
+                    pass
+                return True
+        except Exception as e:
+            LOG.info('_try_live_switch: setEnvironment(%r) ERR: %s', env_name, e)
+
+    # Останній fallback — property callback з GeneralSpaceData.
+    try:
+        space.environment = guid_dot
+        if hasattr(space, 'set_environment'):
+            space.set_environment(None)
+            LOG.info('_try_live_switch: set_environment(None) fallback OK')
+            return True
+    except Exception as e:
+        LOG.info('_try_live_switch: set_environment fallback ERR: %s', e)
+
     return False
+
+
+def set_preset_live(preset_id):
+    """Встановлює пресет і пробує застосувати його в поточному бою без restartGame()."""
+    global _current_preset
+    if preset_id not in PRESET_ORDER:
+        return False
+    _current_preset = preset_id
+    save_config()
+
+    # Файли потрібні для наступного завантаження карти / fallback після рестарту.
+    apply_preset_all_maps(preset_id)
+
+    # Якщо ми вже в бою — пробуємо перемкнути поточний Space напряму.
+    return _try_live_switch(preset_id)
 
 
 def _do_restart():
@@ -1068,6 +1100,9 @@ class WeatherController(object):
 
     def setPreset(self, preset_id):
         return set_preset(preset_id)
+
+    def setPresetLive(self, preset_id):
+        return set_preset_live(preset_id)
 
     def getCurrentPreset(self):
         return get_current_preset()
