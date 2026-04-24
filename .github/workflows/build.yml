@@ -120,7 +120,7 @@ jobs:
         $env:Path = "C:\flex-sdk\bin;$env:Path"
         $mxmlcPath = "C:\flex-sdk\bin\mxmlc.bat"
         if (-not (Test-Path $mxmlcPath)) { Write-Error "mxmlc not found"; exit 1 }
-        $outputPath = "as3/bin"
+        $outputPath = "$PWD\as3\bin"
         New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
         $libArgs = @()
         Get-ChildItem -Path "as3/libs" -Filter "*.swc" -Recurse | ForEach-Object {
@@ -142,14 +142,15 @@ jobs:
             }
             if (-not $mainClassPath -or -not (Test-Path $mainClassPath)) { Write-Warning "Main class not found"; continue }
             $outputSwf = Join-Path $outputPath $swfName
+            # Resolve-Path прибирає крапку: src_flash\. -> src_flash
+            $srcDirResolved = (Resolve-Path $projDir).Path
             $mxmlcArgs = @()
-            $srcDir = Join-Path $projDir "."
-            if (Test-Path $srcDir) { $mxmlcArgs += "-source-path+=$srcDir" }
+            $mxmlcArgs += "-source-path+=$srcDirResolved"
             Write-Host "projDir: $projDir"
-            Write-Host "srcDir: $srcDir"
+            Write-Host "srcDir resolved: $srcDirResolved"
             Write-Host "mainClassPath: $mainClassPath"
-            Write-Host "AS3 files in srcDir:"
-            Get-ChildItem -Recurse $srcDir -Filter *.as | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Write-Host "AS3 files:"
+            Get-ChildItem -Recurse $srcDirResolved -Filter *.as | ForEach-Object { Write-Host "  $($_.FullName)" }
             $mxmlcArgs += $libArgs
             $mxmlcArgs += @(
                 "-output=$outputSwf",
