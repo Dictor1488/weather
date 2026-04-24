@@ -89,20 +89,14 @@ jobs:
         New-Item -ItemType Directory -Force -Path $vDir | Out-Null
         Copy-Item $libsPlayerGlobal "$vDir\playerglobal.swc" -Force
         Copy-Item $libsPlayerGlobal "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
-        $flexConfig = "C:\flex-sdk\frameworks\flex-config.xml"
-        if (Test-Path $flexConfig) {
-            python3 -c "
-import re, sys
-path = sys.argv[1]
-with open(path, 'r', encoding='utf-8') as f:
-    c = f.read()
-c = c.replace('{playerglobalHome}', 'C:/flex-sdk/frameworks/libs/player')
-c = re.sub(r'<local-fonts-snapshot[^/]*/>', '', c)
-c = re.sub(r'<local-fonts-snapshot[^>]*>.*?</local-fonts-snapshot>', '', c, flags=re.DOTALL)
-with open(path, 'w', encoding='utf-8') as f:
-    f.write(c)
-print('flex-config.xml patched OK')
-" $flexConfig
+        $cfg = "C:\flex-sdk\frameworks\flex-config.xml"
+        if (Test-Path $cfg) {
+            $txt = [System.IO.File]::ReadAllText($cfg)
+            $txt = $txt.Replace('{playerglobalHome}', 'C:/flex-sdk/frameworks/libs/player')
+            $txt = [System.Text.RegularExpressions.Regex]::Replace($txt, '<local-fonts-snapshot[^/]*/>', '')
+            $txt = [System.Text.RegularExpressions.Regex]::Replace($txt, '(?s)<local-fonts-snapshot[^>]*>.*?</local-fonts-snapshot>', '')
+            [System.IO.File]::WriteAllText($cfg, $txt)
+            Write-Host "flex-config.xml patched OK"
         }
 
     - name: Install dependencies
@@ -140,10 +134,8 @@ print('flex-config.xml patched OK')
         Write-Host "source-path : $srcDir"
         Write-Host "playerglobal: $swcPath"
         Write-Host "entry point : $mainAs"
-        Write-Host "flex-config : $flexCfg"
-        Write-Host "mxmlc.jar   : $jar"
 
-        if (-not (Test-Path $jar)) { Write-Error "mxmlc.jar not found at $jar"; exit 1 }
+        if (-not (Test-Path $jar)) { Write-Error "mxmlc.jar not found"; exit 1 }
 
         & java "-jar" $jar "-load-config=$flexCfg" "-source-path+=$srcDir" "-library-path+=$swcPath" "-output=$outSwf" "-target-player=${{ env.FLASH_PLAYER_VERSION }}" "-swf-version=${{ env.SWF_VERSION }}" "-strict=true" "-optimize=true" "--" $mainAs
         $exitCode = $LASTEXITCODE
