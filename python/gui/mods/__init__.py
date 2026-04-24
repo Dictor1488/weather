@@ -466,11 +466,32 @@ def _register_weather_view():
 def _register_mods_list_entry():
     """
     modsListApi реєструється пізніше ніж init() —
-    тому чекаємо на лобі через g_eventBus або onAccountBecomePlayer.
+    тому чекаємо на лобі через callback.
+    Пробуємо кілька шляхів імпорту (WoT 2.2.x / 1.x).
     """
     def _do_register():
+        g_modsListApi = None
+        # WoT 2.x — modsListApi розташований в корені mods
+        for mod_path in (
+            'gui.mods.modsListApi',
+            'modsListApi',
+            'gui.modsListApi',
+        ):
+            try:
+                import importlib
+                m = importlib.import_module(mod_path)
+                g_modsListApi = getattr(m, 'g_modsListApi', None)
+                if g_modsListApi is not None:
+                    _log().info('modsListApi found at: %s', mod_path)
+                    break
+            except Exception:
+                pass
+
+        if g_modsListApi is None:
+            _log().warning('modsListApi not available in any known path')
+            return
+
         try:
-            from gui.mods.modsListApi import g_modsListApi
             g_modsListApi.addMod(
                 id='weather_panel',
                 name=u'Погода на картах',
@@ -483,7 +504,7 @@ def _register_mods_list_entry():
             )
             _log().info('modsListApi entry registered OK')
         except Exception as e:
-            _log().warning('modsListApi not available: %s', e)
+            _log().warning('modsListApi.addMod failed: %s', e)
 
     if not IN_GAME:
         return
