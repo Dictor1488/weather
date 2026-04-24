@@ -91,10 +91,35 @@ def _is_player_in_login_space():
     return False
 
 
+def _is_hangar_state_active():
+    """Returns True only when the lobby state machine is actually in the hangar state.
+    This prevents premature UI registration that breaks other mods' SWF views."""
+    try:
+        from gui.lobby_state_machine import g_stateMachine
+        state = g_stateMachine.getCurrentState()
+        if state is None:
+            return False
+        state_name = type(state).__name__.lower()
+        # Must be in a hangar/default state — NOT login, waiting, battleQueue, etc.
+        return 'hangar' in state_name or 'defaultlobby' in state_name
+    except Exception:
+        pass
+    # Fallback: check via AccountBecomePlayer flag — player must be a PlayerAccount
+    try:
+        from Account import PlayerAccount
+        p = BigWorld.player()
+        return isinstance(p, PlayerAccount)
+    except Exception:
+        pass
+    return False
+
+
 def _is_lobby_ready():
     if not IN_GAME:
         return False
     if _is_player_in_login_space():
+        return False
+    if not _is_hangar_state_active():
         return False
     return _get_lobby_app() is not None
 
