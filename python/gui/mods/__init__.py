@@ -25,7 +25,7 @@ def _get_input_handler():
 from weather_controller import g_controller
 
 WEATHER_PANEL_ALIAS = 'weatherPanel'
-WEATHER_PANEL_SWF   = 'weather/WeatherPanel.swf'
+WEATHER_PANEL_SWF   = 'WeatherPanel.swf'
 _VIEW_REGISTERED    = False
 
 _BATTLE_SPACE_HOOKS = []
@@ -434,44 +434,40 @@ def _get_window_layer():
 
 
 def _register_weather_view():
+    """Register the custom Scaleform SWF window.
+
+    Important: WoT 2.2.x still accepts the old minimal ViewSettings form.
+    The test/reference mod uses exactly this form:
+        ViewSettings(alias, ViewClass, swf, WindowLayer.WINDOW, None, ScopeTemplates.GLOBAL_SCOPE)
+    The previous GroupedViewSettings/DEFAULT_SCOPE registration can register
+    without an obvious error, but the view may not be opened as a normal
+    standalone window from ModsSettingsAPI.
+    """
     global _VIEW_REGISTERED
     if _VIEW_REGISTERED:
         return
     try:
         from weather_window import WeatherWindowMeta
-        from gui.Scaleform.framework import g_entitiesFactories, ScopeTemplates
+        from gui.Scaleform.framework import g_entitiesFactories, ScopeTemplates, ViewSettings
         layer = _get_window_layer()
-
-        # Correct location in WoT 2.x: GroupedViewSettings is exported from
-        # gui.Scaleform.framework, not gui.Scaleform.framework.entities.GroupedView.
-        try:
-            from gui.Scaleform.framework import GroupedViewSettings
-            settings = GroupedViewSettings(
-                WEATHER_PANEL_ALIAS, WeatherWindowMeta, WEATHER_PANEL_SWF,
-                layer, None, None, ScopeTemplates.DEFAULT_SCOPE,
-                False, None, True, True, False, True
-            )
-            g_entitiesFactories.addSettings(settings)
-            _VIEW_REGISTERED = True
-            _log().info('Weather view registered (GroupedViewSettings): alias=%s swf=%s layer=%s',
-                        WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, layer)
-            return
-        except Exception as e:
-            _log().info('_register: GroupedViewSettings failed: %s', e)
-
-        from gui.Scaleform.framework import ViewSettings
         settings = ViewSettings(
-            WEATHER_PANEL_ALIAS, WeatherWindowMeta, WEATHER_PANEL_SWF,
-            layer, None, ScopeTemplates.DEFAULT_SCOPE,
-            False, None, True, True, False, True
+            WEATHER_PANEL_ALIAS,
+            WeatherWindowMeta,
+            WEATHER_PANEL_SWF,
+            layer,
+            None,
+            ScopeTemplates.GLOBAL_SCOPE
         )
+        try:
+            g_entitiesFactories.removeSettings(WEATHER_PANEL_ALIAS)
+        except Exception:
+            pass
         g_entitiesFactories.addSettings(settings)
         _VIEW_REGISTERED = True
-        _log().info('Weather view registered (ViewSettings): alias=%s swf=%s layer=%s',
+        _log().info('Weather custom view registered: alias=%s swf=%s layer=%s scope=GLOBAL',
                     WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, layer)
     except Exception:
-        _log().exception('Weather view registration failed')
-
+        _log().exception('Weather custom view registration failed')
 
 def _register_mods_list_entry():
     """
@@ -526,29 +522,58 @@ def _register_mods_list_entry():
         _do_register()
 
 
-def open_weather_window():
-    _register_weather_view()
-    try:
-        from gui.Scaleform.framework.managers.loaders import SFViewLoadParams
-        app = None
-        try:
-            from gui.app_loader import g_appLoader
-            app = g_appLoader.getDefLobbyApp()
-        except Exception:
-            pass
-        if app is None:
-            try:
-                from gui.shared.utils.functions import getDefLobbyApp
-                app = getDefLobbyApp()
-            except Exception:
-                pass
-        if app is not None:
-            app.loadView(SFViewLoadParams(WEATHER_PANEL_ALIAS))
-            return
-        _log().warning('open_weather_window: no lobby app found')
-    except Exception:
-        _log().exception('open_weather_window failed')
+def open_weather_window(*args, **kwargs):
+    """Open the big custom WeatherPanel.swf window.
 
+    Accept *args/**kwargs because ModsSettingsAPI / ModsListAPI may pass
+    linkage or button context arguments to callbacks.
+    """
+    _register_weather_view()
+
+    def _load():
+        try:
+            from gui.Scaleform.framework.managers.loaders import SFViewLoadParams
+            app = None
+            try:
+                from gui.app_loader import g_appLoader
+                app = g_appLoader.getDefLobbyApp()
+            except Exception as e:
+                _log().info('open_weather_window: getDefLobbyApp via g_appLoader failed: %s', e)
+            if app is None:
+                try:
+                    from gui.shared.utils.functions import getDefLobbyApp
+                    app = getDefLobbyApp()
+                except Exception as e:
+                    _log().info('open_weather_window: getDefLobbyApp fallback failed: %s', e)
+            if app is None:
+                _log().warning('open_weather_window: no lobby app found')
+                return
+
+            params = SFViewLoadParams(WEATHER_PANEL_ALIAS)
+            _log().info('open_weather_window: loadView alias=%s swf=%s app=%s',
+                        WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, app)
+            try:
+                app.loadView(params)
+                return
+            except Exception as e:
+                _log().warning('open_weather_window: app.loadView failed: %s', e)
+
+            # Older/alternate loader fallback.
+            try:
+                loader = getattr(app, 'loaderManager', None)
+                if loader is not None:
+                    loader.loadView(params)
+                    return
+            except Exception as e:
+                _log().warning('open_weather_window: loaderManager.loadView failed: %s', e)
+        except Exception:
+            _log().exception('open_weather_window failed')
+
+    try:
+        import BigWorld
+        BigWorld.callback(0.05, _load)
+    except Exception:
+        _load()
 
 def _on_settings_changed(linkage, newSettings):
     current_general = g_controller.getGeneralWeights()

@@ -190,14 +190,19 @@ def main():
     if pathlib.Path('resources/in').is_dir():
         copytree('resources/in', str(temp_dir / 'res'))
 
-    # SWF — копіюємо в res/gui/flash/weather/
+    # SWF — основний шлях як у working/reference Scaleform mods:
+    # ViewSettings(..., 'WeatherPanel.swf', ...) => res/gui/flash/WeatherPanel.swf
+    # Додатково кладемо копію в res/gui/flash/weather/ для сумісності зі старими білдами.
     swf_src = pathlib.Path('as3/bin/WeatherPanel.swf')
     if not swf_src.is_file():
         raise FileNotFoundError('SWF not found: as3/bin/WeatherPanel.swf. Build AS3 first with Flex/mxmlc.')
-    swf_dest = temp_dir / 'res' / 'gui' / 'flash' / 'weather'
-    swf_dest.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(str(swf_src), str(swf_dest / 'WeatherPanel.swf'))
-    logger.info('SWF copied: WeatherPanel.swf (%s bytes) -> res/gui/flash/weather/', swf_src.stat().st_size)
+    swf_root = temp_dir / 'res' / 'gui' / 'flash'
+    swf_root.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(swf_src), str(swf_root / 'WeatherPanel.swf'))
+    swf_compat = swf_root / 'weather'
+    swf_compat.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(swf_src), str(swf_compat / 'WeatherPanel.swf'))
+    logger.info('SWF copied: WeatherPanel.swf (%s bytes) -> res/gui/flash/ and res/gui/flash/weather/', swf_src.stat().st_size)
 
     # Створюємо .wotmod
     zip_folder(str(temp_dir), str(build_dir / package_name))
