@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -19,43 +18,6 @@ try:
     import psutil
 except ImportError:
     raise ImportError("psutil is not installed. Run 'pip install psutil'.")
-
-
-MAP_THUMB_IDS = [
-    '01_karelia', '02_malinovka', '04_himmelsdorf', '05_prohorovka', '06_ensk',
-    '07_lakeville', '08_ruinberg', '10_hills', '11_murovanka', '13_erlenberg',
-    '14_siegfried_line', '17_munchen', '18_cliff', '19_monastery', '23_westfeld',
-    '28_desert', '29_el_hallouf', '31_airfield', '33_fjord', '34_redshire',
-    '35_steppes', '36_fishing_bay', '37_caucasus', '38_mannerheim_line',
-    '44_north_america', '45_north_america', '47_canada_a', '59_asia_great_wall',
-    '60_asia_miao', '63_tundra', '90_minsk', '95_lost_city_ctf', '99_poland',
-    '101_dday', '105_germany', '112_eiffel_tower_ctf', '114_czech', '115_sweden',
-    '121_lost_paradise_v', '127_japort', '128_last_frontier_v',
-    '208_bf_epic_normandy', '209_wg_epic_suburbia', '210_bf_epic_desert',
-    '212_epic_random_valley', '217_er_alaska', '222_er_clime',
-]
-
-IMAGE_RE = re.compile(r'\.(png|jpg|jpeg)$', re.I)
-GOOD_IMAGE_HINTS = (
-    'minimap', 'preview', 'loading', 'map', 'maps', 'arena', 'battle_loading',
-    'thumbnail', 'thumb', 'screen', 'screenshot', 'icons',
-)
-BAD_IMAGE_HINTS = (
-    'normal', 'height', 'splat', 'blend', 'mask', 'noise', 'detail', 'terrain',
-    'flora', 'water', 'sky', 'shadow', 'lightmap', 'ao', 'color_grading', 'lut',
-)
-COMMON_INSTALL_DIRS = (
-    'World_of_Tanks_EU',
-    'World_of_Tanks',
-    'Games/World_of_Tanks_EU',
-    'Games/World_of_Tanks',
-    'Wargaming/World_of_Tanks_EU',
-    'Wargaming/World_of_Tanks',
-    'Program Files/World_of_Tanks_EU',
-    'Program Files/World_of_Tanks',
-    'Program Files (x86)/World_of_Tanks_EU',
-    'Program Files (x86)/World_of_Tanks',
-)
 
 
 class ElapsedFormatter(logging.Formatter):
@@ -139,156 +101,6 @@ def zip_folder(source, destination, mode='w', compression=zipfile.ZIP_STORED):
                 zf.writestr(info, fp.read_bytes())
 
 
-def normalize_path(path):
-    if not path:
-        return None
-    return pathlib.Path(os.path.expandvars(os.path.expanduser(str(path)))).resolve()
-
-
-def is_game_folder(path):
-    return bool(path and (path / 'res' / 'packages').is_dir())
-
-
-def iter_parent_dirs(path):
-    path = normalize_path(path)
-    seen = set()
-    while path and str(path).lower() not in seen:
-        seen.add(str(path).lower())
-        yield path
-        if path.parent == path:
-            break
-        path = path.parent
-
-
-def iter_windows_drives():
-    for letter in 'CDEFGHIJKLMNOPQRSTUVWXYZ':
-        root = pathlib.Path(letter + ':/')
-        if root.is_dir():
-            yield root
-
-
-def find_game_folder(config_path: Optional[str]) -> Optional[pathlib.Path]:
-    candidates = []
-    env_path = os.environ.get('WOT_FOLDER')
-    if env_path:
-        candidates.append(env_path)
-    if config_path:
-        candidates.append(config_path)
-    candidates.extend(iter_parent_dirs(pathlib.Path.cwd()))
-    for drive in iter_windows_drives():
-        for rel in COMMON_INSTALL_DIRS:
-            candidates.append(drive / rel)
-
-    seen = set()
-    for candidate in candidates:
-        path = normalize_path(candidate)
-        if not path:
-            continue
-        key = str(path).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        if is_game_folder(path):
-            return path
-    return None
-
-
-def detect_game_version(game_folder: Optional[pathlib.Path], configured: Optional[str]) -> str:
-    env_version = os.environ.get('WOT_VERSION')
-    if env_version:
-        return env_version
-    if configured:
-        return configured
-    if game_folder is None:
-        return ''
-    mods_dir = game_folder / 'mods'
-    if not mods_dir.is_dir():
-        return ''
-    versions = [p.name for p in mods_dir.iterdir() if p.is_dir()]
-    versions.sort(reverse=True)
-    return versions[0] if versions else ''
-
-
-def score_image_member(name: str, map_id: str) -> int:
-    low = name.lower().replace('\\', '/')
-    if not IMAGE_RE.search(low):
-        return -9999
-    score = 0
-    if map_id.lower() in low:
-        score += 50
-    for hint in GOOD_IMAGE_HINTS:
-        if hint in low:
-            score += 10
-    for hint in BAD_IMAGE_HINTS:
-        if hint in low:
-            score -= 30
-    if '/gui/' in low:
-        score += 30
-    if '/spaces/' in low:
-        score += 5
-    if low.endswith('.png'):
-        score += 5
-    if 'hd' in low:
-        score -= 3
-    return score
-
-
-def find_map_pkg(packages_dir: pathlib.Path, map_id: str) -> Optional[pathlib.Path]:
-    exact = packages_dir / f'{map_id}.pkg'
-    if exact.is_file():
-        return exact
-    candidates = []
-    for fp in packages_dir.glob(f'{map_id}*.pkg'):
-        low = fp.name.lower()
-        if '_hd' not in low:
-            candidates.append(fp)
-    candidates.sort(key=lambda p: p.name)
-    return candidates[0] if candidates else None
-
-
-def extract_one_map_thumb(packages_dir: pathlib.Path, out_dir: pathlib.Path, map_id: str) -> bool:
-    pkg = find_map_pkg(packages_dir, map_id)
-    if not pkg:
-        return False
-    try:
-        with zipfile.ZipFile(str(pkg), 'r') as zf:
-            best_name = None
-            best_score = -9999
-            for name in zf.namelist():
-                score = score_image_member(name, map_id)
-                if score > best_score:
-                    best_score = score
-                    best_name = name
-            if not best_name or best_score < 0:
-                return False
-            data = zf.read(best_name)
-            if not data:
-                return False
-            out_dir.mkdir(parents=True, exist_ok=True)
-            (out_dir / f'{map_id}.png').write_bytes(data)
-            logger.debug('Map thumb: %s <- %s', map_id, best_name)
-            return True
-    except Exception as e:
-        logger.debug('Map thumb skipped: %s (%s)', map_id, e)
-        return False
-
-
-def extract_map_thumbs(game_folder: Optional[pathlib.Path], res_root: pathlib.Path) -> None:
-    if game_folder is None:
-        logger.warning('Map thumbs skipped: game folder not found. CI builds need prepacked resources/in/gui/maps/icons/weather/maps/*.png')
-        return
-    packages_dir = game_folder / 'res' / 'packages'
-    if not packages_dir.is_dir():
-        logger.warning('Map thumbs skipped: packages folder not found: %s', packages_dir)
-        return
-    out_dir = res_root / 'gui' / 'maps' / 'icons' / 'weather' / 'maps'
-    ok = 0
-    for map_id in MAP_THUMB_IDS:
-        if extract_one_map_thumb(packages_dir, out_dir, map_id):
-            ok += 1
-    logger.info('Map thumbs extracted: %s/%s -> %s', ok, len(MAP_THUMB_IDS), out_dir)
-
-
 def build_python(config: AppConfig) -> None:
     python_dir = pathlib.Path('python')
     if not python_dir.exists():
@@ -324,18 +136,10 @@ def main():
     with config_path.open('r', encoding='utf-8') as f:
         config = AppConfig(json.load(f))
 
-    game_folder = find_game_folder(config.game.folder)
-    game_version = detect_game_version(game_folder, config.game.version)
-    if (args.ingame or args.run) and game_folder is None:
-        raise ValueError('Game folder not found. Set WOT_FOLDER or build.json game.folder.')
-    if not game_version and (args.ingame or args.distribute):
-        raise ValueError('Game version not configured and could not be detected from mods/ folder.')
-    if game_folder:
-        logger.info('Game folder: %s', game_folder)
-    else:
-        logger.warning('Game folder not found; packaging without extracting map thumbnails from res/packages.')
-    if game_version:
-        logger.info('Game version: %s', game_version)
+    game_folder = pathlib.Path(os.environ.get('WOT_FOLDER', config.game.folder or ''))
+    game_version = os.environ.get('WOT_VERSION', config.game.version or '')
+    if not game_folder or not game_version:
+        raise ValueError("Game folder or version not configured.")
 
     temp_dir = pathlib.Path('temp')
     build_dir = pathlib.Path('build')
@@ -367,12 +171,14 @@ def main():
         copytree('resources/in', str(temp_dir / 'res'))
         logger.info('Resources copied: resources/in -> res/')
 
-    extract_map_thumbs(game_folder, temp_dir / 'res')
-
-    gui_src = temp_dir / 'res' / 'gui'
-    if gui_src.is_dir():
-        copytree(str(gui_src), str(temp_dir / 'res/gui/flash/gui'))
-        logger.info('GUI resources duplicated: res/gui -> res/gui/flash/gui/')
+        # Flash Loader inside WeatherPanel.swf resolves gui/... relative to res/gui/flash/.
+        # Duplicate GUI assets there so both Python/client paths and SWF Loader paths work:
+        #   res/gui/maps/...              normal WoT resource path
+        #   res/gui/flash/gui/maps/...    Scaleform Loader relative path
+        gui_src = pathlib.Path('resources/in/gui')
+        if gui_src.is_dir():
+            copytree(str(gui_src), str(temp_dir / 'res/gui/flash/gui'))
+            logger.info('GUI resources duplicated: resources/in/gui -> res/gui/flash/gui/')
 
     swf_src = pathlib.Path('as3/bin/WeatherPanel.swf')
     if not swf_src.is_file():
