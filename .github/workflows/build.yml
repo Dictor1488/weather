@@ -91,11 +91,16 @@ jobs:
         Copy-Item $libsPlayerGlobal "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
         $cfg = "C:\flex-sdk\frameworks\flex-config.xml"
         if (Test-Path $cfg) {
+            Write-Host "=== flex-config.xml before patch ==="
+            Select-String -Path $cfg -Pattern "localFonts|playerglobalHome" | ForEach-Object { Write-Host $_.Line }
             $txt = [System.IO.File]::ReadAllText($cfg)
             $txt = $txt.Replace('{playerglobalHome}', 'C:/flex-sdk/frameworks/libs/player')
-            $txt = [System.Text.RegularExpressions.Regex]::Replace($txt, '<local-fonts-snapshot[^/]*/>', '')
-            $txt = [System.Text.RegularExpressions.Regex]::Replace($txt, '(?s)<local-fonts-snapshot[^>]*>.*?</local-fonts-snapshot>', '')
+            $txt = $txt.Replace('<local-fonts-snapshot>./localFonts.ser</local-fonts-snapshot>', '')
+            $txt = $txt.Replace('<local-fonts-snapshot>localFonts.ser</local-fonts-snapshot>', '')
+            $txt = [System.Text.RegularExpressions.Regex]::Replace($txt, '<local-fonts-snapshot>[^<]*</local-fonts-snapshot>', '')
             [System.IO.File]::WriteAllText($cfg, $txt)
+            Write-Host "=== flex-config.xml after patch ==="
+            Select-String -Path $cfg -Pattern "localFonts" | ForEach-Object { Write-Host $_.Line }
             Write-Host "flex-config.xml patched OK"
         }
 
