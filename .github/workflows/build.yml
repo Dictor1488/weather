@@ -158,12 +158,17 @@ jobs:
                 "-strict=true", "-optimize=true", "--"
             )
             $mxmlcArgs += $mainClassPath
-            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs -NoNewWindow -Wait -PassThru -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
-            Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
-            if ($process.ExitCode -ne 0) { Write-Error "Compilation failed"; exit 1 }
+            Write-Host "=== FULL COMMAND ==="
+            Write-Host "$mxmlcPath $($mxmlcArgs -join ' ')"
+            Write-Host "===================="
+            $cmdStr = $mxmlcArgs -join " "
+            cmd /c "`"$mxmlcPath`" $cmdStr > out.txt 2>&1"
+            $exitCode = $LASTEXITCODE
+            Get-Content "out.txt" -ErrorAction SilentlyContinue | Write-Host
+            if ($exitCode -ne 0) { Write-Error "Compilation failed"; exit 1 }
             $sz = (Get-Item $outputSwf).Length
             Write-Host "SUCCESS: $swfName ($([math]::Round($sz/1KB,2)) KB)" -ForegroundColor Green
-            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
+            Remove-Item "out.txt" -Force -ErrorAction SilentlyContinue
         }
 
     - name: Create build.json
