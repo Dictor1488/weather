@@ -146,7 +146,6 @@ def _get_space_name_from_avatar(avatar):
 
 def _get_space_name_for_become_player(avatar):
     log = _log()
-    # Спосіб 1: arenaTypeID + ArenaType.g_cache
     try:
         arena_type_id = getattr(avatar, 'arenaTypeID', None)
         if arena_type_id:
@@ -155,17 +154,14 @@ def _get_space_name_for_become_player(avatar):
             if arena_type:
                 name = _extract_space_name_from_arena_type(arena_type)
                 if name:
-                    log.info('_get_space_name_for_become_player: arenaTypeID=%s -> %s',
-                             arena_type_id, name)
+                    log.info('_get_space_name_for_become_player: arenaTypeID=%s -> %s', arena_type_id, name)
                     return name
     except Exception as e:
         log.warning('_get_space_name_for_become_player: arenaTypeID ERR: %s', e)
-    # Спосіб 2: arena.arenaType
     name = _get_space_name_from_avatar(avatar)
     if name:
         log.info('_get_space_name_for_become_player: via arena.arenaType = %s', name)
         return name
-    # Спосіб 3: arena.geometryName напряму
     try:
         arena = getattr(avatar, 'arena', None)
         if arena:
@@ -200,7 +196,6 @@ def _install_battle_space_hook():
             return
         cls = Avatar.PlayerAvatar
 
-        # onBecomePlayer — найраніший момент
         if hasattr(cls, 'onBecomePlayer'):
             orig_bp = cls.onBecomePlayer
             def make_bp_wrapper(orig):
@@ -225,7 +220,6 @@ def _install_battle_space_hook():
             _BATTLE_SPACE_HOOKS.append((cls, 'onBecomePlayer', orig_bp))
             log.info('Installed EARLY hook: Avatar.PlayerAvatar.onBecomePlayer')
 
-        # onEnterWorld — запасний
         if hasattr(cls, 'onEnterWorld'):
             original = cls.onEnterWorld
             def make_wrapper(orig):
@@ -238,9 +232,6 @@ def _install_battle_space_hook():
                             else:
                                 _log().info('onEnterWorld: space=%s writing', space_name)
                                 g_controller.onSpaceEntered(space_name)
-
-                        # Створюємо LSEnvironmentSwitcher через 2 секунди після входу
-                        # щоб BigWorld встиг ініціалізувати компоненти простору
                         try:
                             space_id = getattr(self, 'spaceID', None)
                             if space_id and IN_GAME:
@@ -253,7 +244,6 @@ def _install_battle_space_hook():
                                 BigWorld.callback(2.0, _delayed_create)
                         except Exception as e:
                             _log().info('switcher scheduling ERR: %s', e)
-
                     except Exception:
                         _log().exception('onEnterWorld hook failed')
                     return orig(self, *args, **kwargs)
@@ -262,7 +252,6 @@ def _install_battle_space_hook():
             _BATTLE_SPACE_HOOKS.append((cls, 'onEnterWorld', original))
             log.info('Installed FALLBACK hook: Avatar.PlayerAvatar.onEnterWorld')
 
-        # onLeaveWorld — записуємо пресет для наступного бою
         if hasattr(cls, 'onLeaveWorld'):
             orig_lw = cls.onLeaveWorld
             def make_lw_wrapper(orig):
@@ -271,20 +260,15 @@ def _install_battle_space_hook():
                         space_name = _get_space_name_from_avatar(self)
                         preset_id  = g_controller.getCurrentPreset()
                         _log().info('onLeaveWorld: space=%s preset=%s -> writing files', space_name, preset_id)
-                        # Скидаємо switcher - він невалідний поза боєм
                         try:
                             import weather_controller
                             weather_controller._persistent_switcher = None
                         except Exception:
                             pass
-                        # v8: write_environments_xml + environments.json для НАСТУПНОГО бою
-                        from weather_controller import (write_environments_xml,
-                                                        write_space_settings,
-                                                        _write_environments_json)
+                        from weather_controller import (write_environments_xml, write_space_settings, _write_environments_json)
                         if space_name:
                             write_environments_xml(space_name, preset_id)
                             write_space_settings(space_name, preset_id)
-                            # environments.json з усіма guid-ами — WoT прочитає при наступному вході
                             _write_environments_json(space_name, preset_id)
                     except Exception:
                         _log().exception('onLeaveWorld hook failed')
@@ -307,10 +291,6 @@ def _remove_battle_space_hook():
             _log().exception('Failed to remove battle space hook')
 
 
-# ---------------------------------------------------------------------------
-# Клавіатура
-# ---------------------------------------------------------------------------
-
 def _hotkey_matches(key_code):
     return bool(_HARDCODED_TRIGGER_KEY) and key_code == _HARDCODED_TRIGGER_KEY
 
@@ -318,7 +298,7 @@ def _hotkey_matches(key_code):
 def _handle_hotkey_trigger(key_code):
     in_battle = False
     try:
-        player    = BigWorld.player()
+        player = BigWorld.player()
         in_battle = player is not None and getattr(player, 'arena', None) is not None
     except Exception:
         pass
@@ -332,7 +312,7 @@ def _extract_key_event_data(event_or_key):
     is_down = True
     try:
         if hasattr(event_or_key, 'key'):
-            key     = getattr(event_or_key, 'key', None)
+            key = getattr(event_or_key, 'key', None)
             is_down = bool(event_or_key.isKeyDown()) if hasattr(event_or_key, 'isKeyDown') else True
         else:
             key = int(event_or_key)
@@ -389,7 +369,6 @@ def _install_key_hook():
                 log.info('Key hook: InputHandler.g_instance.onKeyDown OK (fallback)')
         except Exception:
             log.exception('Failed to install InputHandler key hook')
-
     _KEY_HOOK_INSTALLED = installed
 
 
@@ -409,17 +388,7 @@ def _remove_key_hook():
     _KEY_HOOK_INSTALLED = False
 
 
-# ---------------------------------------------------------------------------
-# Mod Settings API
-# ---------------------------------------------------------------------------
-
 def _get_window_layer():
-    """WoT 2.x uses frameworks.wulf.WindowLayer, not old ViewTypes.
-
-    In 2.2.x WindowLayer.WINDOW == 7. The old fallback value 3 is
-    WindowLayer.MARKER, so the SWF can be registered but never appear as
-    a normal window.
-    """
     try:
         from frameworks.wulf import WindowLayer
         return WindowLayer.WINDOW
@@ -434,15 +403,6 @@ def _get_window_layer():
 
 
 def _register_weather_view():
-    """Register the custom Scaleform SWF window.
-
-    Important: WoT 2.2.x still accepts the old minimal ViewSettings form.
-    The test/reference mod uses exactly this form:
-        ViewSettings(alias, ViewClass, swf, WindowLayer.WINDOW, None, ScopeTemplates.GLOBAL_SCOPE)
-    The previous GroupedViewSettings/DEFAULT_SCOPE registration can register
-    without an obvious error, but the view may not be opened as a normal
-    standalone window from ModsSettingsAPI.
-    """
     global _VIEW_REGISTERED
     if _VIEW_REGISTERED:
         return
@@ -450,43 +410,22 @@ def _register_weather_view():
         from weather_window import WeatherWindowMeta
         from gui.Scaleform.framework import g_entitiesFactories, ScopeTemplates, ViewSettings
         layer = _get_window_layer()
-        settings = ViewSettings(
-            WEATHER_PANEL_ALIAS,
-            WeatherWindowMeta,
-            WEATHER_PANEL_SWF,
-            layer,
-            None,
-            ScopeTemplates.GLOBAL_SCOPE
-        )
+        settings = ViewSettings(WEATHER_PANEL_ALIAS, WeatherWindowMeta, WEATHER_PANEL_SWF, layer, None, ScopeTemplates.GLOBAL_SCOPE)
         try:
             g_entitiesFactories.removeSettings(WEATHER_PANEL_ALIAS)
         except Exception:
             pass
         g_entitiesFactories.addSettings(settings)
         _VIEW_REGISTERED = True
-        _log().info('Weather custom view registered: alias=%s swf=%s layer=%s scope=GLOBAL',
-                    WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, layer)
+        _log().info('Weather custom view registered: alias=%s swf=%s layer=%s scope=GLOBAL', WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, layer)
     except Exception:
         _log().exception('Weather custom view registration failed')
 
 
 def _register_mods_list_entry():
-    """
-    modsListApi реєструється пізніше ніж init() —
-    тому чекаємо на лобі через callback.
-    Пробуємо кілька шляхів імпорту (WoT 2.2.x / 1.x).
-
-    У різних версіях ModsListAPI метод називається по-різному:
-    addModification / addMod / add, тому реєструємо через сумісний wrapper.
-    """
     def _do_register():
         g_modsListApi = None
-        # WoT 2.x — modsListApi розташований в корені mods
-        for mod_path in (
-            'gui.mods.modsListApi',
-            'modsListApi',
-            'gui.modsListApi',
-        ):
+        for mod_path in ('gui.mods.modsListApi', 'modsListApi', 'gui.modsListApi'):
             try:
                 import importlib
                 m = importlib.import_module(mod_path)
@@ -496,39 +435,29 @@ def _register_mods_list_entry():
                     break
             except Exception:
                 pass
-
         if g_modsListApi is None:
             _log().warning('modsListApi not available in any known path')
             return
-
         entry = {
-            'id':          'weather_panel',
-            'name':        u'Погода на картах',
+            'id': 'weather_panel',
+            'name': u'Погода на картах',
             'description': u'Налаштування погодних пресетів для кожної карти',
-            'icon':        'gui/maps/icons/pro.environment/modsList.png',
-            'enabled':     True,
-            'login':       False,
-            'lobby':       True,
-            'callback':    open_weather_window,
+            'icon': 'gui/maps/icons/pro.environment/modsList.png',
+            'enabled': True,
+            'login': False,
+            'lobby': True,
+            'callback': open_weather_window,
         }
-
         def _try_register(method_name):
             method = getattr(g_modsListApi, method_name, None)
             if method is None:
                 return False
-
             attempts = (
                 lambda: method(**entry),
-                lambda: method(entry['id'], entry['name'], entry['description'],
-                               entry['icon'], entry['enabled'], entry['login'],
-                               entry['lobby'], entry['callback']),
-                lambda: method(entry['id'], entry['name'], entry['icon'],
-                               entry['enabled'], entry['login'], entry['lobby'],
-                               entry['callback']),
-                lambda: method(entry['id'], entry['name'], entry['description'],
-                               entry['icon'], entry['callback']),
+                lambda: method(entry['id'], entry['name'], entry['description'], entry['icon'], entry['enabled'], entry['login'], entry['lobby'], entry['callback']),
+                lambda: method(entry['id'], entry['name'], entry['icon'], entry['enabled'], entry['login'], entry['lobby'], entry['callback']),
+                lambda: method(entry['id'], entry['name'], entry['description'], entry['icon'], entry['callback']),
             )
-
             last_error = None
             for call in attempts:
                 try:
@@ -540,26 +469,21 @@ def _register_mods_list_entry():
                 except Exception as e:
                     _log().warning('modsListApi.%s failed: %s', method_name, e)
                     return False
-
             _log().warning('modsListApi.%s signature mismatch: %s', method_name, last_error)
             return False
-
         registered = False
         for method_name in ('addModification', 'addMod', 'add'):
             if _try_register(method_name):
                 registered = True
                 break
-
         if not registered:
             try:
                 methods = [m for m in dir(g_modsListApi) if m.lower().startswith('add')]
             except Exception:
                 methods = []
             _log().warning('modsListApi entry registration failed; available add* methods=%s', methods)
-
     if not IN_GAME:
         return
-    # Реєструємо через callback щоб дати час modsListApi ініціалізуватись
     try:
         import BigWorld
         BigWorld.callback(1.0, _do_register)
@@ -568,15 +492,11 @@ def _register_mods_list_entry():
 
 
 def _get_lobby_app():
-    """Return the current Scaleform lobby app in old and new WoT clients."""
     app = None
-
-    # WoT 1.5+ removed gui.app_loader.g_appLoader. Use dependency/IAppLoader.
     try:
         from helpers import dependency
         from skeletons.gui.app_loader import IAppLoader
         app_loader = dependency.instance(IAppLoader)
-
         try:
             app = app_loader.getDefLobbyApp()
             if app is not None:
@@ -584,7 +504,6 @@ def _get_lobby_app():
                 return app
         except Exception as e:
             _log().info('_get_lobby_app: IAppLoader.getDefLobbyApp failed: %s', e)
-
         try:
             from gui.app_loader.settings import APP_NAME_SPACE
             namespaces = []
@@ -601,11 +520,8 @@ def _get_lobby_app():
                     _log().info('_get_lobby_app: IAppLoader.getApp(%s) failed: %s', ns, e)
         except Exception as e:
             _log().info('_get_lobby_app: APP_NAME_SPACE lookup failed: %s', e)
-
     except Exception as e:
         _log().info('_get_lobby_app: dependency/IAppLoader failed: %s', e)
-
-    # Very old clients fallback.
     try:
         from gui.app_loader import g_appLoader
         app = g_appLoader.getDefLobbyApp()
@@ -614,39 +530,26 @@ def _get_lobby_app():
             return app
     except Exception as e:
         _log().info('_get_lobby_app: old g_appLoader failed: %s', e)
-
     return None
 
 
 def open_weather_window(*args, **kwargs):
-    """Open the big custom WeatherPanel.swf window.
-
-    Accept *args/**kwargs because ModsSettingsAPI / ModsListAPI may pass
-    linkage or button context arguments to callbacks.
-    """
     _register_weather_view()
-
     def _load():
         try:
             from gui.Scaleform.framework.managers.loaders import SFViewLoadParams
-
             app = _get_lobby_app()
             if app is None:
                 _log().warning('open_weather_window: no lobby app found')
                 return
-
             params = SFViewLoadParams(WEATHER_PANEL_ALIAS)
-            _log().info('open_weather_window: loadView alias=%s swf=%s app=%s',
-                        WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, app)
-
+            _log().info('open_weather_window: loadView alias=%s swf=%s app=%s', WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, app)
             try:
                 app.loadView(params)
                 _log().info('open_weather_window: app.loadView OK')
                 return
             except Exception as e:
                 _log().warning('open_weather_window: app.loadView failed: %s', e)
-
-            # Older/alternate loader fallback.
             try:
                 loader = getattr(app, 'loaderManager', None)
                 if loader is not None:
@@ -655,12 +558,9 @@ def open_weather_window(*args, **kwargs):
                     return
             except Exception as e:
                 _log().warning('open_weather_window: loaderManager.loadView failed: %s', e)
-
             _log().warning('open_weather_window: all loadView attempts failed')
-
         except Exception:
             _log().exception('open_weather_window failed')
-
     try:
         import BigWorld
         BigWorld.callback(0.05, _load)
@@ -678,13 +578,11 @@ def _on_settings_changed(linkage, newSettings):
             changed_general = True
     if changed_general:
         g_controller.setGeneralWeights(current_general)
-
     map_idx = newSettings.get('active_map', 0)
     try:
         active_map = MAP_IDS[int(map_idx)]
     except (IndexError, TypeError, ValueError):
         active_map = ''
-
     if active_map:
         current_map = g_controller.getMapWeights(active_map)
         changed_map = False
@@ -707,7 +605,6 @@ def _apply_saved_settings(saved):
             changed = True
     if changed:
         g_controller.setGeneralWeights(current_general)
-
     map_idx = saved.get('active_map', 0)
     try:
         active_map = MAP_IDS[int(map_idx)]
@@ -723,19 +620,10 @@ def _apply_saved_settings(saved):
                 changed_map = True
         if changed_map:
             g_controller.setMapWeights(active_map, current_map)
-
     _load_hotkey_codes()
 
 
-# ---------------------------------------------------------------------------
-# init / fini
-# ---------------------------------------------------------------------------
-
 def _intercept_switcher_creation():
-    """
-    Перехоплюємо створення LSEnvironmentSwitcher щоб зберегти реальний екземпляр.
-    Коли WoT сам створить його — ми збережемо посилання.
-    """
     if not IN_GAME:
         return
     try:
@@ -746,18 +634,15 @@ def _intercept_switcher_creation():
         orig_init = sw_class.__init__
         if getattr(orig_init, '_weather_patched', False):
             return
-
         def patched_init(self, *args, **kwargs):
             result = orig_init(self, *args, **kwargs)
             try:
                 import weather_controller
                 weather_controller._persistent_switcher = self
-                _log().info('INTERCEPT: captured real LSEnvironmentSwitcher instance (spaceID=%s)',
-                           args[0] if args else '?')
+                _log().info('INTERCEPT: captured real LSEnvironmentSwitcher instance (spaceID=%s)', args[0] if args else '?')
             except Exception:
                 pass
             return result
-
         patched_init._weather_patched = True
         sw_class.__init__ = patched_init
         _log().info('LSEnvironmentSwitcher.__init__ patched for interception')
@@ -766,23 +651,17 @@ def _intercept_switcher_creation():
 
 
 def _patch_ls_env_switcher():
-    """Перехоплює _switchEnvironment для діагностики."""
     try:
         import LSArenaPhasesComponent as _ls
         sw = _ls.LSEnvironmentSwitcher
         orig_switch = sw._switchEnvironment
         orig_setup  = sw.setupEnvironment
-
         def patched_switch(self, *args, **kwargs):
-            _log().info('INTERCEPT _switchEnvironment: args=%s _spaceID=%s',
-                        args, getattr(self, '_spaceID', 'MISSING'))
+            _log().info('INTERCEPT _switchEnvironment: args=%s _spaceID=%s', args, getattr(self, '_spaceID', 'MISSING'))
             return orig_switch(self, *args, **kwargs)
-
         def patched_setup(self, *args, **kwargs):
-            _log().info('INTERCEPT setupEnvironment: args=%s _spaceID=%s',
-                        args, getattr(self, '_spaceID', 'MISSING'))
+            _log().info('INTERCEPT setupEnvironment: args=%s _spaceID=%s', args, getattr(self, '_spaceID', 'MISSING'))
             return orig_setup(self, *args, **kwargs)
-
         sw._switchEnvironment = patched_switch
         sw.setupEnvironment   = patched_setup
         _log().info('LSEnvironmentSwitcher patched for interception OK')
@@ -790,11 +669,59 @@ def _patch_ls_env_switcher():
         _log().warning('patch LSEnvSwitcher ERR: %s', e)
 
 
+def _register_mods_settings_status():
+    if not IN_GAME:
+        return
+    try:
+        from gui.modsSettingsApi import g_modsSettingsApi
+        from gui.modsSettingsApi import templates as t
+    except Exception as e:
+        _log().info('modsSettingsApi not available for status card: %s', e)
+        return
+
+    def _status_callback(linkage, newSettings):
+        try:
+            if 'enabled' in newSettings:
+                g_controller.setEnabled(bool(newSettings.get('enabled')))
+        except Exception:
+            _log().exception('modsSettingsApi status callback failed')
+
+    try:
+        enabled = True
+        try:
+            enabled = bool(g_controller.isEnabled())
+        except Exception:
+            pass
+        status_text = u'Статус: увімкнено' if enabled else u'Статус: вимкнено'
+        template = {
+            'modDisplayName': u'Погода на картах',
+            'enabled': enabled,
+            'column1': [
+                t.createLabel(text=status_text),
+                t.createEmpty(),
+                t.createLabel(text=u'Налаштування відкриваються через:'),
+                t.createLabel(text=u'Список модифікацій → Погода на картах'),
+            ],
+            'column2': [
+                t.createLabel(text=u'Ця сторінка лише показує статус мода.'),
+                t.createEmpty(),
+                t.createLabel(text=u'Слайдери та карти перенесені у власне вікно.'),
+            ],
+        }
+        g_modsSettingsApi.setModTemplate(
+            linkage='com.example.weather.status',
+            template=template,
+            callback=_status_callback,
+        )
+        _log().info('modsSettingsApi minimal status card registered OK')
+    except Exception:
+        _log().exception('modsSettingsApi minimal status registration failed')
+
+
 def init(*args, **kwargs):
     global _INIT_DONE
     if _INIT_DONE:
         return
-
     _patch_ls_env_switcher()
     _intercept_switcher_creation()
     _load_hotkey_codes()
@@ -802,12 +729,7 @@ def init(*args, **kwargs):
     _install_key_hook()
     _register_weather_view()
     _register_mods_list_entry()
-
-    # Не реєструємо сторінку в "Налаштування модифікацій".
-    # У мода тепер є власне SWF-вікно, яке відкривається через ModsListAPI.
-    # Старий g_modsSettingsApi.setModTemplate залишав дубльовані слайдери
-    # на екрані налаштувань модифікацій, тому його вимкнено.
-
+    _register_mods_settings_status()
     _INIT_DONE = True
 
 
