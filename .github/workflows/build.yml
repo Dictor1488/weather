@@ -145,6 +145,11 @@ jobs:
             $mxmlcArgs = @()
             $srcDir = Join-Path $projDir "."
             if (Test-Path $srcDir) { $mxmlcArgs += "-source-path+=$srcDir" }
+            Write-Host "projDir: $projDir"
+            Write-Host "srcDir: $srcDir"
+            Write-Host "mainClassPath: $mainClassPath"
+            Write-Host "AS3 files in srcDir:"
+            Get-ChildItem -Recurse $srcDir -Filter *.as | ForEach-Object { Write-Host "  $($_.FullName)" }
             $mxmlcArgs += $libArgs
             $mxmlcArgs += @(
                 "-output=$outputSwf",
