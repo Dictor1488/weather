@@ -149,10 +149,18 @@ def _register_weather_view():
             None,
             ScopeTemplates.GLOBAL_SCOPE,
         )
+        # Перевіряємо чи alias вже зареєстрований перш ніж видаляти,
+        # щоб не кидати виняток в factories.py який може зламати стан для інших модів.
+        existing = None
         try:
-            g_entitiesFactories.removeSettings(WEATHER_PANEL_ALIAS)
+            existing = g_entitiesFactories.getSettings(WEATHER_PANEL_ALIAS)
         except Exception:
             pass
+        if existing is not None:
+            try:
+                g_entitiesFactories.removeSettings(WEATHER_PANEL_ALIAS)
+            except Exception:
+                pass
         g_entitiesFactories.addSettings(settings)
         _VIEW_REGISTERED = True
         _log().info('Weather custom view registered: alias=%s swf=%s layer=%s scope=GLOBAL', WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, layer)
