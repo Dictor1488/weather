@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 DAAPI-міст між Flash (WeatherMediator.as) та weather_controller.
-
-Важливо: якщо AS3-кнопка "Закрити" сховала вікно, але Python close callback
-не дійшов, SFWindow може залишитись живим. Для цього тримаємо _active_window
-і при наступному відкритті просто повторно викликаємо as_setData(), що робить
-WeatherMediator.visible = true.
 """
 
 try:
@@ -39,67 +34,62 @@ LOG = logging.getLogger('weather_mod')
 
 _active_window = None
 
-# Flash Loader рахує шлях від res/gui/flash/WeatherPanel.swf.
-# URLRequest з відносним шляхом '../maps/...' = res/gui/maps/... (вбудовані WoT-ресурси)
-# і res/gui/maps/icons/pro.environment/ (власні PNG мода, пакуються в res/gui/maps/)
-# build.py тепер дублює resources/in/gui -> res/gui/flash/gui,
-# тому gui/maps/... працює для PNG, які лежать у resources/in/gui/maps/...
 PRESET_PREVIEW = {
-    'standard': '../maps/icons/pro.environment/default.png',
-    'midnight': '../maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png',
-    'overcast': '../maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png',
-    'sunset':   '../maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png',
-    'midday':   '../maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png',
+    'standard': 'img://gui/maps/icons/pro.environment/default.png',
+    'midnight': 'img://gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png',
+    'overcast': 'img://gui/maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png',
+    'sunset':   'img://gui/maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png',
+    'midday':   'img://gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png',
 }
 
 MAP_REGISTRY = [
-    ('01_karelia',             u'Карелія',            '../maps/icons/map/list/01_karelia.png'),
-    ('02_malinovka',           u'Малинівка',          '../maps/icons/map/list/02_malinovka.png'),
-    ('04_himmelsdorf',         u'Хіммельсдорф',       '../maps/icons/map/list/04_himmelsdorf.png'),
-    ('05_prohorovka',          u'Прохорівка',         '../maps/icons/map/list/05_prohorovka.png'),
-    ('06_ensk',                u'Єнськ',              '../maps/icons/map/list/06_ensk.png'),
-    ('07_lakeville',           u'Ласвілль',           '../maps/icons/map/list/07_lakeville.png'),
-    ('08_ruinberg',            u'Руїнберг',           '../maps/icons/map/list/08_ruinberg.png'),
-    ('10_hills',               u'Копальні',           '../maps/icons/map/list/10_hills.png'),
-    ('11_murovanka',           u'Мурованка',          '../maps/icons/map/list/11_murovanka.png'),
-    ('13_erlenberg',           u'Ерленберг',          '../maps/icons/map/list/13_erlenberg.png'),
-    ('14_siegfried_line',      u'Лінія Зигфріда',     '../maps/icons/map/list/14_siegfried_line.png'),
-    ('17_munchen',             u'Мюнхен',             '../maps/icons/map/list/17_munchen.png'),
-    ('18_cliff',               u'Круча',              '../maps/icons/map/list/18_cliff.png'),
-    ('19_monastery',           u'Монастир',           '../maps/icons/map/list/19_monastery.png'),
-    ('23_westfeld',            u'Вестфілд',           '../maps/icons/map/list/23_westfeld.png'),
-    ('28_desert',              u'Піщана ріка',        '../maps/icons/map/list/28_desert.png'),
-    ('29_el_hallouf',          u'Ель-Халлуф',         '../maps/icons/map/list/29_el_hallouf.png'),
-    ('31_airfield',            u'Летовище',           '../maps/icons/map/list/31_airfield.png'),
-    ('33_fjord',               u'Фіорди',             '../maps/icons/map/list/33_fjord.png'),
-    ('34_redshire',            u'Редшир',             '../maps/icons/map/list/34_redshire.png'),
-    ('35_steppes',             u'Степи',              '../maps/icons/map/list/35_steppes.png'),
-    ('36_fishing_bay',         u'Рибальська бухта',   '../maps/icons/map/list/36_fishing_bay.png'),
-    ('37_caucasus',            u'Кавказ',             '../maps/icons/map/list/37_caucasus.png'),
-    ('38_mannerheim_line',     u'Лінія Маннергейма',  '../maps/icons/map/list/38_mannerheim_line.png'),
-    ('44_north_america',       u'Лайв Окс',           '../maps/icons/map/list/44_north_america.png'),
-    ('45_north_america',       u'Хайвей',             '../maps/icons/map/list/45_north_america.png'),
-    ('47_canada_a',            u'Перлинна річка',     '../maps/icons/map/list/47_canada_a.png'),
-    ('59_asia_great_wall',     u'Велика стіна',       '../maps/icons/map/list/59_asia_great_wall.png'),
-    ('60_asia_miao',           u'Тихий берег',        '../maps/icons/map/list/60_asia_miao.png'),
-    ('63_tundra',              u'Тундра',             '../maps/icons/map/list/63_tundra.png'),
-    ('90_minsk',               u'Мінськ',             '../maps/icons/map/list/90_minsk.png'),
-    ('95_lost_city_ctf',       u'Загублене місто',    '../maps/icons/map/list/95_lost_city_ctf.png'),
-    ('99_poland',              u'Студзянки',          '../maps/icons/map/list/99_poland.png'),
-    ('101_dday',               u'Нормандія (D-Day)',  '../maps/icons/map/list/101_dday.png'),
-    ('105_germany',            u'Берлін',             '../maps/icons/map/list/105_germany.png'),
-    ('112_eiffel_tower_ctf',   u'Париж',              '../maps/icons/map/list/112_eiffel_tower_ctf.png'),
-    ('114_czech',              u'Промзона',           '../maps/icons/map/list/114_czech.png'),
-    ('115_sweden',             u'Кордон імперії',     '../maps/icons/map/list/115_sweden.png'),
-    ('121_lost_paradise_v',    u'Перевал',            '../maps/icons/map/list/121_lost_paradise_v.png'),
-    ('127_japort',             u'Стара гавань',       '../maps/icons/map/list/127_japort.png'),
-    ('128_last_frontier_v',    u'Фата-моргана',       '../maps/icons/map/list/128_last_frontier_v.png'),
-    ('208_bf_epic_normandy',   u'Оверлорд',           '../maps/icons/map/list/208_bf_epic_normandy.png'),
-    ('209_wg_epic_suburbia',   u'Крафтверк',          '../maps/icons/map/list/209_wg_epic_suburbia.png'),
-    ('210_bf_epic_desert',     u'Застава',            '../maps/icons/map/list/210_bf_epic_desert.png'),
-    ('212_epic_random_valley', u'Долина',             '../maps/icons/map/list/212_epic_random_valley.png'),
-    ('217_er_alaska',          u'Клондайк',           '../maps/icons/map/list/217_er_alaska.png'),
-    ('222_er_clime',           u'Вайдпарк',           '../maps/icons/map/list/222_er_clime.png'),
+    ('01_karelia',             u'Карелія',            'img://gui/maps/icons/map/list/01_karelia.png'),
+    ('02_malinovka',           u'Малинівка',          'img://gui/maps/icons/map/list/02_malinovka.png'),
+    ('04_himmelsdorf',         u'Хіммельсдорф',       'img://gui/maps/icons/map/list/04_himmelsdorf.png'),
+    ('05_prohorovka',          u'Прохорівка',         'img://gui/maps/icons/map/list/05_prohorovka.png'),
+    ('06_ensk',                u'Єнськ',              'img://gui/maps/icons/map/list/06_ensk.png'),
+    ('07_lakeville',           u'Ласвілль',           'img://gui/maps/icons/map/list/07_lakeville.png'),
+    ('08_ruinberg',            u'Руїнберг',           'img://gui/maps/icons/map/list/08_ruinberg.png'),
+    ('10_hills',               u'Копальні',           'img://gui/maps/icons/map/list/10_hills.png'),
+    ('11_murovanka',           u'Мурованка',          'img://gui/maps/icons/map/list/11_murovanka.png'),
+    ('13_erlenberg',           u'Ерленберг',          'img://gui/maps/icons/map/list/13_erlenberg.png'),
+    ('14_siegfried_line',      u'Лінія Зигфріда',     'img://gui/maps/icons/map/list/14_siegfried_line.png'),
+    ('17_munchen',             u'Мюнхен',             'img://gui/maps/icons/map/list/17_munchen.png'),
+    ('18_cliff',               u'Круча',              'img://gui/maps/icons/map/list/18_cliff.png'),
+    ('19_monastery',           u'Монастир',           'img://gui/maps/icons/map/list/19_monastery.png'),
+    ('23_westfeld',            u'Вестфілд',           'img://gui/maps/icons/map/list/23_westfeld.png'),
+    ('28_desert',              u'Піщана ріка',        'img://gui/maps/icons/map/list/28_desert.png'),
+    ('29_el_hallouf',          u'Ель-Халлуф',         'img://gui/maps/icons/map/list/29_el_hallouf.png'),
+    ('31_airfield',            u'Летовище',           'img://gui/maps/icons/map/list/31_airfield.png'),
+    ('33_fjord',               u'Фіорди',             'img://gui/maps/icons/map/list/33_fjord.png'),
+    ('34_redshire',            u'Редшир',             'img://gui/maps/icons/map/list/34_redshire.png'),
+    ('35_steppes',             u'Степи',              'img://gui/maps/icons/map/list/35_steppes.png'),
+    ('36_fishing_bay',         u'Рибальська бухта',   'img://gui/maps/icons/map/list/36_fishing_bay.png'),
+    ('37_caucasus',            u'Кавказ',             'img://gui/maps/icons/map/list/37_caucasus.png'),
+    ('38_mannerheim_line',     u'Лінія Маннергейма',  'img://gui/maps/icons/map/list/38_mannerheim_line.png'),
+    ('44_north_america',       u'Лайв Окс',           'img://gui/maps/icons/map/list/44_north_america.png'),
+    ('45_north_america',       u'Хайвей',             'img://gui/maps/icons/map/list/45_north_america.png'),
+    ('47_canada_a',            u'Перлинна річка',     'img://gui/maps/icons/map/list/47_canada_a.png'),
+    ('59_asia_great_wall',     u'Велика стіна',       'img://gui/maps/icons/map/list/59_asia_great_wall.png'),
+    ('60_asia_miao',           u'Тихий берег',        'img://gui/maps/icons/map/list/60_asia_miao.png'),
+    ('63_tundra',              u'Тундра',             'img://gui/maps/icons/map/list/63_tundra.png'),
+    ('90_minsk',               u'Мінськ',             'img://gui/maps/icons/map/list/90_minsk.png'),
+    ('95_lost_city_ctf',       u'Загублене місто',    'img://gui/maps/icons/map/list/95_lost_city_ctf.png'),
+    ('99_poland',              u'Студзянки',          'img://gui/maps/icons/map/list/99_poland.png'),
+    ('101_dday',               u'Нормандія (D-Day)',  'img://gui/maps/icons/map/list/101_dday.png'),
+    ('105_germany',            u'Берлін',             'img://gui/maps/icons/map/list/105_germany.png'),
+    ('112_eiffel_tower_ctf',   u'Париж',              'img://gui/maps/icons/map/list/112_eiffel_tower_ctf.png'),
+    ('114_czech',              u'Промзона',           'img://gui/maps/icons/map/list/114_czech.png'),
+    ('115_sweden',             u'Кордон імперії',     'img://gui/maps/icons/map/list/115_sweden.png'),
+    ('121_lost_paradise_v',    u'Перевал',            'img://gui/maps/icons/map/list/121_lost_paradise_v.png'),
+    ('127_japort',             u'Стара гавань',       'img://gui/maps/icons/map/list/127_japort.png'),
+    ('128_last_frontier_v',    u'Фата-моргана',       'img://gui/maps/icons/map/list/128_last_frontier_v.png'),
+    ('208_bf_epic_normandy',   u'Оверлорд',           'img://gui/maps/icons/map/list/208_bf_epic_normandy.png'),
+    ('209_wg_epic_suburbia',   u'Крафтверк',          'img://gui/maps/icons/map/list/209_wg_epic_suburbia.png'),
+    ('210_bf_epic_desert',     u'Застава',            'img://gui/maps/icons/map/list/210_bf_epic_desert.png'),
+    ('212_epic_random_valley', u'Долина',             'img://gui/maps/icons/map/list/212_epic_random_valley.png'),
+    ('217_er_alaska',          u'Клондайк',           'img://gui/maps/icons/map/list/217_er_alaska.png'),
+    ('222_er_clime',           u'Вайдпарк',           'img://gui/maps/icons/map/list/222_er_clime.png'),
 ]
 
 
@@ -173,10 +163,8 @@ def show_existing_window():
             _active_window = None
             return False
         flash.as_setData(_build_payload())
-        LOG.info('show_existing_window: reused active weatherPanel')
         return True
     except Exception:
-        LOG.exception('show_existing_window failed')
         _active_window = None
         return False
 
@@ -194,21 +182,19 @@ class WeatherWindowMeta(AbstractLobbyView):
         try:
             self.flashObject.as_setData(_build_payload())
         except Exception:
-            LOG.exception('WeatherWindowMeta._populate failed')
+            pass
 
     def py_onPresetSelected(self, mapId, presetId):
         try:
             preset_id = str(presetId) if presetId else 'standard'
             map_id = str(mapId) if mapId else None
             if not map_id:
-                LOG.info('py_onPresetSelected: global preset=%s', preset_id)
                 self._ctrl.setPreset(preset_id)
             else:
-                LOG.info('py_onPresetSelected: map=%s preset=%s', map_id, preset_id)
                 from weather.controller import apply_preset
                 apply_preset(map_id, preset_id)
         except Exception:
-            LOG.exception('py_onPresetSelected failed')
+            pass
 
     def py_onWeightChanged(self, mapId, presetId, value):
         try:
@@ -222,7 +208,7 @@ class WeatherWindowMeta(AbstractLobbyView):
                 weights[str(presetId)] = int(float(value))
                 self._ctrl.setMapWeights(map_id, weights)
         except Exception:
-            LOG.exception('py_onWeightChanged failed')
+            pass
 
     def py_onMapSelected(self, mapId):
         pass
@@ -249,7 +235,6 @@ class WeatherWindowMeta(AbstractLobbyView):
             return
         except Exception:
             pass
-        LOG.info('py_onCloseRequested: close requested, no destroy method succeeded')
 
     def py_onHotkeyChanged(self, keyCodes, hotkeyStr):
         try:
@@ -260,7 +245,7 @@ class WeatherWindowMeta(AbstractLobbyView):
             from weather.controller import set_hotkey
             set_hotkey(True, mods, key)
         except Exception:
-            LOG.exception('py_onHotkeyChanged failed')
+            pass
 
     def _dispose(self):
         global _active_window
