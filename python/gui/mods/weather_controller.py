@@ -63,6 +63,16 @@ PRESET_GUIDS = {
     'midday':   'BF040BCB.4BE1D04F.7D484589.135E881B',
 }
 
+# Live API BigWorld Space.setEnvironment(name) приймає не GUID, а <name>
+# з самого environment.xml. Це перевірено по логах: getEnvironment() повертає
+# u'03_midday', хоча активний GUID у environments.xml — BF040BCB...
+PRESET_ENV_NAMES = {
+    'midnight': 'Night_01',
+    'overcast': '01_Overcast',
+    'sunset':   '02_Sunset',
+    'midday':   '03_midday',
+}
+
 MAX_WEIGHT = 20
 DEFAULT_WEIGHT = 20
 DEFAULT_EQUAL_WEIGHTS = dict((k, DEFAULT_WEIGHT) for k in PRESET_ORDER)
@@ -943,31 +953,51 @@ def _try_live_switch(preset_id):
         return ok
 
     guid_dot = PRESET_GUIDS.get(preset_id)
-    if not guid_dot:
-        LOG.info('_try_live_switch: no guid for preset=%s', preset_id)
+    env_real_name = PRESET_ENV_NAMES.get(preset_id)
+    if not guid_dot or not env_real_name:
+        LOG.info('_try_live_switch: no guid/name for preset=%s', preset_id)
         return False
 
-    # У WoT XML GUID зазвичай з крапками, а директорія в пакеті — з дефісами.
-    # Основний варіант — dot GUID; hyphen GUID лишаємо як fallback.
+    # Важливо: Space.setEnvironment() в live-режимі приймає <name> з environment.xml,
+    # а не GUID директорії. У логах було: setEnvironment(GUID) OK, але
+    # getEnvironment() лишався u'03_midday'. Тому перший кандидат — реальна назва.
+    # GUID-и лишаємо тільки як fallback для інших клієнтів/збірок.
     guid_dash = guid_dot.replace('.', '-')
-    candidates = [guid_dot, guid_dash]
+    candidates = [env_real_name, guid_dot, guid_dash]
 
     for env_name in candidates:
         try:
             if hasattr(space, 'setEnvironment'):
+                before = None
+                try:
+                    before = space.getEnvironment() if hasattr(space, 'getEnvironment') else None
+                except Exception:
+                    pass
+
                 space.setEnvironment(env_name)
+
+                after = None
                 try:
-                    space.environment = env_name
+                    after = space.getEnvironment() if hasattr(space, 'getEnvironment') else None
                 except Exception:
                     pass
-                LOG.info('_try_live_switch: setEnvironment(%r) OK', env_name)
+
                 try:
-                    LOG.info('_try_live_switch: env_after=%r getEnvironment=%r',
-                             getattr(space, 'environment', None),
-                             space.getEnvironment() if hasattr(space, 'getEnvironment') else None)
+                    space.environment = guid_dot
                 except Exception:
                     pass
-                return True
+
+                LOG.info('_try_live_switch: setEnvironment(%r) OK, getEnvironment: %r -> %r',
+                         env_name, before, after)
+
+                # Для реальної назви перевіряємо, що движок справді переключив активний env.
+                # Для GUID fallback не блокуємо, бо старі клієнти можуть не мати getEnvironment().
+                if env_name == env_real_name:
+                    if after == env_real_name or after is None:
+                        return True
+                    LOG.info('_try_live_switch: real name was not accepted visually, continue fallbacks')
+                else:
+                    return True
         except Exception as e:
             LOG.info('_try_live_switch: setEnvironment(%r) ERR: %s', env_name, e)
 
