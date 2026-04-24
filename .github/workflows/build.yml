@@ -168,12 +168,12 @@ jobs:
             "-swf-version=${{ env.SWF_VERSION }}",
             "-strict=true",
             "-optimize=true",
-            "--",
             $mainAs
           )
 
           Write-Host "Running: mxmlc $($args -join ' ')"
-          # Запускаємо напряму через & щоб бачити ВЕСЬ вивід mxmlc в лозі
+          # -- передається самому PowerShell а не mxmlc, тому прибираємо його
+          # передаємо точку входу просто останнім аргументом
           & $mxmlcPath @args
           $exitCode = $LASTEXITCODE
           Write-Host "mxmlc exit: $exitCode"
