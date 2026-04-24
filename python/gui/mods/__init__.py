@@ -567,6 +567,57 @@ def _register_mods_list_entry():
         _do_register()
 
 
+def _get_lobby_app():
+    """Return the current Scaleform lobby app in old and new WoT clients."""
+    app = None
+
+    # WoT 1.5+ removed gui.app_loader.g_appLoader. Use dependency/IAppLoader.
+    try:
+        from helpers import dependency
+        from skeletons.gui.app_loader import IAppLoader
+        app_loader = dependency.instance(IAppLoader)
+
+        try:
+            app = app_loader.getDefLobbyApp()
+            if app is not None:
+                _log().info('_get_lobby_app: getDefLobbyApp via IAppLoader OK')
+                return app
+        except Exception as e:
+            _log().info('_get_lobby_app: IAppLoader.getDefLobbyApp failed: %s', e)
+
+        try:
+            from gui.app_loader.settings import APP_NAME_SPACE
+            namespaces = []
+            for name in ('SF_LOBBY', 'LOBBY'):
+                if hasattr(APP_NAME_SPACE, name):
+                    namespaces.append(getattr(APP_NAME_SPACE, name))
+            for ns in namespaces:
+                try:
+                    app = app_loader.getApp(ns)
+                    if app is not None:
+                        _log().info('_get_lobby_app: IAppLoader.getApp(%s) OK', ns)
+                        return app
+                except Exception as e:
+                    _log().info('_get_lobby_app: IAppLoader.getApp(%s) failed: %s', ns, e)
+        except Exception as e:
+            _log().info('_get_lobby_app: APP_NAME_SPACE lookup failed: %s', e)
+
+    except Exception as e:
+        _log().info('_get_lobby_app: dependency/IAppLoader failed: %s', e)
+
+    # Very old clients fallback.
+    try:
+        from gui.app_loader import g_appLoader
+        app = g_appLoader.getDefLobbyApp()
+        if app is not None:
+            _log().info('_get_lobby_app: old g_appLoader OK')
+            return app
+    except Exception as e:
+        _log().info('_get_lobby_app: old g_appLoader failed: %s', e)
+
+    return None
+
+
 def open_weather_window(*args, **kwargs):
     """Open the big custom WeatherPanel.swf window.
 
@@ -578,18 +629,8 @@ def open_weather_window(*args, **kwargs):
     def _load():
         try:
             from gui.Scaleform.framework.managers.loaders import SFViewLoadParams
-            app = None
-            try:
-                from gui.app_loader import g_appLoader
-                app = g_appLoader.getDefLobbyApp()
-            except Exception as e:
-                _log().info('open_weather_window: getDefLobbyApp via g_appLoader failed: %s', e)
-            if app is None:
-                try:
-                    from gui.shared.utils.functions import getDefLobbyApp
-                    app = getDefLobbyApp()
-                except Exception as e:
-                    _log().info('open_weather_window: getDefLobbyApp fallback failed: %s', e)
+
+            app = _get_lobby_app()
             if app is None:
                 _log().warning('open_weather_window: no lobby app found')
                 return
@@ -597,8 +638,10 @@ def open_weather_window(*args, **kwargs):
             params = SFViewLoadParams(WEATHER_PANEL_ALIAS)
             _log().info('open_weather_window: loadView alias=%s swf=%s app=%s',
                         WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, app)
+
             try:
                 app.loadView(params)
+                _log().info('open_weather_window: app.loadView OK')
                 return
             except Exception as e:
                 _log().warning('open_weather_window: app.loadView failed: %s', e)
@@ -608,9 +651,13 @@ def open_weather_window(*args, **kwargs):
                 loader = getattr(app, 'loaderManager', None)
                 if loader is not None:
                     loader.loadView(params)
+                    _log().info('open_weather_window: loaderManager.loadView OK')
                     return
             except Exception as e:
                 _log().warning('open_weather_window: loaderManager.loadView failed: %s', e)
+
+            _log().warning('open_weather_window: all loadView attempts failed')
+
         except Exception:
             _log().exception('open_weather_window failed')
 
