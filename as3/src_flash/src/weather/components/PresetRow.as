@@ -247,7 +247,7 @@ package weather.components
 
         private function updateWeightText():void
         {
-            _weightText.text = "вес: " + String(int(_vo.weight)) + " (" + MAX_WEIGHT.toFixed(1) + ")";
+            _weightText.text = "вага: " + String(int(_vo.weight)) + " (" + MAX_WEIGHT.toFixed(1) + ")";
         }
 
         public function refreshWeightText():void
