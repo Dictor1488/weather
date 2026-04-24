@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 DAAPI-міст між Flash (WeatherMediator.as) та weather_controller v8.
+Новий UI: кнопки-пресети замість слайдерів ваги.
 """
 
 try:
-    # WoT 2.2.x — View (найновіший базовий клас)
     from gui.Scaleform.framework.entities.View import View as AbstractLobbyView
     IN_GAME = True
 except ImportError:
     try:
-        # WoT 2.x — BaseDAAPIModule
         from gui.Scaleform.framework.entities.BaseDAAPIModule import BaseDAAPIModule as AbstractLobbyView
         IN_GAME = True
     except ImportError:
         try:
-            # WoT 1.x — AbstractLobbyView
             from gui.Scaleform.daapi.view.lobby.AbstractLobbyView import AbstractLobbyView
             IN_GAME = True
         except ImportError:
@@ -32,8 +30,10 @@ from weather_controller import (
     DEFAULT_WEIGHT,
 )
 
-# Шлях до превʼю іконок пресетів (з pro_env папки)
-# Формат: guid (з крапками) -> шлях до png в res/
+import logging
+LOG = logging.getLogger('weather_mod')
+
+# Шляхи до preview-іконок пресетів
 PRESET_PREVIEW = {
     'standard': 'gui/maps/icons/pro.environment/default.png',
     'midnight': 'gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png',
@@ -93,22 +93,22 @@ MAP_REGISTRY = [
 ]
 
 
-def _build_presets(weights):
-    data = []
+def _build_presets_for_ui(weights=None):
+    """Будує масив об'єктів пресетів для Flash."""
     weights = weights or {}
-    for preset_id in PRESET_ORDER:
-        data.append({
-            'id':         preset_id,
-            'label':      PRESET_LABELS.get(preset_id, preset_id),
-            'guid':       PRESET_GUIDS.get(preset_id, ''),
-            'previewSrc': PRESET_PREVIEW.get(preset_id, ''),
-            'weight':     int(weights.get(preset_id, DEFAULT_WEIGHT)),
-        })
-    return data
+    return [
+        {
+            'id':         pid,
+            'label':      PRESET_LABELS.get(pid, pid),
+            'guid':       PRESET_GUIDS.get(pid, ''),
+            'previewSrc': PRESET_PREVIEW.get(pid, ''),
+            'weight':     int(weights.get(pid, DEFAULT_WEIGHT)),
+        }
+        for pid in PRESET_ORDER
+    ]
 
 
 def _build_hotkey_str(hotkey_dict):
-    """Перетворює hotkey dict в рядок типу 'ALT+F12'."""
     try:
         key  = hotkey_dict.get('key', 'KEY_F12')
         mods = hotkey_dict.get('mods', [])
@@ -119,7 +119,10 @@ def _build_hotkey_str(hotkey_dict):
 
 
 def _build_payload():
-    general = g_controller.getGeneralWeights() or {}
+    """Будує payload для as_setData."""
+    current_preset = g_controller.getCurrentPreset()
+    general        = g_controller.getGeneralWeights() or {}
+
     maps = []
     for map_id, label, thumb in MAP_REGISTRY:
         map_weights = g_controller.getMapWeights(map_id) or {}
@@ -128,10 +131,10 @@ def _build_payload():
             'label':     label,
             'thumbSrc':  thumb,
             'useGlobal': False,
-            'presets':   _build_presets(map_weights),
+            'presets':   _build_presets_for_ui(map_weights),
         })
 
-    hk = g_controller.getHotkey()
+    hk          = g_controller.getHotkey()
     hotkey_str  = _build_hotkey_str(hk)
     hotkey_keys = []
     try:
@@ -144,10 +147,11 @@ def _build_payload():
         pass
 
     return {
-        'presets':    _build_presets(general),
-        'maps':       maps,
-        'hotkey':     hotkey_str,
-        'hotkeyKeys': hotkey_keys,
+        'presets':       _build_presets_for_ui(general),
+        'maps':          maps,
+        'hotkey':        hotkey_str,
+        'hotkeyKeys':    hotkey_keys,
+        'currentPreset': current_preset,
     }
 
 
@@ -163,22 +167,51 @@ class WeatherWindowMeta(AbstractLobbyView):
             payload = _build_payload()
             self.flashObject.as_setData(payload)
         except Exception:
-            import logging
-            logging.getLogger('weather_mod').exception('WeatherWindowMeta._populate failed')
+            LOG.exception('WeatherWindowMeta._populate failed')
+
+    # ── Нові методи від Flash (кнопки-пресети) ─────────────────────────────
+
+    def py_onPresetSelected(self, mapId, presetId):
+        """
+        Викликається коли гравець натиснув кнопку пресету.
+        mapId == None або '' → глобальний пресет для всіх карт.
+        mapId != '' → пресет для конкретної карти.
+        """
+        try:
+            preset_id = str(presetId) if presetId else 'standard'
+            map_id    = str(mapId) if mapId else None
+
+            if not map_id:
+                # Глобальний пресет — застосовуємо одразу
+                LOG.info('py_onPresetSelected: global preset=%s', preset_id)
+                self._ctrl.setPreset(preset_id)
+            else:
+                # Пресет для конкретної карти
+                LOG.info('py_onPresetSelected: map=%s preset=%s', map_id, preset_id)
+                from weather_controller import apply_preset
+                apply_preset(map_id, preset_id)
+        except Exception:
+            LOG.exception('py_onPresetSelected failed')
+
+    # ── Зворотна сумісність (старі weight-методи) ──────────────────────────
 
     def py_onWeightChanged(self, mapId, presetId, value):
-        map_id = str(mapId) if mapId else None
-        if not map_id:
-            weights = self._ctrl.getGeneralWeights() or {}
-            weights[str(presetId)] = int(float(value))
-            self._ctrl.setGeneralWeights(weights)
-        else:
-            weights = self._ctrl.getMapWeights(map_id) or {}
-            weights[str(presetId)] = int(float(value))
-            self._ctrl.setMapWeights(map_id, weights)
+        """Залишаємо для сумісності — новий UI не використовує."""
+        try:
+            map_id = str(mapId) if mapId else None
+            if not map_id:
+                weights = self._ctrl.getGeneralWeights() or {}
+                weights[str(presetId)] = int(float(value))
+                self._ctrl.setGeneralWeights(weights)
+            else:
+                weights = self._ctrl.getMapWeights(map_id) or {}
+                weights[str(presetId)] = int(float(value))
+                self._ctrl.setMapWeights(map_id, weights)
+        except Exception:
+            LOG.exception('py_onWeightChanged failed')
 
     def py_onMapSelected(self, mapId):
-        pass  # Flash сам перемикає на detail view
+        pass  # Flash сам перемикає деталь-панель
 
     def py_onTabChanged(self, tab):
         pass
@@ -193,14 +226,13 @@ class WeatherWindowMeta(AbstractLobbyView):
     def py_onHotkeyChanged(self, keyCodes, hotkeyStr):
         try:
             parts = str(hotkeyStr).split('+')
-            key  = 'KEY_' + parts[-1] if parts else 'KEY_F12'
-            mods = parts[:-1] if len(parts) > 1 else []
+            key   = 'KEY_' + parts[-1] if parts else 'KEY_F12'
+            mods  = parts[:-1] if len(parts) > 1 else []
             self._ctrl.on_hotkey_changed(list(keyCodes or []), str(hotkeyStr))
             from weather_controller import set_hotkey
             set_hotkey(True, mods, key)
         except Exception:
-            import logging
-            logging.getLogger('weather_mod').exception('py_onHotkeyChanged failed')
+            LOG.exception('py_onHotkeyChanged failed')
 
     def _dispose(self):
         self._ctrl.on_close_requested()
