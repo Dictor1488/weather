@@ -105,8 +105,8 @@ package weather.components
             addChild(iconBg);
 
             _iconTF = new TextField();
-            _iconTF.defaultTextFormat = new TextFormat("$FieldFont", 13, accentColor, true);
-            _iconTF.embedFonts  = true;
+            _iconTF.defaultTextFormat = new TextFormat("Arial", 13, accentColor, true);
+            _iconTF.embedFonts  = false;
             _iconTF.selectable  = false;
             _iconTF.autoSize    = "left";
             _iconTF.text        = PRESET_ICON_TEXT[_vo.id] || "???";
@@ -116,8 +116,8 @@ package weather.components
 
             // --- назва пресету ---
             _labelTF = new TextField();
-            _labelTF.defaultTextFormat = new TextFormat("$FieldFont", 16, _selected ? 0xFFFFFF : 0xBBBBBB, true);
-            _labelTF.embedFonts  = true;
+            _labelTF.defaultTextFormat = new TextFormat("Arial", 16, _selected ? 0xFFFFFF : 0xBBBBBB, true);
+            _labelTF.embedFonts  = false;
             _labelTF.selectable  = false;
             _labelTF.autoSize    = "left";
             _labelTF.text        = _vo.label;
@@ -129,8 +129,8 @@ package weather.components
             if (_selected)
             {
                 var activeTF:TextField = new TextField();
-                activeTF.defaultTextFormat = new TextFormat("$FieldFont", 10, accentColor, false);
-                activeTF.embedFonts  = true;
+                activeTF.defaultTextFormat = new TextFormat("Arial", 10, accentColor, false);
+                activeTF.embedFonts  = false;
                 activeTF.selectable  = false;
                 activeTF.autoSize    = "left";
                 activeTF.text        = "АКТИВНИЙ";

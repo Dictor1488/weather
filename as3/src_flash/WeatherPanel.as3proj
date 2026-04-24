@@ -16,7 +16,7 @@
     <class path="src" />
   </classpaths>
   <build>
-    <option optimize="True" />
+    <option optimize="False" />
     <option strict="True" />
     <option useNetwork="False" />
     <option warnings="True" />

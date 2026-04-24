@@ -55,8 +55,8 @@ package weather.views
             backBtn.useHandCursor = true;
             backBtn.mouseChildren = false;
             var backTF:TextField = new TextField();
-            backTF.defaultTextFormat = new TextFormat("$FieldFont", 14, 0xF4A11A, true);
-            backTF.embedFonts  = true;
+            backTF.defaultTextFormat = new TextFormat("Arial", 14, 0xF4A11A, true);
+            backTF.embedFonts  = false;
             backTF.selectable  = false;
             backTF.autoSize    = "left";
             backTF.text        = "\u2190  Назад до списку карт";
@@ -68,8 +68,8 @@ package weather.views
 
             // --- Назва карти ---
             var header:TextField = new TextField();
-            header.defaultTextFormat = new TextFormat("$FieldFont", 22, 0xFFFFFF, true);
-            header.embedFonts  = true;
+            header.defaultTextFormat = new TextFormat("Arial", 22, 0xFFFFFF, true);
+            header.embedFonts  = false;
             header.selectable  = false;
             header.autoSize    = "left";
             header.text        = _map.label;
@@ -79,8 +79,8 @@ package weather.views
 
             // --- Підзаголовок ---
             var subHdr:TextField = new TextField();
-            subHdr.defaultTextFormat = new TextFormat("$FieldFont", 13, 0x888888, false);
-            subHdr.embedFonts  = true;
+            subHdr.defaultTextFormat = new TextFormat("Arial", 13, 0x888888, false);
+            subHdr.embedFonts  = false;
             subHdr.selectable  = false;
             subHdr.autoSize    = "left";
             subHdr.text        = "ПРЕСЕТ ПОГОДИ ДЛЯ ЦІЄЇ КАРТИ";
@@ -114,8 +114,8 @@ package weather.views
 
             // --- Підказка внизу ---
             var tip:TextField = new TextField();
-            tip.defaultTextFormat = new TextFormat("$FieldFont", 12, 0x555555, false);
-            tip.embedFonts  = true;
+            tip.defaultTextFormat = new TextFormat("Arial", 12, 0x555555, false);
+            tip.embedFonts  = false;
             tip.selectable  = false;
             tip.autoSize    = "left";
             tip.text        = "Якщо пресет не підтримується для цієї карти — буде використана глобальна погода";

@@ -2,6 +2,8 @@ package weather
 {
     import flash.display.Sprite;
     import flash.events.Event;
+    import flash.display.StageAlign;
+    import flash.display.StageScaleMode;
 
     import weather.views.WeatherView;
     import weather.data.PresetVO;
@@ -18,24 +20,44 @@ package weather
         public function WeatherMediator()
         {
             super();
+            addEventListener(Event.ADDED_TO_STAGE, onAddedToStage);
+        }
+
+        private function onAddedToStage(e:Event):void
+        {
+            removeEventListener(Event.ADDED_TO_STAGE, onAddedToStage);
+            if (stage)
+            {
+                stage.align = StageAlign.TOP_LEFT;
+                stage.scaleMode = StageScaleMode.NO_SCALE;
+            }
+
+            // Debug/fallback mode. У грі Python одразу викличе as_setData() і замінить ці дані.
+            // Якщо SWF відкрито окремо або DAAPI не викликав as_setData, UI не буде порожнім.
+            if (!_view)
+                as_setData(makeDebugPayload());
         }
 
         // ========== Python → AS3 ==========
 
         public function as_setData(payload:Object):void
         {
-            _globalPresets = parsePresets(payload.presets);
-            _maps          = parseMaps(payload.maps);
+            if (!payload)
+                payload = makeDebugPayload();
+
+            _globalPresets = parsePresets(payload.presets as Array);
+            _maps          = parseMaps(payload.maps as Array);
             _currentPreset = String(payload.currentPreset || "standard");
 
             if (_view)
             {
-                removeChild(_view);
+                if (contains(_view))
+                    removeChild(_view);
                 _view = null;
             }
 
             var hotkeyStr:String  = String(payload.hotkey || "F12");
-            var hotkeyKeys:Array  = payload.hotkeyKeys as Array || [];
+            var hotkeyKeys:Array  = (payload.hotkeyKeys as Array) || [];
 
             _view = new WeatherView(_globalPresets, _maps, hotkeyStr, hotkeyKeys, _currentPreset);
             _view.addEventListener(WeatherEvent.PRESET_SELECTED,     onPresetSelected);
@@ -55,7 +77,6 @@ package weather
 
         private function onPresetSelected(e:WeatherEvent):void
         {
-            // mapId == null → глобальний пресет; mapId != null → пресет для конкретної карти
             py_onPresetSelected(e.mapId, e.presetId);
         }
 
@@ -87,6 +108,26 @@ package weather
         private function py_onCloseRequested():void {}
         private function py_onHotkeyChanged(keyCodes:Array, hotkeyStr:String):void {}
 
+        // ========== Debug payload ==========
+
+        private function makeDebugPayload():Object
+        {
+            var presets:Array = [
+                {id:"standard", label:"Standard", guid:"", previewSrc:"gui/maps/icons/pro.environment/default.png", weight:20},
+                {id:"midnight", label:"Night", guid:"15755E11.4090266B.594778B6.B233C12C", previewSrc:"gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png", weight:20},
+                {id:"overcast", label:"Overcast", guid:"56BA3213.40FFB1DF.125FBCAD.173E8347", previewSrc:"gui/maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png", weight:20},
+                {id:"sunset", label:"Sunset", guid:"6DEE1EBB.44F63FCC.AACF6185.7FBBC34E", previewSrc:"gui/maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png", weight:20},
+                {id:"midday", label:"Midday", guid:"BF040BCB.4BE1D04F.7D484589.135E881B", previewSrc:"gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png", weight:20}
+            ];
+            return {
+                presets: presets,
+                maps: [{id:"05_prohorovka", label:"Prohorovka", thumbSrc:"gui/maps/icons/map/list/05_prohorovka.png", useGlobal:false, presets:presets}],
+                hotkey: "F12",
+                hotkeyKeys: [],
+                currentPreset: "midday"
+            };
+        }
+
         // ========== Парсери ==========
 
         private function parsePresets(src:Array):Vector.<PresetVO>
@@ -112,7 +153,7 @@ package weather
                 var o:Object = src[i];
                 var m:MapVO = new MapVO(o.id, o.label, o.thumbSrc);
                 m.useGlobal = Boolean(o.useGlobal);
-                m.presets = parsePresets(o.presets);
+                m.presets = parsePresets(o.presets as Array);
                 out.push(m);
             }
             return out;

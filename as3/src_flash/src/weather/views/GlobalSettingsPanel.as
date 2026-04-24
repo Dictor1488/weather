@@ -42,8 +42,8 @@ package weather.views
         private function build(presets:Vector.<PresetVO>):void
         {
             var hdr:TextField = new TextField();
-            hdr.defaultTextFormat = new TextFormat("$FieldFont", 13, 0x888888, false);
-            hdr.embedFonts  = true;
+            hdr.defaultTextFormat = new TextFormat("Arial", 13, 0x888888, false);
+            hdr.embedFonts  = false;
             hdr.selectable  = false;
             hdr.autoSize    = "left";
             hdr.text        = "АКТИВНИЙ ПРЕСЕТ ДЛЯ ВСІХ КАРТ";
@@ -77,8 +77,8 @@ package weather.views
             var hkY:int = dividerY + 22;
 
             var hkHdr:TextField = new TextField();
-            hkHdr.defaultTextFormat = new TextFormat("$FieldFont", 13, 0x888888, false);
-            hkHdr.embedFonts  = true;
+            hkHdr.defaultTextFormat = new TextFormat("Arial", 13, 0x888888, false);
+            hkHdr.embedFonts  = false;
             hkHdr.selectable  = false;
             hkHdr.autoSize    = "left";
             hkHdr.text        = "ХОТКЕЙ — ЗМІНА ПОГОДИ В БОЮ";
@@ -87,8 +87,8 @@ package weather.views
             addChild(hkHdr);
 
             var hkLabel:TextField = new TextField();
-            hkLabel.defaultTextFormat = new TextFormat("$FieldFont", 15, 0xCCCCCC, false);
-            hkLabel.embedFonts  = true;
+            hkLabel.defaultTextFormat = new TextFormat("Arial", 15, 0xCCCCCC, false);
+            hkLabel.embedFonts  = false;
             hkLabel.selectable  = false;
             hkLabel.autoSize    = "left";
             hkLabel.text        = "Натиснення в бою циклічно перемикає пресет";
@@ -108,8 +108,8 @@ package weather.views
             addChild(editBtn);
 
             var tip:TextField = new TextField();
-            tip.defaultTextFormat = new TextFormat("$FieldFont", 12, 0x555555, false);
-            tip.embedFonts  = true;
+            tip.defaultTextFormat = new TextFormat("Arial", 12, 0x555555, false);
+            tip.embedFonts  = false;
             tip.selectable  = false;
             tip.autoSize    = "left";
             tip.text        = "Для налаштування погоди на конкретній карті — перейдіть на вкладку \u00abПо картах\u00bb";
@@ -168,8 +168,8 @@ package weather.views
             s.graphics.drawRoundRect(0, 0, 110, 28, 4, 4);
             s.graphics.endFill();
             var tf:TextField = new TextField();
-            tf.defaultTextFormat = new TextFormat("$FieldFont", 12, 0xF4A11A, true);
-            tf.embedFonts  = true;
+            tf.defaultTextFormat = new TextFormat("Arial", 12, 0xF4A11A, true);
+            tf.embedFonts  = false;
             tf.selectable  = false;
             tf.autoSize    = "left";
             tf.text        = "  змінити  ";
@@ -193,8 +193,8 @@ package weather.views
         {
             while (_chipContainer.numChildren > 0) _chipContainer.removeChildAt(0);
             var hint:TextField = new TextField();
-            hint.defaultTextFormat = new TextFormat("$FieldFont", 13, 0xFFB84E, true);
-            hint.embedFonts  = true;
+            hint.defaultTextFormat = new TextFormat("Arial", 13, 0xFFB84E, true);
+            hint.embedFonts  = false;
             hint.selectable  = false;
             hint.autoSize    = "left";
             hint.text        = "Натисни потрібну комбінацію...";
@@ -269,8 +269,8 @@ package weather.views
         {
             var s:Sprite = new Sprite();
             var tf:TextField = new TextField();
-            tf.defaultTextFormat = new TextFormat("$FieldFont", 13, 0xFFFFFF, true);
-            tf.embedFonts  = true;
+            tf.defaultTextFormat = new TextFormat("Arial", 13, 0xFFFFFF, true);
+            tf.embedFonts  = false;
             tf.selectable  = false;
             tf.autoSize    = "left";
             tf.text = key;

@@ -68,8 +68,8 @@ package weather.views
 
             // --- заголовок ---
             _titleTF = new TextField();
-            _titleTF.defaultTextFormat = new TextFormat("$TitleFont", 24, 0xFFFFFF, true);
-            _titleTF.embedFonts  = true;
+            _titleTF.defaultTextFormat = new TextFormat("Arial", 24, 0xFFFFFF, true);
+            _titleTF.embedFonts  = false;
             _titleTF.selectable  = false;
             _titleTF.autoSize    = "left";
             _titleTF.text        = "Погода на картах";
@@ -79,8 +79,8 @@ package weather.views
 
             // --- підзаголовок ---
             var subTF:TextField = new TextField();
-            subTF.defaultTextFormat = new TextFormat("$FieldFont", 12, 0x666666, false);
-            subTF.embedFonts  = true;
+            subTF.defaultTextFormat = new TextFormat("Arial", 12, 0x666666, false);
+            subTF.embedFonts  = false;
             subTF.selectable  = false;
             subTF.autoSize    = "left";
             subTF.text        = "World of Tanks — налаштування environment";
@@ -100,8 +100,8 @@ package weather.views
             _closeBtn.graphics.endFill();
 
             var closeTF:TextField = new TextField();
-            closeTF.defaultTextFormat = new TextFormat("$FieldFont", 13, 0xF4A11A, true);
-            closeTF.embedFonts  = true;
+            closeTF.defaultTextFormat = new TextFormat("Arial", 13, 0xF4A11A, true);
+            closeTF.embedFonts  = false;
             closeTF.selectable  = false;
             closeTF.autoSize    = "left";
             closeTF.text        = "ЗАКРИТИ  \u2715";
@@ -222,8 +222,8 @@ class TabButton extends Sprite
         addChild(_bg);
 
         _tf = new TextField();
-        _tf.defaultTextFormat = new TextFormat("$FieldFont", 13, 0x8D8D8D, true);
-        _tf.embedFonts  = true;
+        _tf.defaultTextFormat = new TextFormat("Arial", 13, 0x8D8D8D, true);
+        _tf.embedFonts  = false;
         _tf.selectable  = false;
         _tf.width       = _w;
         _tf.height      = 28;

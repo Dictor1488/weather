@@ -61,8 +61,8 @@ package weather.components
             addChild(grad);
 
             _title = new TextField();
-            _title.defaultTextFormat = new TextFormat("$FieldFont", 15, 0xFFFFFF, true, null, null, null, null, "center");
-            _title.embedFonts = true;
+            _title.defaultTextFormat = new TextFormat("Arial", 15, 0xFFFFFF, true, null, null, null, null, "center");
+            _title.embedFonts = false;
             _title.selectable = false;
             _title.mouseEnabled = false;
             _title.width = TILE_W;
@@ -78,8 +78,8 @@ package weather.components
             addChild(_footer);
 
             var footerTF:TextField = new TextField();
-            footerTF.defaultTextFormat = new TextFormat("$FieldFont", 11, 0xD2D2D2, false, null, null, null, null, "center");
-            footerTF.embedFonts = true;
+            footerTF.defaultTextFormat = new TextFormat("Arial", 11, 0xD2D2D2, false, null, null, null, null, "center");
+            footerTF.embedFonts = false;
             footerTF.selectable = false;
             footerTF.mouseEnabled = false;
             footerTF.width = TILE_W;
