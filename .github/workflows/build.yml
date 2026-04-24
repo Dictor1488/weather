@@ -20,8 +20,8 @@ permissions:
 
 env:
   FLEX_VERSION: "4.16.1"
-  FLASH_PLAYER_VERSION: "32.0"
-  SWF_VERSION: "39"
+  FLASH_PLAYER_VERSION: "11.4"
+  SWF_VERSION: "17"
 
 jobs:
   build-and-release:
@@ -142,25 +142,33 @@ jobs:
             }
             if (-not $mainClassPath -or -not (Test-Path $mainClassPath)) { Write-Warning "Main class not found: $mainClassPath"; continue }
             $outputSwf = Join-Path $outputPath $swfName
-            $mxmlcArgs = @()
             $srcDir = Join-Path $projDir "src"
-            if (Test-Path $srcDir) { $mxmlcArgs += "-source-path+=$srcDir" }
-            $mxmlcArgs += $libArgs
-            $mxmlcArgs += @(
-                "-output=$outputSwf",
-                "-target-player=${{ env.FLASH_PLAYER_VERSION }}",
-                "-swf-version=${{ env.SWF_VERSION }}",
-                "-strict=true", "-optimize=false", "--"
-            )
-            $mxmlcArgs += $mainClassPath
+
+            # Будуємо командний рядок як рядок — Start-Process з масивом
+            # некоректно передає аргументи з пробілами та спецсимволами
+            $cmdParts = @("& `"$mxmlcPath`"")
+            if (Test-Path $srcDir) { $cmdParts += "-source-path+=`"$srcDir`"" }
+            foreach ($lib in $libArgs) { $cmdParts += "`"$lib`"" }
+            $cmdParts += "-output=`"$outputSwf`""
+            $cmdParts += "-target-player=${{ env.FLASH_PLAYER_VERSION }}"
+            $cmdParts += "-swf-version=${{ env.SWF_VERSION }}"
+            $cmdParts += "-strict=true"
+            $cmdParts += "-optimize=false"
+            # НЕ додаємо "--" — він ламає парсинг у Start-Process
+            $cmdParts += "`"$mainClassPath`""
+
+            $cmdLine = $cmdParts -join " "
             Write-Host "source-path: $srcDir"
             Write-Host "entry point: $mainClassPath"
-            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs -NoNewWindow -Wait -PassThru -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
-            Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
-            if ($process.ExitCode -ne 0) { Write-Error "Compilation failed"; exit 1 }
+            Write-Host "mxmlc cmd: $cmdLine"
+
+            $output = Invoke-Expression $cmdLine 2>&1
+            $exitCode = $LASTEXITCODE
+            $output | Write-Host
+            if ($exitCode -ne 0) { Write-Error "Compilation failed (exit $exitCode)"; exit 1 }
+            if (-not (Test-Path $outputSwf)) { Write-Error "SWF not created: $outputSwf"; exit 1 }
             $sz = (Get-Item $outputSwf).Length
             Write-Host "SUCCESS: $swfName ($([math]::Round($sz/1KB,2)) KB)" -ForegroundColor Green
-            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
         }
         $builtSwfs = Get-ChildItem -Path $outputPath -Filter "*.swf" -ErrorAction SilentlyContinue
         if (-not $builtSwfs -or $builtSwfs.Count -eq 0) { Write-Error "No SWF files were built"; exit 1 }
