@@ -1,5 +1,5 @@
 # build.py — Weather Mod
-# Адаптовано під структуру: python/gui/mods/ (без Flash/SWF)
+# Адаптовано під структуру: python/gui/mods/ + Scaleform SWF
 
 import argparse
 import datetime
@@ -7,22 +7,18 @@ import json
 import logging
 import os
 import pathlib
-import random
 import shutil
-import string
 import subprocess
 import sys
 import time
 import zipfile
-from typing import Any, Dict, List, Optional, Set
+from typing import Optional
 
 try:
     import psutil
 except ImportError:
     raise ImportError("psutil is not installed. Run 'pip install psutil'.")
 
-
-# --- Logger ---
 
 class ElapsedFormatter(logging.Formatter):
     def __init__(self):
@@ -42,8 +38,6 @@ def setup_logger():
     logger.addHandler(handler)
     return logger
 
-
-# --- Config ---
 
 class AppConfig:
     class Software:
@@ -69,8 +63,6 @@ class AppConfig:
         self.game = self.Game(data.get('game', {}))
         self.info = self.Info(data.get('info', {}))
 
-
-# --- Utils ---
 
 def copytree(source, destination, ignore=None):
     src = pathlib.Path(source)
@@ -109,10 +101,7 @@ def zip_folder(source, destination, mode='w', compression=zipfile.ZIP_STORED):
                 zf.writestr(info, fp.read_bytes())
 
 
-# --- Build Steps ---
-
 def build_python(config: AppConfig) -> None:
-    """Компілює .py → .pyc через Python 2.7"""
     python_dir = pathlib.Path('python')
     if not python_dir.exists():
         logger.warning("python/ directory not found, skipping compilation")
@@ -136,40 +125,35 @@ def build_python(config: AppConfig) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description='Build script for Weather Mod.')
-    parser.add_argument('--ingame',    action='store_true', help='Copy to game directory.')
-    parser.add_argument('--distribute',action='store_true', help='Create distributable zip.')
-    parser.add_argument('--run',       action='store_true', help='Run the game after build.')
+    parser.add_argument('--ingame', action='store_true', help='Copy to game directory.')
+    parser.add_argument('--distribute', action='store_true', help='Create distributable zip.')
+    parser.add_argument('--run', action='store_true', help='Run the game after build.')
     args = parser.parse_args()
 
-    # Load config
     config_path = pathlib.Path('build.json')
     if not config_path.is_file():
         raise FileNotFoundError('build.json not found')
     with config_path.open('r', encoding='utf-8') as f:
         config = AppConfig(json.load(f))
 
-    game_folder  = pathlib.Path(os.environ.get('WOT_FOLDER',  config.game.folder  or ''))
+    game_folder = pathlib.Path(os.environ.get('WOT_FOLDER', config.game.folder or ''))
     game_version = os.environ.get('WOT_VERSION', config.game.version or '')
     if not game_folder or not game_version:
         raise ValueError("Game folder or version not configured.")
 
-    # Prepare dirs
-    temp_dir  = pathlib.Path('temp')
+    temp_dir = pathlib.Path('temp')
     build_dir = pathlib.Path('build')
     for d in (temp_dir, build_dir):
         if d.is_dir():
             shutil.rmtree(d)
         d.mkdir()
 
-    # --- Build ---
     logger.info("Building...")
     build_python(config)
 
-    # --- Package ---
     package_name = f'{config.info.id}_{config.info.version}.wotmod'
     logger.info("Packaging: %s", package_name)
 
-    # meta.xml
     meta_xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<root>\n'
@@ -181,18 +165,21 @@ def main():
     )
     (temp_dir / 'meta.xml').write_text(meta_xml, encoding='utf-8')
 
-    # Копіюємо Python .pyc в res/scripts/client/
-    # Структура: python/gui/mods/__init__.pyc → res/scripts/client/gui/mods/__init__.pyc
-    copytree('python', str(temp_dir / 'res/scripts/client'),
-             ignore=shutil.ignore_patterns('*.py'))
+    copytree('python', str(temp_dir / 'res/scripts/client'), ignore=shutil.ignore_patterns('*.py'))
 
-    # Якщо є resources/in — копіюємо як res/
     if pathlib.Path('resources/in').is_dir():
         copytree('resources/in', str(temp_dir / 'res'))
+        logger.info('Resources copied: resources/in -> res/')
 
-    # SWF — основний шлях як у working/reference Scaleform mods:
-    # ViewSettings(..., 'WeatherPanel.swf', ...) => res/gui/flash/WeatherPanel.swf
-    # Додатково кладемо копію в res/gui/flash/weather/ для сумісності зі старими білдами.
+        # Flash Loader inside WeatherPanel.swf resolves gui/... relative to res/gui/flash/.
+        # Duplicate GUI assets there so both Python/client paths and SWF Loader paths work:
+        #   res/gui/maps/...              normal WoT resource path
+        #   res/gui/flash/gui/maps/...    Scaleform Loader relative path
+        gui_src = pathlib.Path('resources/in/gui')
+        if gui_src.is_dir():
+            copytree(str(gui_src), str(temp_dir / 'res/gui/flash/gui'))
+            logger.info('GUI resources duplicated: resources/in/gui -> res/gui/flash/gui/')
+
     swf_src = pathlib.Path('as3/bin/WeatherPanel.swf')
     if not swf_src.is_file():
         raise FileNotFoundError('SWF not found: as3/bin/WeatherPanel.swf. Build AS3 first with Flex/mxmlc.')
@@ -204,18 +191,15 @@ def main():
     shutil.copy2(str(swf_src), str(swf_compat / 'WeatherPanel.swf'))
     logger.info('SWF copied: WeatherPanel.swf (%s bytes) -> res/gui/flash/ and res/gui/flash/weather/', swf_src.stat().st_size)
 
-    # Створюємо .wotmod
     zip_folder(str(temp_dir), str(build_dir / package_name))
     logger.info("Created: %s", build_dir / package_name)
 
-    # --- Ingame copy ---
     if args.ingame:
         mods_dir = game_folder / 'mods' / game_version
         if not mods_dir.is_dir():
             raise FileNotFoundError(f'Mods folder not found: {mods_dir}')
-        # Зупиняємо гру якщо запущена
         for proc in psutil.process_iter(['name', 'pid']):
-            if 'worldoftanks' in proc.info['name'].lower():
+            if proc.info['name'] and 'worldoftanks' in proc.info['name'].lower():
                 try:
                     p = psutil.Process(proc.info['pid'])
                     p.terminate()
@@ -227,15 +211,13 @@ def main():
         shutil.copy2(str(build_dir / package_name), str(dest))
         logger.info("Copied to: %s", dest)
 
-    # --- Distribute ---
     if args.distribute:
         logger.info("Creating distribution archive...")
-        dist_dir      = temp_dir / 'distribute'
+        dist_dir = temp_dir / 'distribute'
         dist_mods_dir = dist_dir / 'mods' / game_version
         dist_mods_dir.mkdir(parents=True)
         shutil.copy2(str(build_dir / package_name), str(dist_mods_dir))
 
-        # Якщо є resources/out — додаємо в дистрибутив
         if pathlib.Path('resources/out').is_dir():
             copytree('resources/out', str(dist_dir))
 
@@ -243,7 +225,6 @@ def main():
         zip_folder(str(dist_dir), str(build_dir / zip_name))
         logger.info("Distribution: %s", build_dir / zip_name)
 
-    # --- Cleanup ---
     cleanup = [temp_dir]
     cleanup.extend(pathlib.Path('python').rglob('*.pyc'))
     for p in cleanup:
@@ -252,7 +233,6 @@ def main():
         elif p.is_file():
             p.unlink(missing_ok=True)
 
-    # --- Run ---
     if args.run:
         exe = game_folder / 'worldoftanks.exe'
         if exe.is_file():
