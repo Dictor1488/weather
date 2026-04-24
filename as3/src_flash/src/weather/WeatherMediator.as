@@ -1,16 +1,16 @@
 package weather
 {
-    import flash.display.Sprite;
-    import flash.events.Event;
     import flash.display.StageAlign;
     import flash.display.StageScaleMode;
+
+    import net.wg.infrastructure.base.AbstractView;
 
     import weather.views.WeatherView;
     import weather.data.PresetVO;
     import weather.data.MapVO;
     import weather.events.WeatherEvent;
 
-    public class WeatherMediator extends Sprite
+    public class WeatherMediator extends AbstractView
     {
         private var _view:WeatherView;
         private var _globalPresets:Vector.<PresetVO>;
@@ -20,12 +20,12 @@ package weather
         public function WeatherMediator()
         {
             super();
-            addEventListener(Event.ADDED_TO_STAGE, onAddedToStage);
         }
 
-        private function onAddedToStage(e:Event):void
+        override protected function configUI():void
         {
-            removeEventListener(Event.ADDED_TO_STAGE, onAddedToStage);
+            super.configUI();
+
             if (stage)
             {
                 stage.align = StageAlign.TOP_LEFT;
@@ -36,6 +36,28 @@ package weather
             // Якщо SWF відкрито окремо або DAAPI не викликав as_setData, UI не буде порожнім.
             if (!_view)
                 as_setData(makeDebugPayload());
+        }
+
+        override protected function onDispose():void
+        {
+            if (_view)
+            {
+                _view.removeEventListener(WeatherEvent.PRESET_SELECTED, onPresetSelected);
+                _view.removeEventListener(WeatherEvent.MAP_SELECTED, onMapSelected);
+                _view.removeEventListener(WeatherEvent.TAB_CHANGED, onTabChanged);
+                _view.removeEventListener(WeatherEvent.CLOSE_REQUESTED, onCloseRequested);
+                _view.removeEventListener(WeatherEvent.HOTKEY_CHANGED, onHotkeyChanged);
+
+                if (contains(_view))
+                    removeChild(_view);
+
+                _view = null;
+            }
+
+            _globalPresets = null;
+            _maps = null;
+
+            super.onDispose();
         }
 
         // ========== Python → AS3 ==========
@@ -51,8 +73,15 @@ package weather
 
             if (_view)
             {
+                _view.removeEventListener(WeatherEvent.PRESET_SELECTED, onPresetSelected);
+                _view.removeEventListener(WeatherEvent.MAP_SELECTED, onMapSelected);
+                _view.removeEventListener(WeatherEvent.TAB_CHANGED, onTabChanged);
+                _view.removeEventListener(WeatherEvent.CLOSE_REQUESTED, onCloseRequested);
+                _view.removeEventListener(WeatherEvent.HOTKEY_CHANGED, onHotkeyChanged);
+
                 if (contains(_view))
                     removeChild(_view);
+
                 _view = null;
             }
 
@@ -60,11 +89,11 @@ package weather
             var hotkeyKeys:Array  = (payload.hotkeyKeys as Array) || [];
 
             _view = new WeatherView(_globalPresets, _maps, hotkeyStr, hotkeyKeys, _currentPreset);
-            _view.addEventListener(WeatherEvent.PRESET_SELECTED,     onPresetSelected);
-            _view.addEventListener(WeatherEvent.MAP_SELECTED,        onMapSelected);
-            _view.addEventListener(WeatherEvent.TAB_CHANGED,         onTabChanged);
-            _view.addEventListener(WeatherEvent.CLOSE_REQUESTED,     onCloseRequested);
-            _view.addEventListener(WeatherEvent.HOTKEY_CHANGED,      onHotkeyChanged);
+            _view.addEventListener(WeatherEvent.PRESET_SELECTED, onPresetSelected);
+            _view.addEventListener(WeatherEvent.MAP_SELECTED, onMapSelected);
+            _view.addEventListener(WeatherEvent.TAB_CHANGED, onTabChanged);
+            _view.addEventListener(WeatherEvent.CLOSE_REQUESTED, onCloseRequested);
+            _view.addEventListener(WeatherEvent.HOTKEY_CHANGED, onHotkeyChanged);
             addChild(_view);
         }
 
