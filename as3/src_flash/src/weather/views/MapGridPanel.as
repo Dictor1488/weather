@@ -12,7 +12,7 @@ package weather.views
 
     public class MapGridPanel extends Sprite
     {
-        private static const VIEW_H:int = 420;
+        private static const VIEW_H:int = 458;
 
         private var _holder:Sprite;
         private var _maskShape:Shape;
@@ -29,21 +29,19 @@ package weather.views
         private function build(maps:Vector.<MapVO>):void
         {
             var hdr:TextField = new TextField();
-            hdr.defaultTextFormat = new TextFormat("_sans", 16, 0xF2F2F2, true);
+            hdr.defaultTextFormat = new TextFormat("_sans", 18, 0xF2F2F2, true);
             hdr.selectable = false;
             hdr.autoSize = "left";
             hdr.text = "Налаштування по картах";
-            hdr.x = 0;
-            hdr.y = 0;
             addChild(hdr);
 
             _holder = new Sprite();
-            _holder.y = 30;
+            _holder.y = 36;
             addChild(_holder);
 
             _maskShape = new Shape();
             _maskShape.graphics.beginFill(0xFFFFFF, 1);
-            _maskShape.graphics.drawRect(0, 30, 394, VIEW_H);
+            _maskShape.graphics.drawRect(0, 36, MapTile.TILE_W, VIEW_H);
             _maskShape.graphics.endFill();
             addChild(_maskShape);
             _holder.mask = _maskShape;
@@ -63,21 +61,18 @@ package weather.views
         private function buildScrollbar():void
         {
             _scrollbar = new Sprite();
-            _scrollbar.x = 400;
-            _scrollbar.y = 30;
+            _scrollbar.x = 488;
+            _scrollbar.y = 36;
             addChild(_scrollbar);
-
             _scrollbar.graphics.lineStyle(1, 0x5A554B, 0.85);
             _scrollbar.graphics.beginFill(0x141414, 0.55);
             _scrollbar.graphics.drawRect(0, 0, 10, VIEW_H);
             _scrollbar.graphics.endFill();
-
             _thumb = new Sprite();
             _thumb.graphics.beginFill(0x7A7364, 0.9);
-            _thumb.graphics.drawRect(2, 2, 6, 70);
+            _thumb.graphics.drawRect(2, 2, 6, 72);
             _thumb.graphics.endFill();
             _scrollbar.addChild(_thumb);
-
             _scrollbar.visible = (_contentHeight > VIEW_H);
             updateThumb();
         }
@@ -90,23 +85,20 @@ package weather.views
         private function onWheel(e:MouseEvent):void
         {
             if (_contentHeight <= VIEW_H) return;
-
             _holder.y += e.delta * 22;
-            var maxY:int = 30;
-            var minY:int = 30 + VIEW_H - _contentHeight;
+            var maxY:int = 36;
+            var minY:int = 36 + VIEW_H - _contentHeight;
             if (_holder.y > maxY) _holder.y = maxY;
             if (_holder.y < minY) _holder.y = minY;
-
             updateThumb();
         }
 
         private function updateThumb():void
         {
             if (!_thumb || _contentHeight <= VIEW_H) return;
-
             var maxScroll:int = _contentHeight - VIEW_H;
-            var ratio:Number = (30 - _holder.y) / maxScroll;
-            var trackH:int = VIEW_H - 76;
+            var ratio:Number = (36 - _holder.y) / maxScroll;
+            var trackH:int = VIEW_H - 78;
             _thumb.y = 2 + ratio * trackH;
         }
     }
