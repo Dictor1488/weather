@@ -38,6 +38,7 @@ LOG = logging.getLogger('weather_mod')
 
 _active_window = None
 _runtime_thumbs_ready = False
+_runtime_thumb_paths = {}
 
 PRESET_PREVIEW = {
     'standard': 'img://gui/maps/icons/pro.environment/default.png',
@@ -58,9 +59,18 @@ BAD_IMAGE_HINTS = (
 )
 
 
+def _file_url(path):
+    try:
+        path = os.path.abspath(path).replace('\\', '/')
+        return 'file:///' + path
+    except Exception:
+        return path
+
+
 def _map_icon(map_id):
-    # Runtime extraction writes original map PNG/JPG here:
-    # res_mods/<version>/gui/maps/icons/weather/maps/<map_id>.png
+    path = _runtime_thumb_paths.get(map_id)
+    if path and os.path.isfile(path):
+        return _file_url(path)
     return 'img://gui/maps/icons/weather/maps/%s.png' % map_id
 
 
@@ -169,26 +179,6 @@ def _find_game_folder():
     return None
 
 
-def _find_game_version(game_folder):
-    try:
-        mods_dir = os.path.join(game_folder, 'mods')
-        versions = [n for n in os.listdir(mods_dir) if os.path.isdir(os.path.join(mods_dir, n))]
-        versions.sort(reverse=True)
-        if versions:
-            return versions[0]
-    except Exception:
-        pass
-    try:
-        res_mods_dir = os.path.join(game_folder, 'res_mods')
-        versions = [n for n in os.listdir(res_mods_dir) if os.path.isdir(os.path.join(res_mods_dir, n))]
-        versions.sort(reverse=True)
-        if versions:
-            return versions[0]
-    except Exception:
-        pass
-    return None
-
-
 def _score_image_member(name, map_id):
     low = name.lower().replace('\\', '/')
     if not IMAGE_RE.search(low):
@@ -233,6 +223,7 @@ def _find_map_pkg(packages_dir, map_id):
 def _extract_one_runtime_thumb(packages_dir, out_dir, map_id):
     out_path = os.path.join(out_dir, map_id + '.png')
     if os.path.isfile(out_path):
+        _runtime_thumb_paths[map_id] = out_path
         return True
     pkg = _find_map_pkg(packages_dir, map_id)
     if not pkg:
@@ -261,6 +252,7 @@ def _extract_one_runtime_thumb(packages_dir, out_dir, map_id):
             f.write(data)
         finally:
             f.close()
+        _runtime_thumb_paths[map_id] = out_path
         return True
     except Exception:
         return False
@@ -279,11 +271,8 @@ def _ensure_runtime_map_thumbs():
     game_folder = _find_game_folder()
     if not game_folder:
         return
-    version = _find_game_version(game_folder)
-    if not version:
-        return
     packages_dir = os.path.join(game_folder, 'res', 'packages')
-    out_dir = os.path.join(game_folder, 'res_mods', version, 'gui', 'maps', 'icons', 'weather', 'maps')
+    out_dir = os.path.join(game_folder, 'res', 'gui', 'maps', 'icons', 'weather', 'maps')
     for map_id, _label in MAP_REGISTRY:
         _extract_one_runtime_thumb(packages_dir, out_dir, map_id)
 
