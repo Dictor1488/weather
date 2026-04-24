@@ -195,8 +195,10 @@ jobs:
                 "-optimize=true"
             )
 
-            # +configname=none вимикає flex-config.xml який перевизначає всі аргументи
-            $mxmlcArgs += @("+configname=none", "--")
+            # Створюємо порожній конфіг щоб заблокувати flex-config.xml
+            $emptyConfig = "$PWD\empty-config.xml"
+            '<?xml version="1.0"?><flex-config/>' | Out-File $emptyConfig -Encoding UTF8
+            $mxmlcArgs += @("-load-config=$emptyConfig", "--")
             $mxmlcArgs += $mainClassPath
             Write-Host "Running: mxmlc $($mxmlcArgs -join ' ')"
             $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs `
