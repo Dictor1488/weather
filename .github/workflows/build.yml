@@ -195,17 +195,21 @@ jobs:
                 "-optimize=true"
             )
 
-            # Створюємо порожній конфіг щоб заблокувати flex-config.xml
-            $emptyConfig = "$PWD\empty-config.xml"
-            '<?xml version="1.0"?><flex-config/>' | Out-File $emptyConfig -Encoding UTF8
-            $mxmlcArgs += @("-load-config=$emptyConfig", "--")
-            $mxmlcArgs += $mainClassPath
-            Write-Host "Running: mxmlc $($mxmlcArgs -join ' ')"
-            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs `
+            # # Записуємо всі аргументи у файл відповідей (@argfile)
+            # це єдиний надійний спосіб передати шляхи в mxmlc через PowerShell
+            $argFile = "$PWD\mxmlc-args.txt"
+            $allArgs = $mxmlcArgs + @("--", $mainClassPath)
+            $allArgs | ForEach-Object { $_ } | Out-File $argFile -Encoding ASCII
+            Write-Host "=== Arg file ==="
+            Get-Content $argFile | Write-Host
+            Write-Host "================"
+            Write-Host "Running: mxmlc @$argFile"
+            $process = Start-Process -FilePath $mxmlcPath `
+                -ArgumentList "@`"$argFile`"" `
                 -NoNewWindow -Wait -PassThru `
                 -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
             Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
-            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
+            Remove-Item "out.txt","err.txt","$argFile" -Force -ErrorAction SilentlyContinue
 
             if ($process.ExitCode -ne 0) {
                 Write-Error "Compilation failed with exit code $($process.ExitCode)"
