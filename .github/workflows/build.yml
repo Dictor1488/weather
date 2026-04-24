@@ -169,6 +169,8 @@ jobs:
             $projXml.project.classpaths.class | ForEach-Object {
                 if ($_.path) {
                     $srcDir = Join-Path $projDir $_.path
+                    # Resolve-Path прибирає зайву крапку: src_flash\. -> src_flash
+                    $srcDir = (Resolve-Path $srcDir).Path
                     if (Test-Path $srcDir) {
                         $mxmlcArgs += "-source-path+=$srcDir"
                         Write-Host "Source path: $srcDir"
