@@ -13,6 +13,7 @@ package weather
         private var _view:WeatherView;
         private var _globalPresets:Vector.<PresetVO>;
         private var _maps:Vector.<MapVO>;
+        private var _currentPreset:String;
 
         public function WeatherMediator()
         {
@@ -24,7 +25,8 @@ package weather
         public function as_setData(payload:Object):void
         {
             _globalPresets = parsePresets(payload.presets);
-            _maps = parseMaps(payload.maps);
+            _maps          = parseMaps(payload.maps);
+            _currentPreset = String(payload.currentPreset || "standard");
 
             if (_view)
             {
@@ -32,15 +34,15 @@ package weather
                 _view = null;
             }
 
-            var hotkeyStr:String = String(payload.hotkey || "F12");
-            var hotkeyKeys:Array = payload.hotkeyKeys as Array || [];
+            var hotkeyStr:String  = String(payload.hotkey || "F12");
+            var hotkeyKeys:Array  = payload.hotkeyKeys as Array || [];
 
-            _view = new WeatherView(_globalPresets, _maps, hotkeyStr, hotkeyKeys);
-            _view.addEventListener(WeatherEvent.PRESET_WEIGHT_CHANGED, onWeightChanged);
-            _view.addEventListener(WeatherEvent.MAP_SELECTED, onMapSelected);
-            _view.addEventListener(WeatherEvent.TAB_CHANGED, onTabChanged);
-            _view.addEventListener(WeatherEvent.CLOSE_REQUESTED, onCloseRequested);
-            _view.addEventListener(WeatherEvent.HOTKEY_CHANGED, onHotkeyChanged);
+            _view = new WeatherView(_globalPresets, _maps, hotkeyStr, hotkeyKeys, _currentPreset);
+            _view.addEventListener(WeatherEvent.PRESET_SELECTED,     onPresetSelected);
+            _view.addEventListener(WeatherEvent.MAP_SELECTED,        onMapSelected);
+            _view.addEventListener(WeatherEvent.TAB_CHANGED,         onTabChanged);
+            _view.addEventListener(WeatherEvent.CLOSE_REQUESTED,     onCloseRequested);
+            _view.addEventListener(WeatherEvent.HOTKEY_CHANGED,      onHotkeyChanged);
             addChild(_view);
         }
 
@@ -51,9 +53,10 @@ package weather
 
         // ========== AS3 → Python ==========
 
-        private function onWeightChanged(e:WeatherEvent):void
+        private function onPresetSelected(e:WeatherEvent):void
         {
-            py_onWeightChanged(e.mapId, e.presetId, e.value);
+            // mapId == null → глобальний пресет; mapId != null → пресет для конкретної карти
+            py_onPresetSelected(e.mapId, e.presetId);
         }
 
         private function onMapSelected(e:WeatherEvent):void
@@ -78,7 +81,7 @@ package weather
         }
 
         // DAAPI proxy — підміняються WoT інфраструктурою
-        private function py_onWeightChanged(mapId:String, presetId:String, value:Number):void {}
+        private function py_onPresetSelected(mapId:String, presetId:String):void {}
         private function py_onMapSelected(mapId:String):void {}
         private function py_onTabChanged(tab:String):void {}
         private function py_onCloseRequested():void {}
@@ -94,7 +97,7 @@ package weather
             {
                 var o:Object = src[i];
                 var p:PresetVO = new PresetVO(o.id, o.label, o.guid, o.previewSrc);
-                p.weight = Number(o.weight);
+                p.weight = Number(o.weight || 0);
                 out.push(p);
             }
             return out;
