@@ -413,6 +413,26 @@ def _remove_key_hook():
 # Mod Settings API
 # ---------------------------------------------------------------------------
 
+def _get_window_layer():
+    """WoT 2.x uses frameworks.wulf.WindowLayer, not old ViewTypes.
+
+    In 2.2.x WindowLayer.WINDOW == 7. The old fallback value 3 is
+    WindowLayer.MARKER, so the SWF can be registered but never appear as
+    a normal window.
+    """
+    try:
+        from frameworks.wulf import WindowLayer
+        return WindowLayer.WINDOW
+    except Exception:
+        pass
+    try:
+        from frameworks.wulf.gui_constants import WindowLayer
+        return WindowLayer.WINDOW
+    except Exception:
+        pass
+    return 7
+
+
 def _register_weather_view():
     global _VIEW_REGISTERED
     if _VIEW_REGISTERED:
@@ -420,45 +440,35 @@ def _register_weather_view():
     try:
         from weather_window import WeatherWindowMeta
         from gui.Scaleform.framework import g_entitiesFactories, ScopeTemplates
+        layer = _get_window_layer()
 
-        # Спроба 1: WoT 2.x — GroupedViewSettings
+        # Correct location in WoT 2.x: GroupedViewSettings is exported from
+        # gui.Scaleform.framework, not gui.Scaleform.framework.entities.GroupedView.
         try:
-            from gui.Scaleform.framework.entities.GroupedView import GroupedViewSettings
+            from gui.Scaleform.framework import GroupedViewSettings
             settings = GroupedViewSettings(
                 WEATHER_PANEL_ALIAS, WeatherWindowMeta, WEATHER_PANEL_SWF,
-                3, None, None, ScopeTemplates.DEFAULT_SCOPE
+                layer, None, None, ScopeTemplates.DEFAULT_SCOPE,
+                False, None, True, True, False, True
             )
             g_entitiesFactories.addSettings(settings)
             _VIEW_REGISTERED = True
-            _log().info('Weather view registered (GroupedViewSettings): %s', WEATHER_PANEL_ALIAS)
+            _log().info('Weather view registered (GroupedViewSettings): alias=%s swf=%s layer=%s',
+                        WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, layer)
             return
         except Exception as e:
             _log().info('_register: GroupedViewSettings failed: %s', e)
 
-        # Спроба 2: ViewSettings з ViewTypes
         from gui.Scaleform.framework import ViewSettings
-        ViewTypes = None
-        for mod_path in ('gui.Scaleform.framework',
-                         'gui.Scaleform.framework.entities.View',
-                         'gui.Scaleform.framework.view_types'):
-            try:
-                import importlib
-                m = importlib.import_module(mod_path)
-                if hasattr(m, 'ViewTypes'):
-                    ViewTypes = m.ViewTypes
-                    break
-            except Exception:
-                pass
-        if ViewTypes is None:
-            class ViewTypes(object):
-                WINDOW = 3
         settings = ViewSettings(
             WEATHER_PANEL_ALIAS, WeatherWindowMeta, WEATHER_PANEL_SWF,
-            ViewTypes.WINDOW, None, ScopeTemplates.DEFAULT_SCOPE
+            layer, None, ScopeTemplates.DEFAULT_SCOPE,
+            False, None, True, True, False, True
         )
         g_entitiesFactories.addSettings(settings)
         _VIEW_REGISTERED = True
-        _log().info('Weather view registered (ViewSettings): %s', WEATHER_PANEL_ALIAS)
+        _log().info('Weather view registered (ViewSettings): alias=%s swf=%s layer=%s',
+                    WEATHER_PANEL_ALIAS, WEATHER_PANEL_SWF, layer)
     except Exception:
         _log().exception('Weather view registration failed')
 
