@@ -1,5 +1,6 @@
 package weather.components
 {
+    import flash.display.Bitmap;
     import flash.display.Loader;
     import flash.display.Shape;
     import flash.display.Sprite;
@@ -10,6 +11,7 @@ package weather.components
     import flash.net.URLRequest;
     import flash.text.TextField;
     import flash.text.TextFormat;
+    import flash.text.TextFormatAlign;
 
     import weather.data.MapVO;
     import weather.events.WeatherEvent;
@@ -23,6 +25,7 @@ package weather.components
         private var _hover:Sprite;
         private var _thumb:Loader;
         private var _thumbHolder:Sprite;
+        private var _shade:Shape;
 
         public function MapTile(vo:MapVO)
         {
@@ -30,6 +33,7 @@ package weather.components
             buttonMode = true;
             useHandCursor = true;
             mouseChildren = false;
+            scrollRect = new Rectangle(0, 0, TILE_W, TILE_H);
             buildUI();
 
             addEventListener(MouseEvent.ROLL_OVER, onOver);
@@ -40,23 +44,24 @@ package weather.components
         private function buildUI():void
         {
             graphics.lineStyle(1, 0x28303A, 0.95);
-            graphics.beginFill(0x14181E, 0.88);
+            graphics.beginFill(0x14181E, 1.0);
             graphics.drawRect(0, 0, TILE_W, TILE_H);
             graphics.endFill();
 
             _thumbHolder = new Sprite();
             _thumbHolder.x = 0;
             _thumbHolder.y = 0;
+            _thumbHolder.alpha = 0.48;
             addChild(_thumbHolder);
 
             drawFallbackBackground();
             loadThumb();
 
-            var shade:Shape = new Shape();
-            shade.graphics.beginFill(0x000000, 0.34);
-            shade.graphics.drawRect(0, 0, TILE_W, TILE_H);
-            shade.graphics.endFill();
-            addChild(shade);
+            _shade = new Shape();
+            _shade.graphics.beginFill(0x000000, 0.22);
+            _shade.graphics.drawRect(0, 0, TILE_W, TILE_H);
+            _shade.graphics.endFill();
+            addChild(_shade);
 
             _hover = new Sprite();
             _hover.graphics.beginFill(0xAA6E14, 0.14);
@@ -65,11 +70,15 @@ package weather.components
             _hover.visible = false;
             addChild(_hover);
 
+            var fmt:TextFormat = new TextFormat("_sans", 13, 0xF0F0F0, true);
+            fmt.align = TextFormatAlign.LEFT;
             var title:TextField = new TextField();
-            title.defaultTextFormat = new TextFormat("_sans", 13, 0xF0F0F0, true);
+            title.defaultTextFormat = fmt;
             title.selectable = false;
             title.width = TILE_W - 18;
-            title.height = 26;
+            title.height = 42;
+            title.multiline = true;
+            title.wordWrap = true;
             title.text = _vo.label;
             title.x = 9;
             title.y = 8;
@@ -86,7 +95,7 @@ package weather.components
             var seed:int = Math.abs(hash(_vo.id));
             var colors:Array = [0x1E2F3C, 0x2B3524, 0x3E3023, 0x252A30, 0x273541];
             var c:uint = colors[seed % colors.length];
-            _thumbHolder.graphics.beginFill(c, 0.82);
+            _thumbHolder.graphics.beginFill(c, 1.0);
             _thumbHolder.graphics.drawRect(0, 0, TILE_W, TILE_H);
             _thumbHolder.graphics.endFill();
             _thumbHolder.graphics.beginFill(0xFFFFFF, 0.04);
@@ -118,10 +127,27 @@ package weather.components
 
         private function onThumbLoaded(e:Event):void
         {
-            _thumb.width = TILE_W;
-            _thumb.height = TILE_H;
-            _thumb.alpha = 0.58;
-            _thumb.scrollRect = new Rectangle(0, 0, TILE_W, TILE_H);
+            var bw:Number = _thumb.contentLoaderInfo.width;
+            var bh:Number = _thumb.contentLoaderInfo.height;
+            if (bw <= 0 || bh <= 0)
+            {
+                _thumb.width = TILE_W;
+                _thumb.height = TILE_H;
+            }
+            else
+            {
+                var scale:Number = Math.max(TILE_W / bw, TILE_H / bh);
+                _thumb.scaleX = _thumb.scaleY = scale;
+                _thumb.x = int((TILE_W - bw * scale) * 0.5);
+                _thumb.y = int((TILE_H - bh * scale) * 0.5);
+            }
+            try
+            {
+                var bmp:Bitmap = _thumb.content as Bitmap;
+                if (bmp) bmp.smoothing = true;
+            }
+            catch (err:Error) {}
+            _thumbHolder.scrollRect = new Rectangle(0, 0, TILE_W, TILE_H);
         }
 
         private function onThumbError(e:IOErrorEvent):void
@@ -139,18 +165,27 @@ package weather.components
             for (var i:int = 0; i < 3; i++)
             {
                 var y:int = i * 7;
-                s.graphics.lineStyle(2, 0xD0D0D0, 0.86);
+                s.graphics.lineStyle(2, 0xD0D0D0, 0.88);
                 s.graphics.moveTo(0, y);
-                s.graphics.lineTo(28, y);
-                s.graphics.beginFill(0xD0D0D0, 0.92);
-                s.graphics.drawCircle((i == 0 ? 7 : (i == 1 ? 17 : 12)), y, 3.5);
+                s.graphics.lineTo(24, y);
+                s.graphics.beginFill(0xD0D0D0, 0.94);
+                s.graphics.drawCircle((i == 0 ? 5 : (i == 1 ? 14 : 9)), y, 3.5);
                 s.graphics.endFill();
             }
             return s;
         }
 
-        private function onOver(e:MouseEvent):void { _hover.visible = true; }
-        private function onOut(e:MouseEvent):void  { _hover.visible = false; }
+        private function onOver(e:MouseEvent):void
+        {
+            _hover.visible = true;
+            _thumbHolder.alpha = 0.65;
+        }
+
+        private function onOut(e:MouseEvent):void
+        {
+            _hover.visible = false;
+            _thumbHolder.alpha = 0.48;
+        }
 
         private function onClick(e:MouseEvent):void
         {
