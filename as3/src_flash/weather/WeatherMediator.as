@@ -1,15 +1,14 @@
 package weather
 {
+    import flash.display.Sprite;
     import flash.events.Event;
-
-    import net.wg.infrastructure.base.AbstractView;
 
     import weather.views.WeatherView;
     import weather.data.PresetVO;
     import weather.data.MapVO;
     import weather.events.WeatherEvent;
 
-    public class WeatherMediator extends AbstractView
+    public class WeatherMediator extends Sprite
     {
         private var _view:WeatherView;
         private var _globalPresets:Vector.<PresetVO>;
@@ -33,8 +32,7 @@ package weather
                 _view = null;
             }
 
-            // FIX 1: передаємо hotkey і hotkeyKeys у WeatherView
-            var hotkeyStr:String = String(payload.hotkey || "ALT+F12");
+            var hotkeyStr:String = String(payload.hotkey || "F12");
             var hotkeyKeys:Array = payload.hotkeyKeys as Array || [];
 
             _view = new WeatherView(_globalPresets, _maps, hotkeyStr, hotkeyKeys);
@@ -42,7 +40,6 @@ package weather
             _view.addEventListener(WeatherEvent.MAP_SELECTED, onMapSelected);
             _view.addEventListener(WeatherEvent.TAB_CHANGED, onTabChanged);
             _view.addEventListener(WeatherEvent.CLOSE_REQUESTED, onCloseRequested);
-            // FIX 1: слухаємо зміну хоткея
             _view.addEventListener(WeatherEvent.HOTKEY_CHANGED, onHotkeyChanged);
             addChild(_view);
         }
@@ -75,13 +72,12 @@ package weather
             py_onCloseRequested();
         }
 
-        // FIX 1: передаємо новий хоткей у Python
         private function onHotkeyChanged(e:WeatherEvent):void
         {
             py_onHotkeyChanged(e.payload as Array, String(e.mapId));
         }
 
-        // DAAPI proxy методи (підміняються WoT інфраструктурою)
+        // DAAPI proxy — підміняються WoT інфраструктурою
         private function py_onWeightChanged(mapId:String, presetId:String, value:Number):void {}
         private function py_onMapSelected(mapId:String):void {}
         private function py_onTabChanged(tab:String):void {}
