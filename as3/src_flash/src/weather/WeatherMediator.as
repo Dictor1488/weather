@@ -165,15 +165,15 @@ package weather
         private function makeDebugPayload():Object
         {
             var presets:Array = [
-                {id:"standard", label:"Стандарт",  guid:"",                                    previewSrc:"gui/maps/icons/pro.environment/default.png",                              weight:20},
-                {id:"midnight", label:"Ніч",       guid:"15755E11.4090266B.594778B6.B233C12C", previewSrc:"gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png", weight:20},
-                {id:"overcast", label:"Похмуро",   guid:"56BA3213.40FFB1DF.125FBCAD.173E8347", previewSrc:"gui/maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png", weight:20},
-                {id:"sunset",   label:"Захід",     guid:"6DEE1EBB.44F63FCC.AACF6185.7FBBC34E", previewSrc:"gui/maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png", weight:20},
-                {id:"midday",   label:"Полудень",  guid:"BF040BCB.4BE1D04F.7D484589.135E881B", previewSrc:"gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png", weight:20}
+                {id:"standard", label:"Стандарт",  guid:"",                                    previewSrc:"../maps/icons/pro.environment/default.png",                              weight:20},
+                {id:"midnight", label:"Ніч",       guid:"15755E11.4090266B.594778B6.B233C12C", previewSrc:"../maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png", weight:20},
+                {id:"overcast", label:"Похмуро",   guid:"56BA3213.40FFB1DF.125FBCAD.173E8347", previewSrc:"../maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png", weight:20},
+                {id:"sunset",   label:"Захід",     guid:"6DEE1EBB.44F63FCC.AACF6185.7FBBC34E", previewSrc:"../maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png", weight:20},
+                {id:"midday",   label:"Полудень",  guid:"BF040BCB.4BE1D04F.7D484589.135E881B", previewSrc:"../maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png", weight:20}
             ];
             return {
                 presets: presets,
-                maps: [{id:"05_prohorovka", label:"Прохорівка", thumbSrc:"gui/maps/icons/map/list/05_prohorovka.png", useGlobal:false, presets:presets}],
+                maps: [{id:"05_prohorovka", label:"Прохорівка", thumbSrc:"../maps/icons/map/list/05_prohorovka.png", useGlobal:false, presets:presets}],
                 hotkey: "F12",
                 hotkeyKeys: [],
                 currentPreset: "standard"
