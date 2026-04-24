@@ -10,8 +10,8 @@ package weather.components
 
     public class MapTile extends Sprite
     {
-        public static const TILE_W:int = 394;
-        public static const TILE_H:int = 34;
+        public static const TILE_W:int = 480;
+        public static const TILE_H:int = 36;
 
         private var _vo:MapVO;
         private var _hover:Sprite;
@@ -44,21 +44,21 @@ package weather.components
             addChild(_hover);
 
             var title:TextField = new TextField();
-            title.defaultTextFormat = new TextFormat("_sans", 13, 0xF2F2F2, true);
+            title.defaultTextFormat = new TextFormat("_sans", 14, 0xF2F2F2, true);
             title.selectable = false;
             title.autoSize = "left";
             title.text = _vo.label;
-            title.x = 12;
-            title.y = 7;
+            title.x = 14;
+            title.y = 8;
             addChild(title);
 
             var icon:TextField = new TextField();
-            icon.defaultTextFormat = new TextFormat("_sans", 14, 0xD5A45A, true);
+            icon.defaultTextFormat = new TextFormat("_sans", 12, 0xB98525, true);
             icon.selectable = false;
             icon.autoSize = "left";
-            icon.text = "⚙";
+            icon.text = "□";
             icon.x = TILE_W - 28;
-            icon.y = 7;
+            icon.y = 9;
             addChild(icon);
         }
 
