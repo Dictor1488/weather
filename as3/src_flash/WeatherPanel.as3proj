@@ -14,7 +14,7 @@
     <class path="." />
   </classpaths>
   <compileTargets>
-    <compile path="weather/WeatherMediator.as" />
+    <compile path="WeatherMediator.as" />
   </compileTargets>
   <libraryPaths />
   <externalLibraryPaths>
