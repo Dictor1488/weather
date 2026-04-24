@@ -920,23 +920,43 @@ def _try_live_switch(preset_id):
             LOG.info('_try_live_switch: diag ERR: %s', de)
 
         if preset_id == 'standard':
-            space.resetEnvironment()
-            LOG.info('_try_live_switch: resetEnvironment() OK')
+            # Прямо встановлюємо атрибут
+            try:
+                space.environment = ''
+            except Exception:
+                pass
+            try:
+                space.resetEnvironment()
+            except Exception:
+                pass
+            LOG.info('_try_live_switch: standard applied')
             return True
 
         guid = PRESET_GUIDS.get(preset_id)
         if not guid:
             return False
 
-        # Пробуємо різні формати name
-        tries = [guid, guid.lower(), preset_id]
-        for name in tries:
-            try:
-                space.setEnvironment(name)
-                new_env = getattr(space, 'environment', None)
-                LOG.info('_try_live_switch: setEnvironment(%r) -> space.environment=%r', name, new_env)
-            except Exception as se:
-                LOG.info('_try_live_switch: setEnvironment(%r) ERR: %s', name, se)
+        # Спроба 1: прямо встановити атрибут environment (обхід серверної реплікації)
+        try:
+            space.environment = guid
+            new_env = getattr(space, 'environment', None)
+            LOG.info('_try_live_switch: direct space.environment = %r -> %r', guid, new_env)
+        except Exception as e:
+            LOG.info('_try_live_switch: direct attr ERR: %s', e)
+
+        # Спроба 2: викликати set_environment (callback для реплікації)
+        try:
+            space.set_environment(None)
+            LOG.info('_try_live_switch: set_environment(None) called')
+        except Exception as e:
+            LOG.info('_try_live_switch: set_environment ERR: %s', e)
+
+        # Спроба 3: getEnvironment (можливо він повертає щось корисне)
+        try:
+            ge = space.getEnvironment()
+            LOG.info('_try_live_switch: getEnvironment() = %r', ge)
+        except Exception as e:
+            LOG.info('_try_live_switch: getEnvironment ERR: %s', e)
 
         return True
 
