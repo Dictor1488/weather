@@ -91,14 +91,18 @@ jobs:
         Copy-Item $libsPlayerGlobal "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
         $flexConfig = "C:\flex-sdk\frameworks\flex-config.xml"
         if (Test-Path $flexConfig) {
-            # Читаємо рядками щоб надійно видалити localFonts.ser
-            $lines = Get-Content $flexConfig
-            $lines = $lines | Where-Object { $_ -notmatch 'localFonts' -and $_ -notmatch 'local-fonts' }
-            $fixed = $lines -join "`n"
-            $fixed = $fixed -replace '\{playerglobalHome\}', 'C:/flex-sdk/frameworks/libs/player'
-            Set-Content $flexConfig $fixed -Encoding UTF8
-            Write-Host "flex-config.xml patched OK"
-            Select-String "localFonts" $flexConfig | Write-Host
+            python3 -c "
+import re, sys
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f:
+    c = f.read()
+c = c.replace('{playerglobalHome}', 'C:/flex-sdk/frameworks/libs/player')
+c = re.sub(r'<local-fonts-snapshot[^/]*/>', '', c)
+c = re.sub(r'<local-fonts-snapshot[^>]*>.*?</local-fonts-snapshot>', '', c, flags=re.DOTALL)
+with open(path, 'w', encoding='utf-8') as f:
+    f.write(c)
+print('flex-config.xml patched OK')
+" $flexConfig
         }
 
     - name: Install dependencies
