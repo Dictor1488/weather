@@ -29,14 +29,16 @@ package weather.components
         private var _preview:Loader;
         private var _previewPlaceholder:Sprite;
         private var _rowWidth:int;
-        private var _sliderW:int = 320;
+        private var _sliderW:int = 310;
         private var _dragging:Boolean = false;
 
         public function PresetRow(vo:PresetVO, mapId:String = null)
         {
             _vo = vo;
             _mapId = mapId;
-            _rowWidth = 860;
+            if (_vo.label == "Пасмурно" || _vo.label == "Хмарно")
+                _vo.label = "Похмуро";
+            _rowWidth = 880;
             buildUI();
         }
 
@@ -47,7 +49,7 @@ package weather.components
             drawBg();
 
             _label = new TextField();
-            _label.defaultTextFormat = new TextFormat("_sans", 17, 0xFFFFFF, true);
+            _label.defaultTextFormat = new TextFormat("_sans", 20, 0xFFFFFF, true);
             _label.selectable = false;
             _label.autoSize = "left";
             _label.text = _vo.label;
@@ -55,14 +57,13 @@ package weather.components
             _label.y = 18;
             addChild(_label);
 
-            // Власний слайдер
             buildSlider();
 
             _weightText = new TextField();
-            _weightText.defaultTextFormat = new TextFormat("_sans", 15, 0xD6D6D6, false);
+            _weightText.defaultTextFormat = new TextFormat("_sans", 15, 0xE2E2E2, true);
             _weightText.selectable = false;
             _weightText.autoSize = "left";
-            _weightText.x = 510;
+            _weightText.x = 520;
             _weightText.y = 21;
             addChild(_weightText);
             updateWeightText();
@@ -83,19 +84,31 @@ package weather.components
         private function buildSlider():void
         {
             _sliderTrack = new Sprite();
-            _sliderTrack.graphics.beginFill(0x3A3A3A, 1);
+
+            _sliderTrack.graphics.lineStyle(1, 0x111111, 1);
+            _sliderTrack.graphics.beginFill(0x0A0A0A, 1);
             _sliderTrack.graphics.drawRect(0, 0, _sliderW, 6);
             _sliderTrack.graphics.endFill();
-            _sliderTrack.x = 170;
-            _sliderTrack.y = 29;
+
+            // tiny red ticks, WoT-like
+            for (var i:int = 0; i < 32; i++)
+            {
+                _sliderTrack.graphics.lineStyle(1, 0x4D1611, 0.65);
+                _sliderTrack.graphics.moveTo(i * 10, -2);
+                _sliderTrack.graphics.lineTo(i * 10, 8);
+            }
+
+            _sliderTrack.x = 175;
+            _sliderTrack.y = 30;
             addChild(_sliderTrack);
 
             _sliderFill = new Shape();
             _sliderTrack.addChild(_sliderFill);
 
             _sliderThumb = new Sprite();
-            _sliderThumb.graphics.beginFill(0xC8102E, 1);
-            _sliderThumb.graphics.drawRect(-5, -8, 10, 22);
+            _sliderThumb.graphics.lineStyle(1, 0xE0C29B, 1);
+            _sliderThumb.graphics.beginFill(0x8B6F50, 1);
+            _sliderThumb.graphics.drawRect(-4, -8, 8, 22);
             _sliderThumb.graphics.endFill();
             _sliderThumb.y = 3;
             _sliderTrack.addChild(_sliderThumb);
@@ -113,44 +126,47 @@ package weather.components
             _sliderThumb.x = px;
 
             _sliderFill.graphics.clear();
-            _sliderFill.graphics.beginFill(0xC8102E, 0.6);
+            _sliderFill.graphics.beginFill(0x8A2A20, 0.75);
             _sliderFill.graphics.drawRect(0, 0, px, 6);
             _sliderFill.graphics.endFill();
         }
 
         private function onTrackClick(e:MouseEvent):void
         {
-            var px:Number = _sliderTrack.mouseX;
-            setSliderValue(px);
+            setSliderValue(_sliderTrack.mouseX);
         }
 
         private function onThumbDown(e:MouseEvent):void
         {
             _dragging = true;
-            stage.addEventListener(MouseEvent.MOUSE_MOVE, onStageMove);
-            stage.addEventListener(MouseEvent.MOUSE_UP, onStageUp);
+            if (stage)
+            {
+                stage.addEventListener(MouseEvent.MOUSE_MOVE, onStageMove);
+                stage.addEventListener(MouseEvent.MOUSE_UP, onStageUp);
+            }
             e.stopPropagation();
         }
 
         private function onStageMove(e:MouseEvent):void
         {
             if (!_dragging) return;
-            var px:Number = _sliderTrack.mouseX;
-            setSliderValue(px);
+            setSliderValue(_sliderTrack.mouseX);
         }
 
         private function onStageUp(e:MouseEvent):void
         {
             _dragging = false;
-            stage.removeEventListener(MouseEvent.MOUSE_MOVE, onStageMove);
-            stage.removeEventListener(MouseEvent.MOUSE_UP, onStageUp);
+            if (stage)
+            {
+                stage.removeEventListener(MouseEvent.MOUSE_MOVE, onStageMove);
+                stage.removeEventListener(MouseEvent.MOUSE_UP, onStageUp);
+            }
         }
 
         private function setSliderValue(px:Number):void
         {
             px = Math.max(0, Math.min(_sliderW, px));
-            var ratio:Number = px / _sliderW;
-            _vo.weight = Math.round(ratio * MAX_WEIGHT);
+            _vo.weight = Math.round((px / _sliderW) * MAX_WEIGHT);
             updateSliderPos();
             updateWeightText();
 
@@ -164,33 +180,34 @@ package weather.components
         private function drawBg():void
         {
             _bg.graphics.clear();
-            _bg.graphics.lineStyle(1, 0x3C3C3C, 1);
-            _bg.graphics.beginFill(0x1A1A1A, 0.58);
+            _bg.graphics.lineStyle(1, 0x50545A, 0.9);
+            _bg.graphics.beginFill(0x171A1D, 0.72);
             _bg.graphics.drawRect(0, 0, _rowWidth, ROW_HEIGHT);
             _bg.graphics.endFill();
         }
 
         private function drawPreviewPlaceholder():void
         {
-            var color:uint = 0x243025;
-            if (_vo.id == "midnight")      color = 0x13233D;
-            else if (_vo.id == "overcast") color = 0x39424B;
-            else if (_vo.id == "sunset")   color = 0x61452A;
-            else if (_vo.id == "midday")   color = 0x485B33;
+            var color:uint = 0x1F2820;
+            if (_vo.id == "midnight")      color = 0x15243C;
+            else if (_vo.id == "overcast") color = 0x353A40;
+            else if (_vo.id == "sunset")   color = 0x54402B;
+            else if (_vo.id == "midday")   color = 0x344420;
 
             _previewPlaceholder.graphics.clear();
-            _previewPlaceholder.graphics.beginFill(color, 0.88);
-            _previewPlaceholder.graphics.drawRect(0, 0, 180, ROW_HEIGHT);
+            _previewPlaceholder.graphics.beginFill(color, 0.90);
+            _previewPlaceholder.graphics.drawRect(0, 0, 230, ROW_HEIGHT);
             _previewPlaceholder.graphics.endFill();
-            _previewPlaceholder.x = _rowWidth - 180;
+            _previewPlaceholder.x = _rowWidth - 230;
         }
 
         private function onPreviewLoaded(e:Event):void
         {
-            _preview.width = 180;
+            _preview.width = 230;
             _preview.height = ROW_HEIGHT;
-            _preview.x = _rowWidth - 180;
-            _preview.scrollRect = new Rectangle(0, 0, 180, ROW_HEIGHT);
+            _preview.x = _rowWidth - 230;
+            _preview.scrollRect = new Rectangle(0, 0, 230, ROW_HEIGHT);
+            _preview.alpha = 0.70;
         }
 
         private function updateWeightText():void
@@ -203,7 +220,7 @@ package weather.components
             _rowWidth = w;
             drawBg();
             drawPreviewPlaceholder();
-            if (_preview) _preview.x = _rowWidth - 180;
+            if (_preview) _preview.x = _rowWidth - 230;
         }
 
         public function get data():PresetVO { return _vo; }

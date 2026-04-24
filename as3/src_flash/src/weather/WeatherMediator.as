@@ -32,17 +32,26 @@ package weather
                 stage.scaleMode = StageScaleMode.NO_SCALE;
             }
 
-            // Debug/fallback mode. У грі Python одразу викличе as_setData() і замінить ці дані.
-            // Якщо SWF відкрито окремо або DAAPI не викликав as_setData, UI не буде порожнім.
             if (!_view)
                 as_setData(makeDebugPayload());
         }
 
         override protected function onDispose():void
         {
+            removeView();
+
+            _globalPresets = null;
+            _maps = null;
+
+            super.onDispose();
+        }
+
+        private function removeView():void
+        {
             if (_view)
             {
                 _view.removeEventListener(WeatherEvent.PRESET_SELECTED, onPresetSelected);
+                _view.removeEventListener(WeatherEvent.PRESET_WEIGHT_CHANGED, onWeightChanged);
                 _view.removeEventListener(WeatherEvent.MAP_SELECTED, onMapSelected);
                 _view.removeEventListener(WeatherEvent.TAB_CHANGED, onTabChanged);
                 _view.removeEventListener(WeatherEvent.CLOSE_REQUESTED, onCloseRequested);
@@ -53,11 +62,6 @@ package weather
 
                 _view = null;
             }
-
-            _globalPresets = null;
-            _maps = null;
-
-            super.onDispose();
         }
 
         // ========== Python → AS3 ==========
@@ -71,25 +75,14 @@ package weather
             _maps          = parseMaps(payload.maps as Array);
             _currentPreset = String(payload.currentPreset || "standard");
 
-            if (_view)
-            {
-                _view.removeEventListener(WeatherEvent.PRESET_SELECTED, onPresetSelected);
-                _view.removeEventListener(WeatherEvent.MAP_SELECTED, onMapSelected);
-                _view.removeEventListener(WeatherEvent.TAB_CHANGED, onTabChanged);
-                _view.removeEventListener(WeatherEvent.CLOSE_REQUESTED, onCloseRequested);
-                _view.removeEventListener(WeatherEvent.HOTKEY_CHANGED, onHotkeyChanged);
-
-                if (contains(_view))
-                    removeChild(_view);
-
-                _view = null;
-            }
+            removeView();
 
             var hotkeyStr:String  = String(payload.hotkey || "F12");
             var hotkeyKeys:Array  = (payload.hotkeyKeys as Array) || [];
 
             _view = new WeatherView(_globalPresets, _maps, hotkeyStr, hotkeyKeys, _currentPreset);
             _view.addEventListener(WeatherEvent.PRESET_SELECTED, onPresetSelected);
+            _view.addEventListener(WeatherEvent.PRESET_WEIGHT_CHANGED, onWeightChanged);
             _view.addEventListener(WeatherEvent.MAP_SELECTED, onMapSelected);
             _view.addEventListener(WeatherEvent.TAB_CHANGED, onTabChanged);
             _view.addEventListener(WeatherEvent.CLOSE_REQUESTED, onCloseRequested);
@@ -107,6 +100,11 @@ package weather
         private function onPresetSelected(e:WeatherEvent):void
         {
             py_onPresetSelected(e.mapId, e.presetId);
+        }
+
+        private function onWeightChanged(e:WeatherEvent):void
+        {
+            py_onWeightChanged(e.mapId, e.presetId, e.value);
         }
 
         private function onMapSelected(e:WeatherEvent):void
@@ -132,6 +130,7 @@ package weather
 
         // DAAPI proxy — підміняються WoT інфраструктурою
         private function py_onPresetSelected(mapId:String, presetId:String):void {}
+        private function py_onWeightChanged(mapId:String, presetId:String, value:Number):void {}
         private function py_onMapSelected(mapId:String):void {}
         private function py_onTabChanged(tab:String):void {}
         private function py_onCloseRequested():void {}
@@ -142,18 +141,18 @@ package weather
         private function makeDebugPayload():Object
         {
             var presets:Array = [
-                {id:"standard", label:"Standard", guid:"", previewSrc:"gui/maps/icons/pro.environment/default.png", weight:20},
-                {id:"midnight", label:"Night", guid:"15755E11.4090266B.594778B6.B233C12C", previewSrc:"gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png", weight:20},
-                {id:"overcast", label:"Overcast", guid:"56BA3213.40FFB1DF.125FBCAD.173E8347", previewSrc:"gui/maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png", weight:20},
-                {id:"sunset", label:"Sunset", guid:"6DEE1EBB.44F63FCC.AACF6185.7FBBC34E", previewSrc:"gui/maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png", weight:20},
-                {id:"midday", label:"Midday", guid:"BF040BCB.4BE1D04F.7D484589.135E881B", previewSrc:"gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png", weight:20}
+                {id:"standard", label:"Стандарт", guid:"", previewSrc:"gui/maps/icons/pro.environment/default.png", weight:20},
+                {id:"midnight", label:"Ніч", guid:"15755E11.4090266B.594778B6.B233C12C", previewSrc:"gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png", weight:20},
+                {id:"overcast", label:"Похмуро", guid:"56BA3213.40FFB1DF.125FBCAD.173E8347", previewSrc:"gui/maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png", weight:20},
+                {id:"sunset", label:"Захід", guid:"6DEE1EBB.44F63FCC.AACF6185.7FBBC34E", previewSrc:"gui/maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png", weight:20},
+                {id:"midday", label:"Полудень", guid:"BF040BCB.4BE1D04F.7D484589.135E881B", previewSrc:"gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png", weight:20}
             ];
             return {
                 presets: presets,
-                maps: [{id:"05_prohorovka", label:"Prohorovka", thumbSrc:"gui/maps/icons/map/list/05_prohorovka.png", useGlobal:false, presets:presets}],
+                maps: [{id:"05_prohorovka", label:"Прохорівка", thumbSrc:"gui/maps/icons/map/list/05_prohorovka.png", useGlobal:false, presets:presets}],
                 hotkey: "F12",
                 hotkeyKeys: [],
-                currentPreset: "midday"
+                currentPreset: "standard"
             };
         }
 
@@ -166,7 +165,7 @@ package weather
             for (var i:int = 0; i < src.length; i++)
             {
                 var o:Object = src[i];
-                var p:PresetVO = new PresetVO(o.id, o.label, o.guid, o.previewSrc);
+                var p:PresetVO = new PresetVO(o.id, normalizeLabel(String(o.label)), o.guid, o.previewSrc);
                 p.weight = Number(o.weight || 0);
                 out.push(p);
             }
@@ -186,6 +185,13 @@ package weather
                 out.push(m);
             }
             return out;
+        }
+
+        private function normalizeLabel(s:String):String
+        {
+            if (s == "Пасмурно") return "Похмуро";
+            if (s == "Хмарно") return "Похмуро";
+            return s;
         }
     }
 }

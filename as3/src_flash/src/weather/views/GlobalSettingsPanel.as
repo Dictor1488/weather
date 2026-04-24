@@ -1,6 +1,5 @@
 package weather.views
 {
-    import flash.display.Shape;
     import flash.display.Sprite;
     import flash.events.KeyboardEvent;
     import flash.events.MouseEvent;
@@ -8,22 +7,21 @@ package weather.views
     import flash.text.TextFormat;
     import flash.ui.Keyboard;
 
-    import weather.components.PresetButton;
+    import weather.components.PresetRow;
     import weather.data.PresetVO;
     import weather.events.WeatherEvent;
 
     public class GlobalSettingsPanel extends Sprite
     {
-        private static const PAD_LEFT:int = 96;
-        private static const PAD_TOP:int  = 28;
-        private static const BTN_GAP:int  = 16;
+        private static const ROW_X:int = 120;
+        private static const ROW_Y:int = 120;
+        private static const ROW_GAP:int = 26;
+        private static const ROW_W:int = 880;
 
         private var _hotkeyKeys:Array;
         private var _hotkeyStr:String;
         private var _capturing:Boolean = false;
         private var _captureCodes:Array;
-        private var _currentPresetId:String;
-        private var _buttons:Vector.<PresetButton>;
         private var _chipContainer:Sprite;
 
         public function GlobalSettingsPanel(presets:Vector.<PresetVO>,
@@ -34,101 +32,56 @@ package weather.views
             _hotkeyStr     = hotkey;
             _hotkeyKeys    = hotkeyKeys ? hotkeyKeys.slice() : [];
             _captureCodes  = [];
-            _currentPresetId = currentPreset || "standard";
-            _buttons       = new Vector.<PresetButton>();
             build(presets);
         }
 
         private function build(presets:Vector.<PresetVO>):void
         {
             var hdr:TextField = new TextField();
-            hdr.defaultTextFormat = new TextFormat("Arial", 13, 0x888888, false);
-            hdr.embedFonts  = false;
-            hdr.selectable  = false;
-            hdr.autoSize    = "left";
-            hdr.text        = "АКТИВНИЙ ПРЕСЕТ ДЛЯ ВСІХ КАРТ";
-            hdr.x           = PAD_LEFT;
-            hdr.y           = PAD_TOP - 20;
+            hdr.defaultTextFormat = new TextFormat("_sans", 23, 0xF2F2F2, true);
+            hdr.selectable = false;
+            hdr.autoSize = "left";
+            hdr.text = "Загальні налаштування для всіх карт";
+            hdr.x = 180;
+            hdr.y = 58;
             addChild(hdr);
 
-            var bx:int = PAD_LEFT;
-            var by:int = PAD_TOP;
+            var y:int = ROW_Y;
             for (var i:int = 0; i < presets.length; i++)
             {
-                var isActive:Boolean = (presets[i].id == _currentPresetId);
-                var btn:PresetButton = new PresetButton(presets[i], null, isActive);
-                btn.x = bx;
-                btn.y = by;
-                btn.addEventListener(WeatherEvent.PRESET_SELECTED, onPresetSelected);
-                addChild(btn);
-                _buttons.push(btn);
-                bx += PresetButton.BTN_W + BTN_GAP;
-                if ((i + 1) % 5 == 0) { bx = PAD_LEFT; by += PresetButton.BTN_H + BTN_GAP; }
+                var row:PresetRow = new PresetRow(presets[i], null);
+                row.setWidth(ROW_W);
+                row.x = ROW_X;
+                row.y = y;
+                row.addEventListener(WeatherEvent.PRESET_WEIGHT_CHANGED, onWeightChanged);
+                addChild(row);
+                y += PresetRow.ROW_HEIGHT + ROW_GAP;
             }
 
-            var dividerY:int = by + PresetButton.BTN_H + 28;
-            var divider:Shape = new Shape();
-            divider.graphics.lineStyle(1, 0x2A2A2A, 0.9);
-            divider.graphics.moveTo(PAD_LEFT, 0);
-            divider.graphics.lineTo(1184, 0);
-            divider.y = dividerY;
-            addChild(divider);
-
-            var hkY:int = dividerY + 22;
-
-            var hkHdr:TextField = new TextField();
-            hkHdr.defaultTextFormat = new TextFormat("Arial", 13, 0x888888, false);
-            hkHdr.embedFonts  = false;
-            hkHdr.selectable  = false;
-            hkHdr.autoSize    = "left";
-            hkHdr.text        = "ХОТКЕЙ — ЗМІНА ПОГОДИ В БОЮ";
-            hkHdr.x           = PAD_LEFT;
-            hkHdr.y           = hkY;
-            addChild(hkHdr);
-
             var hkLabel:TextField = new TextField();
-            hkLabel.defaultTextFormat = new TextFormat("Arial", 15, 0xCCCCCC, false);
-            hkLabel.embedFonts  = false;
-            hkLabel.selectable  = false;
-            hkLabel.autoSize    = "left";
-            hkLabel.text        = "Натиснення в бою циклічно перемикає пресет";
-            hkLabel.x           = PAD_LEFT;
-            hkLabel.y           = hkY + 22;
+            hkLabel.defaultTextFormat = new TextFormat("_sans", 16, 0xFFFFFF, false);
+            hkLabel.selectable = false;
+            hkLabel.autoSize = "left";
+            hkLabel.text = "Зміна погоди в бою";
+            hkLabel.x = 145;
+            hkLabel.y = y + 28;
             addChild(hkLabel);
 
             _chipContainer = new Sprite();
-            _chipContainer.x = PAD_LEFT + 520;
-            _chipContainer.y = hkY + 20;
+            _chipContainer.x = 525;
+            _chipContainer.y = y + 24;
             addChild(_chipContainer);
             rebuildChipsFromString(_hotkeyStr);
 
             var editBtn:Sprite = makeEditButton();
-            editBtn.x = PAD_LEFT + 700;
-            editBtn.y = hkY + 20;
+            editBtn.x = 650;
+            editBtn.y = y + 20;
             addChild(editBtn);
-
-            var tip:TextField = new TextField();
-            tip.defaultTextFormat = new TextFormat("Arial", 12, 0x555555, false);
-            tip.embedFonts  = false;
-            tip.selectable  = false;
-            tip.autoSize    = "left";
-            tip.text        = "Для налаштування погоди на конкретній карті — перейдіть на вкладку \u00abПо картах\u00bb";
-            tip.x           = PAD_LEFT;
-            tip.y           = hkY + 56;
-            addChild(tip);
         }
 
-        private function onPresetSelected(e:WeatherEvent):void
+        private function onWeightChanged(e:WeatherEvent):void
         {
-            var newId:String = e.presetId;
-            if (newId == _currentPresetId) return;
-            _currentPresetId = newId;
-            for (var i:int = 0; i < _buttons.length; i++)
-                _buttons[i].setSelected(_buttons[i].presetId == _currentPresetId);
-            var ev:WeatherEvent = new WeatherEvent(WeatherEvent.PRESET_SELECTED, true);
-            ev.mapId    = null;
-            ev.presetId = _currentPresetId;
-            dispatchEvent(ev);
+            dispatchEvent(e.clone());
         }
 
         private function rebuildChipsFromString(value:String):void
@@ -161,20 +114,22 @@ package weather.views
         private function makeEditButton():Sprite
         {
             var s:Sprite = new Sprite();
-            s.buttonMode    = true;
+            s.buttonMode = true;
             s.useHandCursor = true;
-            s.graphics.lineStyle(1, 0xF4A11A, 0.6);
-            s.graphics.beginFill(0x1A1000, 0.9);
-            s.graphics.drawRoundRect(0, 0, 110, 28, 4, 4);
+            s.graphics.lineStyle(1, 0xAF741E, 0.8);
+            s.graphics.beginFill(0x0E0B08, 0.85);
+            s.graphics.drawRect(0, 0, 100, 28);
             s.graphics.endFill();
+
             var tf:TextField = new TextField();
-            tf.defaultTextFormat = new TextFormat("Arial", 12, 0xF4A11A, true);
-            tf.embedFonts  = false;
-            tf.selectable  = false;
-            tf.autoSize    = "left";
-            tf.text        = "  змінити  ";
-            tf.y = 5;
+            tf.defaultTextFormat = new TextFormat("_sans", 12, 0xE6A13A, true);
+            tf.selectable = false;
+            tf.autoSize = "left";
+            tf.text = "змінити";
+            tf.x = 26;
+            tf.y = 6;
             s.addChild(tf);
+
             s.addEventListener(MouseEvent.CLICK, onEditClick);
             return s;
         }
@@ -182,22 +137,21 @@ package weather.views
         private function onEditClick(e:MouseEvent):void
         {
             if (_capturing || stage == null) return;
-            _capturing    = true;
+            _capturing = true;
             _captureCodes = [];
             showHint();
             stage.addEventListener(KeyboardEvent.KEY_DOWN, onCaptureKeyDown);
-            stage.addEventListener(KeyboardEvent.KEY_UP,   onCaptureKeyUp);
+            stage.addEventListener(KeyboardEvent.KEY_UP, onCaptureKeyUp);
         }
 
         private function showHint():void
         {
             while (_chipContainer.numChildren > 0) _chipContainer.removeChildAt(0);
             var hint:TextField = new TextField();
-            hint.defaultTextFormat = new TextFormat("Arial", 13, 0xFFB84E, true);
-            hint.embedFonts  = false;
-            hint.selectable  = false;
-            hint.autoSize    = "left";
-            hint.text        = "Натисни потрібну комбінацію...";
+            hint.defaultTextFormat = new TextFormat("_sans", 13, 0xFFB84E, true);
+            hint.selectable = false;
+            hint.autoSize = "left";
+            hint.text = "Натисни комбінацію...";
             _chipContainer.addChild(hint);
         }
 
@@ -221,21 +175,18 @@ package weather.views
             if (stage != null)
             {
                 stage.removeEventListener(KeyboardEvent.KEY_DOWN, onCaptureKeyDown);
-                stage.removeEventListener(KeyboardEvent.KEY_UP,   onCaptureKeyUp);
+                stage.removeEventListener(KeyboardEvent.KEY_UP, onCaptureKeyUp);
             }
             _capturing = false;
             if (_captureCodes.length == 0) { rebuildChipsFromString(_hotkeyStr); return; }
-            _hotkeyKeys = _captureCodes.slice();
-            _hotkeyStr  = buildHotkeyString(_hotkeyKeys);
-            dispatchHotkeyChanged();
-        }
 
-        private function dispatchHotkeyChanged():void
-        {
+            _hotkeyKeys = _captureCodes.slice();
+            _hotkeyStr = buildHotkeyString(_hotkeyKeys);
             rebuildChipsFromString(_hotkeyStr);
+
             var ev:WeatherEvent = new WeatherEvent(WeatherEvent.HOTKEY_CHANGED);
             ev.payload = _hotkeyKeys.slice();
-            ev.mapId   = _hotkeyStr;
+            ev.mapId = _hotkeyStr;
             dispatchEvent(ev);
         }
 
@@ -269,17 +220,17 @@ package weather.views
         {
             var s:Sprite = new Sprite();
             var tf:TextField = new TextField();
-            tf.defaultTextFormat = new TextFormat("Arial", 13, 0xFFFFFF, true);
-            tf.embedFonts  = false;
-            tf.selectable  = false;
-            tf.autoSize    = "left";
+            tf.defaultTextFormat = new TextFormat("_sans", 13, 0xFFFFFF, true);
+            tf.selectable = false;
+            tf.autoSize = "left";
             tf.text = key;
+
             var w:int = tf.width + 18;
-            var h:int = 26;
-            s.graphics.beginFill(0x2D220D, 1);
-            s.graphics.lineStyle(1, 0xF4A11A, 0.9);
-            s.graphics.drawRoundRect(0, 0, w, h, 3, 3);
+            s.graphics.beginFill(0x261D0E, 0.90);
+            s.graphics.lineStyle(1, 0xB98525, 1);
+            s.graphics.drawRect(0, 0, w, 26);
             s.graphics.endFill();
+
             tf.x = 9;
             tf.y = 4;
             s.addChild(tf);
