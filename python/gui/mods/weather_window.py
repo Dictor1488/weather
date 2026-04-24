@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-DAAPI-міст між Flash (WeatherMediator.as) та weather_controller v8.
+DAAPI-міст між Flash (WeatherMediator.as) та weather_controller.
+
+Важливо: якщо AS3-кнопка "Закрити" сховала вікно, але Python close callback
+не дійшов, SFWindow може залишитись живим. Для цього тримаємо _active_window
+і при наступному відкритті просто повторно викликаємо as_setData(), що робить
+WeatherMediator.visible = true.
 """
 
 try:
@@ -31,6 +36,8 @@ from weather_controller import (
 
 import logging
 LOG = logging.getLogger('weather_mod')
+
+_active_window = None
 
 PRESET_PREVIEW = {
     'standard': 'gui/maps/icons/pro.environment/default.png',
@@ -109,29 +116,28 @@ def _build_hotkey_str(hotkey_dict):
     try:
         key  = hotkey_dict.get('key', 'KEY_F12')
         mods = hotkey_dict.get('mods', [])
-        parts = list(mods) + [key.replace('KEY_', '')]
-        return '+'.join(parts)
+        return '+'.join(list(mods) + [key.replace('KEY_', '')])
     except Exception:
         return 'F12'
 
 
 def _build_payload():
     current_preset = g_controller.getCurrentPreset()
-    general        = g_controller.getGeneralWeights() or {}
+    general = g_controller.getGeneralWeights() or {}
 
     maps = []
     for map_id, label, thumb in MAP_REGISTRY:
         map_weights = g_controller.getMapWeights(map_id) or {}
         maps.append({
-            'id':        map_id,
-            'label':     label,
-            'thumbSrc':  thumb,
+            'id': map_id,
+            'label': label,
+            'thumbSrc': thumb,
             'useGlobal': False,
-            'presets':   _build_presets_for_ui(map_weights),
+            'presets': _build_presets_for_ui(map_weights),
         })
 
-    hk          = g_controller.getHotkey()
-    hotkey_str  = _build_hotkey_str(hk)
+    hk = g_controller.getHotkey()
+    hotkey_str = _build_hotkey_str(hk)
     hotkey_keys = []
     try:
         import Keys
@@ -143,12 +149,32 @@ def _build_payload():
         pass
 
     return {
-        'presets':       _build_presets_for_ui(general),
-        'maps':          maps,
-        'hotkey':        hotkey_str,
-        'hotkeyKeys':    hotkey_keys,
+        'presets': _build_presets_for_ui(general),
+        'maps': maps,
+        'hotkey': hotkey_str,
+        'hotkeyKeys': hotkey_keys,
         'currentPreset': current_preset,
     }
+
+
+def show_existing_window():
+    """Повертає True, якщо вже існуюче приховане вікно вдалося показати знову."""
+    global _active_window
+    win = _active_window
+    if win is None:
+        return False
+    try:
+        flash = getattr(win, 'flashObject', None)
+        if flash is None:
+            _active_window = None
+            return False
+        flash.as_setData(_build_payload())
+        LOG.info('show_existing_window: reused active weatherPanel')
+        return True
+    except Exception:
+        LOG.exception('show_existing_window failed')
+        _active_window = None
+        return False
 
 
 class WeatherWindowMeta(AbstractLobbyView):
@@ -158,18 +184,18 @@ class WeatherWindowMeta(AbstractLobbyView):
         self._ctrl = g_controller
 
     def _populate(self):
+        global _active_window
+        _active_window = self
         super(WeatherWindowMeta, self)._populate()
         try:
-            payload = _build_payload()
-            self.flashObject.as_setData(payload)
+            self.flashObject.as_setData(_build_payload())
         except Exception:
             LOG.exception('WeatherWindowMeta._populate failed')
 
     def py_onPresetSelected(self, mapId, presetId):
         try:
             preset_id = str(presetId) if presetId else 'standard'
-            map_id    = str(mapId) if mapId else None
-
+            map_id = str(mapId) if mapId else None
             if not map_id:
                 LOG.info('py_onPresetSelected: global preset=%s', preset_id)
                 self._ctrl.setPreset(preset_id)
@@ -201,7 +227,9 @@ class WeatherWindowMeta(AbstractLobbyView):
         pass
 
     def py_onCloseRequested(self):
+        global _active_window
         self._ctrl.on_close_requested()
+        _active_window = None
         try:
             self.destroy()
             return
@@ -222,8 +250,8 @@ class WeatherWindowMeta(AbstractLobbyView):
     def py_onHotkeyChanged(self, keyCodes, hotkeyStr):
         try:
             parts = str(hotkeyStr).split('+')
-            key   = 'KEY_' + parts[-1] if parts else 'KEY_F12'
-            mods  = parts[:-1] if len(parts) > 1 else []
+            key = 'KEY_' + parts[-1] if parts else 'KEY_F12'
+            mods = parts[:-1] if len(parts) > 1 else []
             self._ctrl.on_hotkey_changed(list(keyCodes or []), str(hotkeyStr))
             from weather_controller import set_hotkey
             set_hotkey(True, mods, key)
@@ -231,5 +259,8 @@ class WeatherWindowMeta(AbstractLobbyView):
             LOG.exception('py_onHotkeyChanged failed')
 
     def _dispose(self):
+        global _active_window
+        if _active_window is self:
+            _active_window = None
         self._ctrl.on_close_requested()
         super(WeatherWindowMeta, self)._dispose()
