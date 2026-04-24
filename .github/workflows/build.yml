@@ -95,6 +95,9 @@ jobs:
             $content = $content -replace '\{playerglobalHome\}', 'C:/flex-sdk/frameworks/libs/player'
             $content | Set-Content $flexConfig -Encoding UTF8
         }
+        Write-Host "=== flex-config.xml source-path ==="
+        Select-String -Path $flexConfig -Pattern "source-path|source_path|library-path|localFont" | ForEach-Object { Write-Host $_.Line }
+        Write-Host "==================================="
 
     - name: Install dependencies
       run: |
