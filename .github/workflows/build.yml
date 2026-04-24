@@ -89,12 +89,22 @@ jobs:
         New-Item -ItemType Directory -Force -Path $vDir | Out-Null
         Copy-Item $libsPlayerGlobal "$vDir\playerglobal.swc" -Force
         Copy-Item $libsPlayerGlobal "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
-        $flexConfig = "C:\flex-sdk\frameworks\flex-config.xml"
-        if (Test-Path $flexConfig) {
-            $content = Get-Content $flexConfig -Raw
-            $content = $content -replace '\{playerglobalHome\}', 'C:/flex-sdk/frameworks/libs/player'
-            $content | Set-Content $flexConfig -Encoding UTF8
-        }
+        # Замінюємо flex-config.xml мінімальним — прибираємо всі library-path і target-player
+        # бо оригінальний шукає player/27.0 якого немає і ламає компіляцію
+        $minimalConfig = @"
+<?xml version="1.0" encoding="utf-8"?>
+<flex-config>
+  <compiler>
+    <external-library-path append="true">
+      <path-element>C:/flex-sdk/frameworks/libs/player/32.0/playerglobal.swc</path-element>
+    </external-library-path>
+  </compiler>
+  <target-player>32.0</target-player>
+  <swf-version>39</swf-version>
+</flex-config>
+"@
+        $minimalConfig | Set-Content "C:\flex-sdk\frameworks\flex-config.xml" -Encoding UTF8
+        Write-Host "flex-config.xml replaced with minimal version"
 
     - name: Install dependencies
       run: |
@@ -195,21 +205,14 @@ jobs:
                 "-optimize=true"
             )
 
-            # # Записуємо всі аргументи у файл відповідей (@argfile)
-            # це єдиний надійний спосіб передати шляхи в mxmlc через PowerShell
-            $argFile = "$PWD\mxmlc-args.txt"
-            $allArgs = $mxmlcArgs + @("--", $mainClassPath)
-            $allArgs | ForEach-Object { $_ } | Out-File $argFile -Encoding ASCII
-            Write-Host "=== Arg file ==="
-            Get-Content $argFile | Write-Host
-            Write-Host "================"
-            Write-Host "Running: mxmlc @$argFile"
-            $process = Start-Process -FilePath $mxmlcPath `
-                -ArgumentList "@`"$argFile`"" `
+            $mxmlcArgs += @("--")
+            $mxmlcArgs += $mainClassPath
+            Write-Host "Running: mxmlc $($mxmlcArgs -join ' ')"
+            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs `
                 -NoNewWindow -Wait -PassThru `
                 -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
             Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
-            Remove-Item "out.txt","err.txt","$argFile" -Force -ErrorAction SilentlyContinue
+            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
 
             if ($process.ExitCode -ne 0) {
                 Write-Error "Compilation failed with exit code $($process.ExitCode)"
