@@ -189,13 +189,16 @@ def _score_image_member(name, map_id):
     if '.dds.' in low or low.endswith('.dds'):
         return -9999
 
+    # Main safety rule: the file must belong to this exact arena.
+    # Otherwise gui-part*.pkg can return generic posters/schemes for unrelated maps.
+    if map_id.lower() not in low:
+        return -9999
+
     # Never use world/terrain PNGs. They are masks/heightmaps, not UI previews.
     if '/spaces/' in low or low.startswith('spaces/') or '/content/' in low or low.startswith('content/') or low.startswith('maps/'):
         return -9999
 
-    score = 0
-    if map_id.lower() in low:
-        score += 40
+    score = 40
     good_hit = False
     for hint in GOOD_IMAGE_HINTS:
         if hint in low:
