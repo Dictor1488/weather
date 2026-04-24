@@ -766,14 +766,20 @@ def cycle_preset():
     LOG.info('cycle_preset: %s -> %s', current, next_preset)
 
     apply_preset_all_maps(next_preset)
-    _do_restart()
+
+    # Спочатку пробуємо live switch через збережений LSEnvironmentSwitcher
+    live_ok = _try_live_switch(next_preset)
+
+    label = PRESET_LABELS.get(next_preset, next_preset)
+    if live_ok:
+        msg = u'[Weather] %s' % label
+    else:
+        _do_restart()
+        msg = u'[Weather] %s — перезапуск...' % label
 
     try:
         from gui import SystemMessages
-        label = PRESET_LABELS.get(next_preset, next_preset)
-        SystemMessages.pushMessage(
-            u'[Weather] %s' % label,
-            SystemMessages.SM_TYPE.Information)
+        SystemMessages.pushMessage(msg, SystemMessages.SM_TYPE.Information)
     except Exception:
         pass
 
