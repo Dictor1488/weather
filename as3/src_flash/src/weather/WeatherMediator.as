@@ -2,6 +2,7 @@ package weather
 {
     import flash.display.StageAlign;
     import flash.display.StageScaleMode;
+    import flash.external.ExternalInterface;
 
     import net.wg.infrastructure.base.AbstractView;
 
@@ -71,6 +72,8 @@ package weather
             if (!payload)
                 payload = makeDebugPayload();
 
+            visible = true;
+
             _globalPresets = parsePresets(payload.presets as Array);
             _maps          = parseMaps(payload.maps as Array);
             _currentPreset = String(payload.currentPreset || "standard");
@@ -99,36 +102,57 @@ package weather
 
         private function onPresetSelected(e:WeatherEvent):void
         {
-            py_onPresetSelected(e.mapId, e.presetId);
+            tryCallPython("py_onPresetSelected", [e.mapId, e.presetId]);
         }
 
         private function onWeightChanged(e:WeatherEvent):void
         {
-            py_onWeightChanged(e.mapId, e.presetId, e.value);
+            tryCallPython("py_onWeightChanged", [e.mapId, e.presetId, e.value]);
         }
 
         private function onMapSelected(e:WeatherEvent):void
         {
-            py_onMapSelected(e.mapId);
+            tryCallPython("py_onMapSelected", [e.mapId]);
             if (_view) _view.showMapDetail(e.mapId);
         }
 
         private function onTabChanged(e:WeatherEvent):void
         {
-            py_onTabChanged("tab");
+            tryCallPython("py_onTabChanged", ["tab"]);
         }
 
         private function onCloseRequested(e:WeatherEvent):void
         {
-            py_onCloseRequested();
+            tryCallPython("py_onCloseRequested", []);
+            removeView();
+            visible = false;
         }
 
         private function onHotkeyChanged(e:WeatherEvent):void
         {
-            py_onHotkeyChanged(e.payload as Array, String(e.mapId));
+            tryCallPython("py_onHotkeyChanged", [e.payload as Array, String(e.mapId)]);
         }
 
-        // DAAPI proxy — підміняються WoT інфраструктурою
+        private function tryCallPython(methodName:String, args:Array):void
+        {
+            try
+            {
+                if (ExternalInterface.available)
+                    ExternalInterface.call.apply(null, [methodName].concat(args));
+            }
+            catch (err:Error)
+            {
+                // Fallback to local stub so old clients do not throw from UI event handlers.
+                if (methodName == "py_onPresetSelected") py_onPresetSelected(args[0], args[1]);
+                else if (methodName == "py_onWeightChanged") py_onWeightChanged(args[0], args[1], Number(args[2]));
+                else if (methodName == "py_onMapSelected") py_onMapSelected(args[0]);
+                else if (methodName == "py_onTabChanged") py_onTabChanged(args[0]);
+                else if (methodName == "py_onCloseRequested") py_onCloseRequested();
+                else if (methodName == "py_onHotkeyChanged") py_onHotkeyChanged(args[0] as Array, String(args[1]));
+            }
+        }
+
+        // DAAPI proxy fallback stubs.
         private function py_onPresetSelected(mapId:String, presetId:String):void {}
         private function py_onWeightChanged(mapId:String, presetId:String, value:Number):void {}
         private function py_onMapSelected(mapId:String):void {}
