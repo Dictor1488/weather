@@ -109,29 +109,47 @@ jobs:
         $env:Path = "C:\flex-sdk\bin;$env:Path"
         New-Item -Force -ItemType Directory as3\bin | Out-Null
 
-        # source-path вказує на папку що МІСТИТЬ пакет 'weather'
-        # as3/src_flash/ -> weather/ -> WeatherMediator.as
-        $srcPaths = @("-source-path+=as3/src_flash")
+        # Перевіряємо що mxmlc існує
+        $mxmlc = "C:\flex-sdk\bin\mxmlc.bat"
+        if (-not (Test-Path $mxmlc)) { Write-Error "mxmlc.bat not found at $mxmlc"; exit 1 }
+        Write-Host "mxmlc found: $mxmlc"
 
-        $libs = @()
-        Get-ChildItem as3\libs -Filter *.swc -EA SilentlyContinue | ForEach-Object {
-          if ($_.Name -eq "playerglobal.swc") { $libs += "-library-path+=$($_.FullName)" }
-          else { $libs += "-external-library-path+=$($_.FullName)" }
+        # Абсолютні шляхи
+        $srcPath = (Resolve-Path "as3\src_flash").Path
+        $swcPath = (Resolve-Path "as3\libs\playerglobal.swc").Path
+        $mainAs  = (Resolve-Path "as3\src_flash\weather\WeatherMediator.as").Path
+        $outSwf  = "$PWD\as3\bin\WeatherPanel.swf"
+
+        Write-Host "source-path : $srcPath"
+        Write-Host "playerglobal: $swcPath ($([math]::Round((Get-Item $swcPath).Length/1KB,1)) KB)"
+        Write-Host "entry point : $mainAs"
+        Write-Host "output      : $outSwf"
+
+        # Запускаємо mxmlc напряму (& оператор — живий stdout у логах)
+        & $mxmlc `
+          "-source-path+=$srcPath" `
+          "-external-library-path+=$swcPath" `
+          "-output=$outSwf" `
+          "-target-player=32.0" `
+          "-swf-version=39" `
+          "-strict=true" `
+          "-optimize=true" `
+          -- `
+          "$mainAs"
+
+        $exitCode = $LASTEXITCODE
+        Write-Host "mxmlc exit code: $exitCode"
+        if ($exitCode -ne 0) { Write-Error "mxmlc failed"; exit 1 }
+
+        # Перевіряємо що SWF не порожній
+        if (-not (Test-Path $outSwf)) { Write-Error "SWF not created"; exit 1 }
+        $swfSize = (Get-Item $outSwf).Length
+        Write-Host "SWF size: $([math]::Round($swfSize/1KB,2)) KB"
+        if ($swfSize -lt 10240) {
+          Write-Error "SWF too small ($swfSize bytes) — compilation likely failed"
+          exit 1
         }
-
-        $mxmlcArgs = $srcPaths + $libs + @(
-          "-output=as3/bin/WeatherPanel.swf",
-          "-target-player=32.0",
-          "-swf-version=39",
-          "-strict=true","-optimize=true","--",
-          "as3/src_flash/weather/WeatherMediator.as"
-        )
-
-        $p = Start-Process "C:\flex-sdk\bin\mxmlc.bat" $mxmlcArgs -NoNewWindow -Wait -PassThru `
-          -RedirectStandardOutput out.txt -RedirectStandardError err.txt
-        Get-Content out.txt,err.txt -EA SilentlyContinue | Write-Host
-        if ($p.ExitCode -ne 0) { exit 1 }
-        Write-Host "SWF OK: $([math]::Round((Get-Item as3/bin/WeatherPanel.swf).Length/1KB,2)) KB" -ForegroundColor Green
+        Write-Host "SWF compiled successfully!" -ForegroundColor Green
 
     - name: Create build.json
       shell: pwsh
