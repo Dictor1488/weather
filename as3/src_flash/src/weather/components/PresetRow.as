@@ -28,6 +28,7 @@ package weather.components
         private var _weightText:TextField;
         private var _preview:Loader;
         private var _previewHolder:Sprite;
+        private var _previewMask:Shape;
         private var _dragging:Boolean = false;
 
         public function PresetRow(vo:PresetVO, mapId:String = null)
@@ -64,22 +65,39 @@ package weather.components
             addChild(_weightText);
 
             buildSlider();
+            buildPreview();
+            updateWeightText();
+        }
 
+        private function buildPreview():void
+        {
             _previewHolder = new Sprite();
             _previewHolder.x = 342;
-            _previewHolder.y = 38;
+            _previewHolder.y = 31;
             addChild(_previewHolder);
+
             drawPreviewPlaceholder();
+
+            _previewMask = new Shape();
+            _previewMask.x = _previewHolder.x;
+            _previewMask.y = _previewHolder.y;
+            _previewMask.graphics.beginFill(0xFFFFFF, 1);
+            _previewMask.graphics.drawRect(0, 0, 122, 34);
+            _previewMask.graphics.endFill();
+            addChild(_previewMask);
+            _previewHolder.mask = _previewMask;
 
             if (_vo.previewSrc)
             {
                 _preview = new Loader();
                 _preview.contentLoaderInfo.addEventListener(Event.COMPLETE, onPreviewLoaded);
-                try { _preview.load(new URLRequest(_vo.previewSrc)); _previewHolder.addChild(_preview); }
+                try
+                {
+                    _preview.load(new URLRequest(_vo.previewSrc));
+                    _previewHolder.addChild(_preview);
+                }
                 catch (e:Error) {}
             }
-
-            updateWeightText();
         }
 
         private function buildSlider():void
@@ -126,17 +144,19 @@ package weather.components
             else if (_vo.id == "midday")   color = 0x344420;
 
             _previewHolder.graphics.clear();
-            _previewHolder.graphics.beginFill(color, 0.95);
-            _previewHolder.graphics.drawRect(0, 0, 122, 38);
+            _previewHolder.graphics.lineStyle(1, 0x2A3036, 0.85);
+            _previewHolder.graphics.beginFill(color, 0.55);
+            _previewHolder.graphics.drawRect(0, 0, 122, 34);
             _previewHolder.graphics.endFill();
         }
 
         private function onPreviewLoaded(e:Event):void
         {
             _preview.width = 122;
-            _preview.height = 38;
-            _preview.alpha = 0.74;
-            _preview.scrollRect = new Rectangle(0, 0, 122, 38);
+            _preview.height = 34;
+            _preview.alpha = 1.0;
+            _preview.scrollRect = new Rectangle(0, 0, 122, 34);
+            _previewHolder.setChildIndex(_preview, _previewHolder.numChildren - 1);
         }
 
         private function onTrackClick(e:MouseEvent):void { setSliderValue(_sliderTrack.mouseX); }
@@ -175,7 +195,6 @@ package weather.components
             updateSliderPos();
             updateWeightText();
 
-            // Оновлюємо відсотки у всіх сусідніх рядків
             var parentSprite:Sprite = parent as Sprite;
             if (parentSprite)
             {
@@ -206,7 +225,6 @@ package weather.components
         private function updateWeightText():void
         {
             var total:Number = 0;
-            // Збираємо суму всіх ваг з батьківського GlobalSettingsPanel або MapDetailPanel
             var parentSprite:Sprite = parent as Sprite;
             if (parentSprite)
             {
