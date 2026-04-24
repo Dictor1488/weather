@@ -582,6 +582,40 @@ def _apply_saved_settings(saved):
 # init / fini
 # ---------------------------------------------------------------------------
 
+def _intercept_switcher_creation():
+    """
+    Перехоплюємо створення LSEnvironmentSwitcher щоб зберегти реальний екземпляр.
+    Коли WoT сам створить його — ми збережемо посилання.
+    """
+    if not IN_GAME:
+        return
+    try:
+        import LSArenaPhasesComponent as _ls
+        sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
+        if sw_class is None:
+            return
+        orig_init = sw_class.__init__
+        if getattr(orig_init, '_weather_patched', False):
+            return
+
+        def patched_init(self, *args, **kwargs):
+            result = orig_init(self, *args, **kwargs)
+            try:
+                import weather_controller
+                weather_controller._persistent_switcher = self
+                _log().info('INTERCEPT: captured real LSEnvironmentSwitcher instance (spaceID=%s)',
+                           args[0] if args else '?')
+            except Exception:
+                pass
+            return result
+
+        patched_init._weather_patched = True
+        sw_class.__init__ = patched_init
+        _log().info('LSEnvironmentSwitcher.__init__ patched for interception')
+    except Exception:
+        _log().exception('_intercept_switcher_creation failed')
+
+
 def _patch_ls_env_switcher():
     """Перехоплює _switchEnvironment для діагностики."""
     try:
@@ -613,6 +647,7 @@ def init(*args, **kwargs):
         return
 
     _patch_ls_env_switcher()
+    _intercept_switcher_creation()
     _load_hotkey_codes()
     _install_battle_space_hook()
     _install_key_hook()
