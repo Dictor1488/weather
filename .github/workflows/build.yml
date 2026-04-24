@@ -139,8 +139,10 @@ jobs:
         if (-not $jar -or -not (Test-Path $jar)) { Write-Error "mxmlc.jar not found"; exit 1 }
 
         # Запускаємо через Java напряму — повний контроль над аргументами
+        $flexCfg = "C:lex-sdkrameworkslex-config.xml"
         $javaArgs = @(
             "-jar", $jar,
+            "-load-config=$flexCfg",
             "-source-path+=$srcDir",
             "-library-path+=$swcPath",
             "-output=$outSwf",
