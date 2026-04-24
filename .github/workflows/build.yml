@@ -95,9 +95,6 @@ jobs:
             $content = $content -replace '\{playerglobalHome\}', 'C:/flex-sdk/frameworks/libs/player'
             $content | Set-Content $flexConfig -Encoding UTF8
         }
-        Write-Host "=== flex-config.xml source-path ==="
-        Select-String -Path $flexConfig -Pattern "source-path|source_path|library-path|localFont" | ForEach-Object { Write-Host $_.Line }
-        Write-Host "==================================="
 
     - name: Install dependencies
       run: |
@@ -123,7 +120,7 @@ jobs:
         $env:Path = "C:\flex-sdk\bin;$env:Path"
         $mxmlcPath = "C:\flex-sdk\bin\mxmlc.bat"
         if (-not (Test-Path $mxmlcPath)) { Write-Error "mxmlc not found"; exit 1 }
-        $outputPath = "$PWD\as3\bin"
+        $outputPath = "as3/bin"
         New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
         $libArgs = @()
         Get-ChildItem -Path "as3/libs" -Filter "*.swc" -Recurse | ForEach-Object {
@@ -143,17 +140,11 @@ jobs:
             $projXml.project.compileTargets.compile | ForEach-Object {
                 if ($_.path) { $mainClassPath = Join-Path $projDir $_.path }
             }
-            if (-not $mainClassPath -or -not (Test-Path $mainClassPath)) { Write-Warning "Main class not found"; continue }
+            if (-not $mainClassPath -or -not (Test-Path $mainClassPath)) { Write-Warning "Main class not found: $mainClassPath"; continue }
             $outputSwf = Join-Path $outputPath $swfName
-            # Resolve-Path прибирає крапку: src_flash\. -> src_flash
-            $srcDirResolved = (Resolve-Path $projDir).Path
             $mxmlcArgs = @()
-            $mxmlcArgs += "-source-path+=$srcDirResolved"
-            Write-Host "projDir: $projDir"
-            Write-Host "srcDir resolved: $srcDirResolved"
-            Write-Host "mainClassPath: $mainClassPath"
-            Write-Host "AS3 files:"
-            Get-ChildItem -Recurse $srcDirResolved -Filter *.as | ForEach-Object { Write-Host "  $($_.FullName)" }
+            $srcDir = Join-Path $projDir "src"
+            if (Test-Path $srcDir) { $mxmlcArgs += "-source-path+=$srcDir" }
             $mxmlcArgs += $libArgs
             $mxmlcArgs += @(
                 "-output=$outputSwf",
@@ -162,19 +153,14 @@ jobs:
                 "-strict=true", "-optimize=true", "--"
             )
             $mxmlcArgs += $mainClassPath
-            Write-Host "=== FULL COMMAND ==="
-            Write-Host "$mxmlcPath $($mxmlcArgs -join ' ')"
-            Write-Host "===================="
-            # Запускаємо з робочої директорії src_flash де лежать класи
-            Push-Location $srcDirResolved
+            Write-Host "source-path: $srcDir"
+            Write-Host "entry point: $mainClassPath"
             $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs -NoNewWindow -Wait -PassThru -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
-            Pop-Location
             Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
-            Remove-Item "out.txt","err.txt" -Force -EA SilentlyContinue
             if ($process.ExitCode -ne 0) { Write-Error "Compilation failed"; exit 1 }
             $sz = (Get-Item $outputSwf).Length
             Write-Host "SUCCESS: $swfName ($([math]::Round($sz/1KB,2)) KB)" -ForegroundColor Green
-            Remove-Item "out.txt" -Force -ErrorAction SilentlyContinue
+            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
         }
 
     - name: Create build.json
