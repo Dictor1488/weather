@@ -117,45 +117,26 @@ jobs:
     - name: Build SWF files
       shell: pwsh
       run: |
-        $srcDir   = (Resolve-Path "as3\src_flash").Path
-        $swcPath  = (Resolve-Path "as3\libs\playerglobal.swc").Path
-        $mainAs   = (Resolve-Path "as3\src_flash\weather\WeatherMediator.as").Path
-        $outDir   = "$PWD\as3\bin"
-        $outSwf   = "$outDir\WeatherPanel.swf"
+        $srcDir  = (Resolve-Path "as3\src_flash").Path
+        $swcPath = (Resolve-Path "as3\libs\playerglobal.swc").Path
+        $mainAs  = (Resolve-Path "as3\src_flash\weather\WeatherMediator.as").Path
+        $outDir  = "$PWD\as3\bin"
+        $outSwf  = "$outDir\WeatherPanel.swf"
+        $flexCfg = "C:\flex-sdk\frameworks\flex-config.xml"
+        $jar     = "C:\flex-sdk\lib\mxmlc.jar"
+
         New-Item -ItemType Directory -Force $outDir | Out-Null
         Remove-Item "$outDir\*.swf" -Force -EA SilentlyContinue
 
         Write-Host "source-path : $srcDir"
         Write-Host "playerglobal: $swcPath"
         Write-Host "entry point : $mainAs"
-        Write-Host "output      : $outSwf"
-
-        # Знаходимо mxmlc.jar напряму - обходимо mxmlc.bat повністю
-        $jar = "C:\flex-sdk\lib\mxmlc.jar"
-        if (-not (Test-Path $jar)) {
-            $jar = Get-ChildItem "C:\flex-sdk" -Recurse -Filter "mxmlc.jar" | Select-Object -First 1 -ExpandProperty FullName
-        }
+        Write-Host "flex-config : $flexCfg"
         Write-Host "mxmlc.jar   : $jar"
-        if (-not $jar -or -not (Test-Path $jar)) { Write-Error "mxmlc.jar not found"; exit 1 }
 
-        # Запускаємо через Java напряму — повний контроль над аргументами
-        $flexCfg = "C:lex-sdkrameworkslex-config.xml"
-        $javaArgs = @(
-            "-jar", $jar,
-            "-load-config=$flexCfg",
-            "-source-path+=$srcDir",
-            "-library-path+=$swcPath",
-            "-output=$outSwf",
-            "-target-player=${{ env.FLASH_PLAYER_VERSION }}",
-            "-swf-version=${{ env.SWF_VERSION }}",
-            "-strict=true",
-            "-optimize=true",
-            "--",
-            $mainAs
-        )
+        if (-not (Test-Path $jar)) { Write-Error "mxmlc.jar not found at $jar"; exit 1 }
 
-        Write-Host "Running: java $($javaArgs -join ' ')"
-        & java @javaArgs
+        & java "-jar" $jar "-load-config=$flexCfg" "-source-path+=$srcDir" "-library-path+=$swcPath" "-output=$outSwf" "-target-player=${{ env.FLASH_PLAYER_VERSION }}" "-swf-version=${{ env.SWF_VERSION }}" "-strict=true" "-optimize=true" "--" $mainAs
         $exitCode = $LASTEXITCODE
         Write-Host "Exit code: $exitCode"
         if ($exitCode -ne 0) { Write-Error "Compilation failed"; exit 1 }
