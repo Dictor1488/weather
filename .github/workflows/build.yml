@@ -50,7 +50,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: C:\flex-sdk
-        key: flex-sdk-${{ env.FLEX_VERSION }}-v2
+        key: flex-sdk-${{ env.FLEX_VERSION }}-v4
 
     - name: Download and Setup Apache Flex SDK
       if: steps.cache-flex.outputs.cache-hit != 'true'
