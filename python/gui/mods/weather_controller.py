@@ -887,36 +887,47 @@ def _create_switcher_on_battle_start(space_id):
 
 
 def _try_live_switch(preset_id):
-    """Live перемикання через збережений LSEnvironmentSwitcher."""
+    """
+    Live перемикання через BigWorld.spaces[spaceID].setEnvironment(name).
+    Знайдено в декомпільованому scripts/client/GeneralSpaceData.py і
+    visual_script_client/arena_blocks.py.
+    """
     if not IN_GAME:
         return False
-    if preset_id == 'standard':
-        guid = _read_default_guid(_last_space_name) if _last_space_name else None
-    else:
-        guid = PRESET_GUIDS.get(preset_id)
-    if not guid:
-        return False
 
-    global _persistent_switcher
     try:
         player = BigWorld.player()
-        space_id = getattr(player, 'spaceID', None) if player else None
-
-        # Створюємо якщо ще немає
-        if _persistent_switcher is None and space_id is not None:
-            _create_switcher_on_battle_start(space_id)
-
-        if _persistent_switcher is None:
-            LOG.info('_try_live_switch: no switcher available')
+        if player is None:
+            return False
+        space_id = getattr(player, 'spaceID', None)
+        if space_id is None:
             return False
 
-        # Викликаємо _switchEnvironment на збереженому екземплярі
-        _persistent_switcher._switchEnvironment(guid)
-        LOG.info('_try_live_switch: switched to %s', guid)
+        space = BigWorld.spaces.get(space_id) if hasattr(BigWorld.spaces, 'get') else BigWorld.spaces[space_id]
+        if space is None:
+            LOG.info('_try_live_switch: space not found for id=%s', space_id)
+            return False
+
+        # setEnvironment приймає name (string). Для standard — resetEnvironment.
+        if preset_id == 'standard':
+            space.resetEnvironment()
+            LOG.info('_try_live_switch: space.resetEnvironment() OK')
+            return True
+
+        # Для пресетів передаємо guid як name (WoT внутрішньо його знайде
+        # серед завантажених environments з environments.xml)
+        guid = PRESET_GUIDS.get(preset_id)
+        if not guid:
+            return False
+
+        space.setEnvironment(guid)
+        LOG.info('_try_live_switch: space.setEnvironment(%s) OK', guid)
         return True
 
     except Exception as e:
         LOG.info('_try_live_switch: ERR: %s', e)
+        import traceback
+        LOG.info('_try_live_switch: trace: %s', traceback.format_exc())
     return False
 
 
