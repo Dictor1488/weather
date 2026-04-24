@@ -50,14 +50,15 @@ PRESET_PREVIEW = {
 
 IMAGE_RE = re.compile(r'\.(png|jpg|jpeg)$', re.I)
 GOOD_IMAGE_HINTS = (
-    '/gui/', 'gui/', 'minimap', 'preview', 'loading', 'battle_loading',
-    'thumbnail', 'thumb', 'screen', 'screenshot', 'arena_screen', 'map_icons',
+    '/gui/', 'gui/', 'maps/icons', 'map_icons', 'map/list', 'map/stats',
+    'minimap', 'preview', 'loading', 'battle_loading', 'thumbnail', 'thumb',
+    'screen', 'screenshot', 'arena_screen',
 )
 BAD_IMAGE_HINTS = (
     'normal', 'height', 'splat', 'blend', 'mask', 'noise', 'detail', 'terrain',
     'flora', 'water', 'sky', 'shadow', 'lightmap', 'ao', 'color_grading', 'lut',
     'density', 'alpha', 'specular', 'roughness', 'metallic', 'atlas', 'decal',
-    '/spaces/', 'spaces/', '/maps/', 'lod', 'visibility', 'collision',
+    'lod', 'visibility', 'collision', 'outland', 'cascade', 'tile_map',
 )
 
 
@@ -73,7 +74,6 @@ def _map_icon(map_id):
     path = _runtime_thumb_paths.get(map_id)
     if path and os.path.isfile(path):
         return _file_url(path)
-    # Empty string means AS3 keeps the clean fallback tile and does not spam img:// warnings.
     return ''
 
 
@@ -189,9 +189,13 @@ def _score_image_member(name, map_id):
     if '.dds.' in low or low.endswith('.dds'):
         return -9999
 
+    # Never use world/terrain PNGs. They are masks/heightmaps, not UI previews.
+    if '/spaces/' in low or low.startswith('spaces/') or '/content/' in low or low.startswith('content/') or low.startswith('maps/'):
+        return -9999
+
     score = 0
     if map_id.lower() in low:
-        score += 15
+        score += 40
     good_hit = False
     for hint in GOOD_IMAGE_HINTS:
         if hint in low:
@@ -201,12 +205,8 @@ def _score_image_member(name, map_id):
         if hint in low:
             score -= 80
 
-    # Do not pull random space textures: they look like broken masks in UI.
     if not good_hit:
         return -9999
-    if ('/spaces/' in low or 'spaces/' in low) and not any(h in low for h in ('minimap', 'preview', 'loading', 'screen', 'screenshot')):
-        return -9999
-
     if low.endswith('.png'):
         score += 10
     if low.endswith('.jpg') or low.endswith('.jpeg'):
@@ -214,37 +214,36 @@ def _score_image_member(name, map_id):
     return score
 
 
-def _find_map_pkg(packages_dir, map_id):
-    exact = os.path.join(packages_dir, map_id + '.pkg')
-    if os.path.isfile(exact):
-        return exact
+def _iter_candidate_pkgs(packages_dir, map_id):
+    result = []
     try:
         names = os.listdir(packages_dir)
     except Exception:
-        return None
-    candidates = []
-    for name in names:
+        return result
+
+    for name in sorted(names):
+        low = name.lower()
+        if low.startswith('gui-part') and low.endswith('.pkg'):
+            result.append(os.path.join(packages_dir, name))
+
+    exact = os.path.join(packages_dir, map_id + '.pkg')
+    if os.path.isfile(exact):
+        result.append(exact)
+
+    for name in sorted(names):
         low = name.lower()
         if low.startswith(map_id.lower()) and low.endswith('.pkg') and '_hd' not in low:
-            candidates.append(os.path.join(packages_dir, name))
-    candidates.sort()
-    return candidates[0] if candidates else None
+            path = os.path.join(packages_dir, name)
+            if path not in result:
+                result.append(path)
+    return result
 
 
-def _extract_one_runtime_thumb(packages_dir, out_dir, map_id):
-    out_path = os.path.join(out_dir, map_id + '.png')
-    pkg = _find_map_pkg(packages_dir, map_id)
-    if not pkg:
-        if os.path.isfile(out_path):
-            try:
-                os.remove(out_path)
-            except Exception:
-                pass
-        return False
+def _find_best_image_in_pkg(pkg, map_id):
     try:
         zf = zipfile.ZipFile(pkg, 'r')
     except Exception:
-        return False
+        return None, None
     try:
         best = None
         best_score = -9999
@@ -254,15 +253,23 @@ def _extract_one_runtime_thumb(packages_dir, out_dir, map_id):
                 best_score = s
                 best = name
         if not best or best_score < 0:
-            if os.path.isfile(out_path):
-                try:
-                    os.remove(out_path)
-                except Exception:
-                    pass
-            return False
-        data = zf.read(best)
+            return None, None
+        return zf.read(best), best
+    except Exception:
+        return None, None
+    finally:
+        try:
+            zf.close()
+        except Exception:
+            pass
+
+
+def _extract_one_runtime_thumb(packages_dir, out_dir, map_id):
+    out_path = os.path.join(out_dir, map_id + '.png')
+    for pkg in _iter_candidate_pkgs(packages_dir, map_id):
+        data, _name = _find_best_image_in_pkg(pkg, map_id)
         if not data:
-            return False
+            continue
         if not os.path.isdir(out_dir):
             os.makedirs(out_dir)
         f = open(out_path, 'wb')
@@ -272,13 +279,13 @@ def _extract_one_runtime_thumb(packages_dir, out_dir, map_id):
             f.close()
         _runtime_thumb_paths[map_id] = out_path
         return True
-    except Exception:
-        return False
-    finally:
+
+    if os.path.isfile(out_path):
         try:
-            zf.close()
+            os.remove(out_path)
         except Exception:
             pass
+    return False
 
 
 def _ensure_runtime_map_thumbs():
