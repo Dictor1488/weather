@@ -1,17 +1,14 @@
 package weather.components
 {
-    import flash.display.Bitmap;
-    import flash.display.Loader;
     import flash.display.Shape;
     import flash.display.Sprite;
-    import flash.events.Event;
-    import flash.events.IOErrorEvent;
     import flash.events.MouseEvent;
     import flash.geom.Rectangle;
-    import flash.net.URLRequest;
     import flash.text.TextField;
     import flash.text.TextFormat;
     import flash.text.TextFormatAlign;
+
+    import net.wg.gui.components.controls.UILoaderAlt;
 
     import weather.data.MapVO;
     import weather.events.WeatherEvent;
@@ -23,7 +20,7 @@ package weather.components
 
         private var _vo:MapVO;
         private var _hover:Sprite;
-        private var _thumb:Loader;
+        private var _thumb:UILoaderAlt;
         private var _thumbHolder:Sprite;
         private var _shade:Shape;
 
@@ -52,6 +49,7 @@ package weather.components
             _thumbHolder.x = 0;
             _thumbHolder.y = 0;
             _thumbHolder.alpha = 0.48;
+            _thumbHolder.scrollRect = new Rectangle(0, 0, TILE_W, TILE_H);
             addChild(_thumbHolder);
 
             drawFallbackBackground();
@@ -114,49 +112,19 @@ package weather.components
         private function loadThumb():void
         {
             if (!_vo.thumbSrc || _vo.thumbSrc == "") return;
-            _thumb = new Loader();
-            _thumb.contentLoaderInfo.addEventListener(Event.COMPLETE, onThumbLoaded);
-            _thumb.contentLoaderInfo.addEventListener(IOErrorEvent.IO_ERROR, onThumbError);
             try
             {
-                _thumb.load(new URLRequest(_vo.thumbSrc));
+                _thumb = new UILoaderAlt();
+                _thumb.x = 0;
+                _thumb.y = 0;
+                _thumb.width = TILE_W;
+                _thumb.height = TILE_H;
+                _thumb.autoSize = false;
+                _thumb.maintainAspectRatio = false;
+                _thumb.source = _vo.thumbSrc;
                 _thumbHolder.addChild(_thumb);
             }
             catch (e:Error) {}
-        }
-
-        private function onThumbLoaded(e:Event):void
-        {
-            var bw:Number = _thumb.contentLoaderInfo.width;
-            var bh:Number = _thumb.contentLoaderInfo.height;
-            if (bw <= 0 || bh <= 0)
-            {
-                _thumb.width = TILE_W;
-                _thumb.height = TILE_H;
-            }
-            else
-            {
-                var scale:Number = Math.max(TILE_W / bw, TILE_H / bh);
-                _thumb.scaleX = _thumb.scaleY = scale;
-                _thumb.x = int((TILE_W - bw * scale) * 0.5);
-                _thumb.y = int((TILE_H - bh * scale) * 0.5);
-            }
-            try
-            {
-                var bmp:Bitmap = _thumb.content as Bitmap;
-                if (bmp) bmp.smoothing = true;
-            }
-            catch (err:Error) {}
-            _thumbHolder.scrollRect = new Rectangle(0, 0, TILE_W, TILE_H);
-        }
-
-        private function onThumbError(e:IOErrorEvent):void
-        {
-            try
-            {
-                if (_thumb && _thumbHolder.contains(_thumb)) _thumbHolder.removeChild(_thumb);
-            }
-            catch (err:Error) {}
         }
 
         private function makeSlidersIcon():Sprite
