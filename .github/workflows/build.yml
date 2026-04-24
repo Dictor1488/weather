@@ -193,17 +193,19 @@ jobs:
                 "-target-player=${{ env.FLASH_PLAYER_VERSION }}",
                 "-swf-version=${{ env.SWF_VERSION }}",
                 "-strict=true",
-                "-optimize=true",
-                "--"
+                "-optimize=true"
             )
-            $mxmlcArgs += $mainClassPath
 
-            Write-Host "Running: mxmlc $($mxmlcArgs -join ' ')"
-            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs `
-                -NoNewWindow -Wait -PassThru `
-                -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
-            Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
-            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
+            # Передаємо як єдиний рядок через cmd /c
+            # Start-Process -ArgumentList з масивом не передає шляхи правильно
+            $argsStr = ($mxmlcArgs -join " ") + " `"$mainClassPath`""
+            $cmdLine = "`"$mxmlcPath`" $argsStr"
+            Write-Host "Running: $cmdLine"
+            $process = Start-Process -FilePath "cmd.exe" `
+                -ArgumentList "/c `"$cmdLine`" > out.txt 2>&1" `
+                -NoNewWindow -Wait -PassThru
+            Get-Content "out.txt" -ErrorAction SilentlyContinue | Write-Host
+            Remove-Item "out.txt" -Force -ErrorAction SilentlyContinue
 
             if ($process.ExitCode -ne 0) {
                 Write-Error "Compilation failed with exit code $($process.ExitCode)"
