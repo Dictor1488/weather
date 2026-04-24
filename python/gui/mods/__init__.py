@@ -469,11 +469,15 @@ def _register_weather_view():
     except Exception:
         _log().exception('Weather custom view registration failed')
 
+
 def _register_mods_list_entry():
     """
     modsListApi реєструється пізніше ніж init() —
     тому чекаємо на лобі через callback.
     Пробуємо кілька шляхів імпорту (WoT 2.2.x / 1.x).
+
+    У різних версіях ModsListAPI метод називається по-різному:
+    addModification / addMod / add, тому реєструємо через сумісний wrapper.
     """
     def _do_register():
         g_modsListApi = None
@@ -497,20 +501,61 @@ def _register_mods_list_entry():
             _log().warning('modsListApi not available in any known path')
             return
 
-        try:
-            g_modsListApi.addMod(
-                id='weather_panel',
-                name=u'Погода на картах',
-                description=u'Налаштування погодних пресетів для кожної карти',
-                icon='gui/maps/icons/pro.environment/modsList.png',
-                enabled=True,
-                login=False,
-                lobby=True,
-                callback=open_weather_window,
+        entry = {
+            'id':          'weather_panel',
+            'name':        u'Погода на картах',
+            'description': u'Налаштування погодних пресетів для кожної карти',
+            'icon':        'gui/maps/icons/pro.environment/modsList.png',
+            'enabled':     True,
+            'login':       False,
+            'lobby':       True,
+            'callback':    open_weather_window,
+        }
+
+        def _try_register(method_name):
+            method = getattr(g_modsListApi, method_name, None)
+            if method is None:
+                return False
+
+            attempts = (
+                lambda: method(**entry),
+                lambda: method(entry['id'], entry['name'], entry['description'],
+                               entry['icon'], entry['enabled'], entry['login'],
+                               entry['lobby'], entry['callback']),
+                lambda: method(entry['id'], entry['name'], entry['icon'],
+                               entry['enabled'], entry['login'], entry['lobby'],
+                               entry['callback']),
+                lambda: method(entry['id'], entry['name'], entry['description'],
+                               entry['icon'], entry['callback']),
             )
-            _log().info('modsListApi entry registered OK')
-        except Exception as e:
-            _log().warning('modsListApi.addMod failed: %s', e)
+
+            last_error = None
+            for call in attempts:
+                try:
+                    call()
+                    _log().info('modsListApi entry registered OK via %s', method_name)
+                    return True
+                except TypeError as e:
+                    last_error = e
+                except Exception as e:
+                    _log().warning('modsListApi.%s failed: %s', method_name, e)
+                    return False
+
+            _log().warning('modsListApi.%s signature mismatch: %s', method_name, last_error)
+            return False
+
+        registered = False
+        for method_name in ('addModification', 'addMod', 'add'):
+            if _try_register(method_name):
+                registered = True
+                break
+
+        if not registered:
+            try:
+                methods = [m for m in dir(g_modsListApi) if m.lower().startswith('add')]
+            except Exception:
+                methods = []
+            _log().warning('modsListApi entry registration failed; available add* methods=%s', methods)
 
     if not IN_GAME:
         return
@@ -574,6 +619,7 @@ def open_weather_window(*args, **kwargs):
         BigWorld.callback(0.05, _load)
     except Exception:
         _load()
+
 
 def _on_settings_changed(linkage, newSettings):
     current_general = g_controller.getGeneralWeights()
