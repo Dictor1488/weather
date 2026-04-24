@@ -186,7 +186,11 @@ package weather.views
         private function onBackToMaps(e:WeatherEvent):void { showTab(TAB_MAPS); }
         private function onHotkeyChanged(e:WeatherEvent):void { dispatchEvent(e.clone()); }
         private function onWeightChanged(e:WeatherEvent):void { dispatchEvent(e.clone()); }
-        private function onMapSelected(e:WeatherEvent):void { dispatchEvent(e.clone()); }
+        private function onMapSelected(e:WeatherEvent):void
+        {
+            showMapDetail(e.mapId);
+            dispatchEvent(e.clone());
+        }
 
         private function findMap(id:String):MapVO
         {
