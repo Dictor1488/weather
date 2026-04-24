@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 DAAPI-міст між Flash (WeatherMediator.as) та weather_controller v8.
-Новий UI: кнопки-пресети замість слайдерів ваги.
 """
 
 try:
@@ -33,7 +32,6 @@ from weather_controller import (
 import logging
 LOG = logging.getLogger('weather_mod')
 
-# Шляхи до preview-іконок пресетів
 PRESET_PREVIEW = {
     'standard': 'gui/maps/icons/pro.environment/default.png',
     'midnight': 'gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png',
@@ -94,7 +92,6 @@ MAP_REGISTRY = [
 
 
 def _build_presets_for_ui(weights=None):
-    """Будує масив об'єктів пресетів для Flash."""
     weights = weights or {}
     return [
         {
@@ -119,7 +116,6 @@ def _build_hotkey_str(hotkey_dict):
 
 
 def _build_payload():
-    """Будує payload для as_setData."""
     current_preset = g_controller.getCurrentPreset()
     general        = g_controller.getGeneralWeights() or {}
 
@@ -169,34 +165,22 @@ class WeatherWindowMeta(AbstractLobbyView):
         except Exception:
             LOG.exception('WeatherWindowMeta._populate failed')
 
-    # ── Нові методи від Flash (кнопки-пресети) ─────────────────────────────
-
     def py_onPresetSelected(self, mapId, presetId):
-        """
-        Викликається коли гравець натиснув кнопку пресету.
-        mapId == None або '' → глобальний пресет для всіх карт.
-        mapId != '' → пресет для конкретної карти.
-        """
         try:
             preset_id = str(presetId) if presetId else 'standard'
             map_id    = str(mapId) if mapId else None
 
             if not map_id:
-                # Глобальний пресет — застосовуємо одразу
                 LOG.info('py_onPresetSelected: global preset=%s', preset_id)
                 self._ctrl.setPreset(preset_id)
             else:
-                # Пресет для конкретної карти
                 LOG.info('py_onPresetSelected: map=%s preset=%s', map_id, preset_id)
                 from weather_controller import apply_preset
                 apply_preset(map_id, preset_id)
         except Exception:
             LOG.exception('py_onPresetSelected failed')
 
-    # ── Зворотна сумісність (старі weight-методи) ──────────────────────────
-
     def py_onWeightChanged(self, mapId, presetId, value):
-        """Залишаємо для сумісності — новий UI не використовує."""
         try:
             map_id = str(mapId) if mapId else None
             if not map_id:
@@ -211,7 +195,7 @@ class WeatherWindowMeta(AbstractLobbyView):
             LOG.exception('py_onWeightChanged failed')
 
     def py_onMapSelected(self, mapId):
-        pass  # Flash сам перемикає деталь-панель
+        pass
 
     def py_onTabChanged(self, tab):
         pass
@@ -220,8 +204,20 @@ class WeatherWindowMeta(AbstractLobbyView):
         self._ctrl.on_close_requested()
         try:
             self.destroy()
+            return
         except Exception:
             pass
+        try:
+            self._destroy()
+            return
+        except Exception:
+            pass
+        try:
+            self.onWindowClose()
+            return
+        except Exception:
+            pass
+        LOG.info('py_onCloseRequested: close requested, no destroy method succeeded')
 
     def py_onHotkeyChanged(self, keyCodes, hotkeyStr):
         try:
