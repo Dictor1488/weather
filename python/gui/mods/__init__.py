@@ -149,8 +149,6 @@ def _register_weather_view():
             None,
             ScopeTemplates.GLOBAL_SCOPE,
         )
-        # Перевіряємо чи alias вже зареєстрований перш ніж видаляти,
-        # щоб не кидати виняток в factories.py який може зламати стан для інших модів.
         existing = None
         try:
             existing = g_entitiesFactories.getSettings(WEATHER_PANEL_ALIAS)
@@ -334,16 +332,12 @@ def _register_mods_settings_status_now():
 
 
 def _register_ui_when_lobby_ready():
-    try:
-        BigWorld.callback(8.0, lambda: _run_when_lobby_ready(_register_mods_list_entry_now))
-        BigWorld.callback(9.0, lambda: _run_when_lobby_ready(_register_mods_settings_status_now))
-    except Exception:
-        _run_when_lobby_ready(_register_mods_list_entry_now)
-        _run_when_lobby_ready(_register_mods_settings_status_now)
+    _run_when_lobby_ready(_register_mods_list_entry_now)
+    _run_when_lobby_ready(_register_mods_settings_status_now)
 
 
 # ---------------------------------------------------------------------------
-# Battle hooks / hotkey  (event-based, no monkey-patching)
+# Battle hooks / hotkey (event-based, no monkey-patching)
 # ---------------------------------------------------------------------------
 
 def _extract_space_name_from_arena_type(arena_type):
@@ -462,7 +456,7 @@ def _unsubscribe_player_events():
 # Entry points expected by mod loaders
 # ---------------------------------------------------------------------------
 
-def initialized(*args, **kwargs):
+def init(*args, **kwargs):
     global _INIT_DONE
     if _INIT_DONE:
         return
@@ -473,7 +467,7 @@ def initialized(*args, **kwargs):
     _log().info('weather initialized; UI registration is delayed until lobby is ready')
 
 
-def finalized(*args, **kwargs):
+def fini(*args, **kwargs):
     global _INIT_DONE
     _unsubscribe_player_events()
     _INIT_DONE = False
@@ -481,19 +475,19 @@ def finalized(*args, **kwargs):
 
 def onAccountBecomePlayer(*args, **kwargs):
     if not _INIT_DONE:
-        initialized()
+        init()
     return None
 
 
 def onBecomePlayer(*args, **kwargs):
     if not _INIT_DONE:
-        initialized()
+        init()
     return None
 
 
 def startGUI(*args, **kwargs):
     if not _INIT_DONE:
-        initialized()
+        init()
     return None
 
 
