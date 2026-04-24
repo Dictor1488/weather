@@ -3,7 +3,6 @@ package weather.views
     import flash.display.Shape;
     import flash.display.Sprite;
     import flash.events.MouseEvent;
-    import flash.geom.Rectangle;
 
     import weather.components.MapTile;
     import weather.data.MapVO;
@@ -11,12 +10,7 @@ package weather.views
 
     public class MapGridPanel extends Sprite
     {
-        private static const COLS:int = 4;
-        private static const GAP_X:int = 42;
-        private static const GAP_Y:int = 34;
-        private static const PAD_LEFT:int = 68;
-        private static const PAD_TOP:int = 60;
-        private static const VIEW_H:int = 590;
+        private static const VIEW_H:int = 420;
 
         private var _holder:Sprite;
         private var _maskShape:Shape;
@@ -32,49 +26,53 @@ package weather.views
 
         private function build(maps:Vector.<MapVO>):void
         {
+            var hdr:flash.text.TextField = new flash.text.TextField();
+            hdr.defaultTextFormat = new flash.text.TextFormat("_sans", 16, 0xF2F2F2, true);
+            hdr.selectable = false;
+            hdr.autoSize = "left";
+            hdr.text = "Налаштування по картах";
+            hdr.x = 0;
+            hdr.y = 0;
+            addChild(hdr);
+
             _holder = new Sprite();
+            _holder.y = 30;
             addChild(_holder);
 
             _maskShape = new Shape();
             _maskShape.graphics.beginFill(0xFFFFFF, 1);
-            _maskShape.graphics.drawRect(0, 0, 1140, VIEW_H);
+            _maskShape.graphics.drawRect(0, 30, 394, VIEW_H);
             _maskShape.graphics.endFill();
-            _maskShape.x = 0;
-            _maskShape.y = 0;
             addChild(_maskShape);
             _holder.mask = _maskShape;
 
             for (var i:int = 0; i < maps.length; i++)
             {
                 var tile:MapTile = new MapTile(maps[i]);
+                tile.y = i * (MapTile.TILE_H + 7);
                 tile.addEventListener(WeatherEvent.MAP_SELECTED, onMapSelected);
-
-                var col:int = i % COLS;
-                var row:int = int(i / COLS);
-                tile.x = PAD_LEFT + col * (MapTile.TILE_W + GAP_X);
-                tile.y = PAD_TOP + row * (MapTile.TILE_H + GAP_Y);
                 _holder.addChild(tile);
             }
 
-            _contentHeight = PAD_TOP + Math.ceil(maps.length / COLS) * (MapTile.TILE_H + GAP_Y);
+            _contentHeight = maps.length * (MapTile.TILE_H + 7);
             buildScrollbar();
         }
 
         private function buildScrollbar():void
         {
             _scrollbar = new Sprite();
-            _scrollbar.x = 1168;
-            _scrollbar.y = 14;
+            _scrollbar.x = 400;
+            _scrollbar.y = 30;
             addChild(_scrollbar);
 
             _scrollbar.graphics.lineStyle(1, 0x5A554B, 0.85);
             _scrollbar.graphics.beginFill(0x141414, 0.55);
-            _scrollbar.graphics.drawRect(0, 0, 14, VIEW_H - 8);
+            _scrollbar.graphics.drawRect(0, 0, 10, VIEW_H);
             _scrollbar.graphics.endFill();
 
             _thumb = new Sprite();
-            _thumb.graphics.beginFill(0x5D584E, 0.9);
-            _thumb.graphics.drawRect(2, 2, 10, 88);
+            _thumb.graphics.beginFill(0x7A7364, 0.9);
+            _thumb.graphics.drawRect(2, 2, 6, 70);
             _thumb.graphics.endFill();
             _scrollbar.addChild(_thumb);
 
@@ -90,10 +88,11 @@ package weather.views
         private function onWheel(e:MouseEvent):void
         {
             if (_contentHeight <= VIEW_H) return;
-            _holder.y += e.delta * 26;
 
-            var minY:int = VIEW_H - _contentHeight;
-            if (_holder.y > 0) _holder.y = 0;
+            _holder.y += e.delta * 22;
+            var maxY:int = 30;
+            var minY:int = 30 + VIEW_H - _contentHeight;
+            if (_holder.y > maxY) _holder.y = maxY;
             if (_holder.y < minY) _holder.y = minY;
 
             updateThumb();
@@ -104,8 +103,8 @@ package weather.views
             if (!_thumb || _contentHeight <= VIEW_H) return;
 
             var maxScroll:int = _contentHeight - VIEW_H;
-            var ratio:Number = -_holder.y / maxScroll;
-            var trackH:int = VIEW_H - 100;
+            var ratio:Number = (30 - _holder.y) / maxScroll;
+            var trackH:int = VIEW_H - 76;
             _thumb.y = 2 + ratio * trackH;
         }
     }

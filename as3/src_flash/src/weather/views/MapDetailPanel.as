@@ -11,17 +11,22 @@ package weather.views
 
     public class MapDetailPanel extends Sprite
     {
-        private static const ROW_X:int = 120;
-        private static const ROW_Y:int = 125;
-        private static const ROW_GAP:int = 26;
-        private static const ROW_W:int = 880;
-
         private var _map:MapVO;
 
         public function MapDetailPanel(map:MapVO, currentPreset:String = "standard")
         {
             _map = map;
             build();
+        }
+
+        private function makeText(text:String, size:int, color:uint, bold:Boolean):TextField
+        {
+            var tf:TextField = new TextField();
+            tf.defaultTextFormat = new TextFormat("_sans", size, color, bold);
+            tf.selectable = false;
+            tf.autoSize = "left";
+            tf.text = text;
+            return tf;
         }
 
         private function build():void
@@ -31,36 +36,27 @@ package weather.views
             backBtn.useHandCursor = true;
             backBtn.mouseChildren = false;
 
-            var backTF:TextField = new TextField();
-            backTF.defaultTextFormat = new TextFormat("_sans", 14, 0xCBA060, true);
-            backTF.selectable = false;
-            backTF.autoSize = "left";
-            backTF.text = "‹  Назад до списку карт";
+            var backTF:TextField = makeText("‹ назад до карт", 12, 0xD5A45A, true);
             backBtn.addChild(backTF);
-            backBtn.x = 118;
-            backBtn.y = 32;
+            backBtn.x = 0;
+            backBtn.y = 0;
             backBtn.addEventListener(MouseEvent.CLICK, onBackClick);
             addChild(backBtn);
 
-            var header:TextField = new TextField();
-            header.defaultTextFormat = new TextFormat("_sans", 23, 0xF2F2F2, true);
-            header.selectable = false;
-            header.autoSize = "left";
-            header.text = "Налаштування карти: " + _map.label;
-            header.x = 180;
-            header.y = 68;
+            var header:TextField = makeText(_map.label, 17, 0xF2F2F2, true);
+            header.x = 0;
+            header.y = 24;
             addChild(header);
 
-            var y:int = ROW_Y;
+            var y:int = 58;
             for (var i:int = 0; i < _map.presets.length; i++)
             {
                 var row:PresetRow = new PresetRow(_map.presets[i], _map.id);
-                row.setWidth(ROW_W);
-                row.x = ROW_X;
+                row.x = 0;
                 row.y = y;
                 row.addEventListener(WeatherEvent.PRESET_WEIGHT_CHANGED, onWeightChanged);
                 addChild(row);
-                y += PresetRow.ROW_HEIGHT + ROW_GAP;
+                y += PresetRow.ROW_HEIGHT + 10;
             }
         }
 
