@@ -30,9 +30,14 @@ from weather.controller import (
 )
 
 import logging
+import os
+import re
+import zipfile
+
 LOG = logging.getLogger('weather_mod')
 
 _active_window = None
+_runtime_thumbs_ready = False
 
 PRESET_PREVIEW = {
     'standard': 'img://gui/maps/icons/pro.environment/default.png',
@@ -42,10 +47,20 @@ PRESET_PREVIEW = {
     'midday':   'img://gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png',
 }
 
+IMAGE_RE = re.compile(r'\.(png|jpg|jpeg)$', re.I)
+GOOD_IMAGE_HINTS = (
+    'minimap', 'preview', 'loading', 'map', 'maps', 'arena', 'battle_loading',
+    'thumbnail', 'thumb', 'screen', 'screenshot', 'icons',
+)
+BAD_IMAGE_HINTS = (
+    'normal', 'height', 'splat', 'blend', 'mask', 'noise', 'detail', 'terrain',
+    'flora', 'water', 'sky', 'shadow', 'lightmap', 'ao', 'color_grading', 'lut',
+)
+
 
 def _map_icon(map_id):
-    # build.py витягує оригінальні PNG/JPG з res/packages/*.pkg сюди:
-    # res/gui/maps/icons/weather/maps/<map_id>.png
+    # Runtime extraction writes original map PNG/JPG here:
+    # res_mods/<version>/gui/maps/icons/weather/maps/<map_id>.png
     return 'img://gui/maps/icons/weather/maps/%s.png' % map_id
 
 
@@ -100,6 +115,179 @@ MAP_REGISTRY = [
 ]
 
 
+def _norm_path(path):
+    try:
+        return os.path.abspath(os.path.normpath(path))
+    except Exception:
+        return path
+
+
+def _is_game_folder(path):
+    return bool(path and os.path.isdir(os.path.join(path, 'res', 'packages')))
+
+
+def _find_game_folder():
+    candidates = []
+    try:
+        candidates.append(os.getcwd())
+    except Exception:
+        pass
+    try:
+        candidates.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    except Exception:
+        pass
+    try:
+        import BigWorld
+        pref = BigWorld.wg_getPreferencesFilePath()
+        if pref:
+            candidates.append(os.path.dirname(pref))
+    except Exception:
+        pass
+
+    expanded = []
+    for c in candidates:
+        c = _norm_path(c)
+        while c and c not in expanded:
+            expanded.append(c)
+            parent = os.path.dirname(c)
+            if parent == c:
+                break
+            c = parent
+
+    for root in expanded:
+        if _is_game_folder(root):
+            return root
+
+    for letter in 'CDEFGHIJKLMNOPQRSTUVWXYZ':
+        drive = letter + ':\\'
+        if not os.path.isdir(drive):
+            continue
+        for rel in ('World_of_Tanks_EU', 'World_of_Tanks', 'Games\\World_of_Tanks_EU', 'Games\\World_of_Tanks'):
+            p = os.path.join(drive, rel)
+            if _is_game_folder(p):
+                return p
+    return None
+
+
+def _find_game_version(game_folder):
+    try:
+        mods_dir = os.path.join(game_folder, 'mods')
+        versions = [n for n in os.listdir(mods_dir) if os.path.isdir(os.path.join(mods_dir, n))]
+        versions.sort(reverse=True)
+        if versions:
+            return versions[0]
+    except Exception:
+        pass
+    try:
+        res_mods_dir = os.path.join(game_folder, 'res_mods')
+        versions = [n for n in os.listdir(res_mods_dir) if os.path.isdir(os.path.join(res_mods_dir, n))]
+        versions.sort(reverse=True)
+        if versions:
+            return versions[0]
+    except Exception:
+        pass
+    return None
+
+
+def _score_image_member(name, map_id):
+    low = name.lower().replace('\\', '/')
+    if not IMAGE_RE.search(low):
+        return -9999
+    score = 0
+    if map_id.lower() in low:
+        score += 50
+    for hint in GOOD_IMAGE_HINTS:
+        if hint in low:
+            score += 10
+    for hint in BAD_IMAGE_HINTS:
+        if hint in low:
+            score -= 30
+    if '/gui/' in low:
+        score += 30
+    if '/spaces/' in low:
+        score += 5
+    if low.endswith('.png'):
+        score += 5
+    if 'hd' in low:
+        score -= 3
+    return score
+
+
+def _find_map_pkg(packages_dir, map_id):
+    exact = os.path.join(packages_dir, map_id + '.pkg')
+    if os.path.isfile(exact):
+        return exact
+    try:
+        names = os.listdir(packages_dir)
+    except Exception:
+        return None
+    candidates = []
+    for name in names:
+        low = name.lower()
+        if low.startswith(map_id.lower()) and low.endswith('.pkg') and '_hd' not in low:
+            candidates.append(os.path.join(packages_dir, name))
+    candidates.sort()
+    return candidates[0] if candidates else None
+
+
+def _extract_one_runtime_thumb(packages_dir, out_dir, map_id):
+    out_path = os.path.join(out_dir, map_id + '.png')
+    if os.path.isfile(out_path):
+        return True
+    pkg = _find_map_pkg(packages_dir, map_id)
+    if not pkg:
+        return False
+    try:
+        zf = zipfile.ZipFile(pkg, 'r')
+    except Exception:
+        return False
+    try:
+        best = None
+        best_score = -9999
+        for name in zf.namelist():
+            s = _score_image_member(name, map_id)
+            if s > best_score:
+                best_score = s
+                best = name
+        if not best or best_score < 0:
+            return False
+        data = zf.read(best)
+        if not data:
+            return False
+        if not os.path.isdir(out_dir):
+            os.makedirs(out_dir)
+        f = open(out_path, 'wb')
+        try:
+            f.write(data)
+        finally:
+            f.close()
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            zf.close()
+        except Exception:
+            pass
+
+
+def _ensure_runtime_map_thumbs():
+    global _runtime_thumbs_ready
+    if _runtime_thumbs_ready:
+        return
+    _runtime_thumbs_ready = True
+    game_folder = _find_game_folder()
+    if not game_folder:
+        return
+    version = _find_game_version(game_folder)
+    if not version:
+        return
+    packages_dir = os.path.join(game_folder, 'res', 'packages')
+    out_dir = os.path.join(game_folder, 'res_mods', version, 'gui', 'maps', 'icons', 'weather', 'maps')
+    for map_id, _label in MAP_REGISTRY:
+        _extract_one_runtime_thumb(packages_dir, out_dir, map_id)
+
+
 def _build_presets_for_ui(weights=None):
     weights = weights or {}
     return [
@@ -124,6 +312,7 @@ def _build_hotkey_str(hotkey_dict):
 
 
 def _build_payload():
+    _ensure_runtime_map_thumbs()
     current_preset = g_controller.getCurrentPreset()
     general = g_controller.getGeneralWeights() or {}
 
