@@ -165,11 +165,13 @@ jobs:
             Write-Host "=== FULL COMMAND ==="
             Write-Host "$mxmlcPath $($mxmlcArgs -join ' ')"
             Write-Host "===================="
-            $cmdStr = $mxmlcArgs -join " "
-            cmd /c "`"$mxmlcPath`" $cmdStr > out.txt 2>&1"
-            $exitCode = $LASTEXITCODE
-            Get-Content "out.txt" -ErrorAction SilentlyContinue | Write-Host
-            if ($exitCode -ne 0) { Write-Error "Compilation failed"; exit 1 }
+            # Запускаємо з робочої директорії src_flash де лежать класи
+            Push-Location $srcDirResolved
+            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs -NoNewWindow -Wait -PassThru -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
+            Pop-Location
+            Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
+            Remove-Item "out.txt","err.txt" -Force -EA SilentlyContinue
+            if ($process.ExitCode -ne 0) { Write-Error "Compilation failed"; exit 1 }
             $sz = (Get-Item $outputSwf).Length
             Write-Host "SUCCESS: $swfName ($([math]::Round($sz/1KB,2)) KB)" -ForegroundColor Green
             Remove-Item "out.txt" -Force -ErrorAction SilentlyContinue
