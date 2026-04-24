@@ -32,12 +32,12 @@ package weather.views
 
         private function build(presets:Vector.<PresetVO>):void
         {
-            var hdr:TextField = makeText("Загальні налаштування", 16, 0xF2F2F2, true);
-            hdr.x = 0;
+            var hdr:TextField = makeText("Загальні налаштування", 18, 0xF2F2F2, true);
+            hdr.x = 2;
             hdr.y = 0;
             addChild(hdr);
 
-            var y:int = 32;
+            var y:int = 36;
             for (var i:int = 0; i < presets.length; i++)
             {
                 var row:PresetRow = new PresetRow(presets[i], null);
@@ -48,19 +48,19 @@ package weather.views
                 y += PresetRow.ROW_HEIGHT + 10;
             }
 
-            var hk:TextField = makeText("Гаряча клавіша в бою", 13, 0xDADADA, false);
+            var hk:TextField = makeText("Гаряча клавіша в бою", 14, 0xDADADA, false);
             hk.x = 2;
-            hk.y = y + 8;
+            hk.y = y + 10;
             addChild(hk);
 
             _chipContainer = new Sprite();
-            _chipContainer.x = 190;
-            _chipContainer.y = y + 4;
+            _chipContainer.x = 232;
+            _chipContainer.y = y + 5;
             addChild(_chipContainer);
             rebuildChipsFromString(_hotkeyStr);
 
             var editBtn:Sprite = makeEditButton();
-            editBtn.x = 295;
+            editBtn.x = 342;
             editBtn.y = y + 2;
             addChild(editBtn);
         }
@@ -112,13 +112,13 @@ package weather.views
             var s:Sprite = new Sprite();
             s.buttonMode = true;
             s.useHandCursor = true;
-            s.graphics.lineStyle(1, 0xAF741E, 0.8);
+            s.graphics.lineStyle(1, 0xAF741E, 0.9);
             s.graphics.beginFill(0x0E0B08, 0.85);
-            s.graphics.drawRect(0, 0, 82, 24);
+            s.graphics.drawRect(0, 0, 84, 26);
             s.graphics.endFill();
 
-            var tf:TextField = makeText("змінити", 11, 0xE6A13A, true);
-            tf.x = 18;
+            var tf:TextField = makeText("змінити", 12, 0xE6A13A, true);
+            tf.x = 17;
             tf.y = 5;
             s.addChild(tf);
 
@@ -139,7 +139,7 @@ package weather.views
         private function showHint():void
         {
             while (_chipContainer.numChildren > 0) _chipContainer.removeChildAt(0);
-            _chipContainer.addChild(makeText("натисни...", 11, 0xFFB84E, true));
+            _chipContainer.addChild(makeText("натисни...", 12, 0xFFB84E, true));
         }
 
         private function onCaptureKeyDown(e:KeyboardEvent):void
@@ -206,16 +206,16 @@ package weather.views
         private function makeKeyChip(key:String):Sprite
         {
             var s:Sprite = new Sprite();
-            var tf:TextField = makeText(key, 11, 0xFFFFFF, true);
+            var tf:TextField = makeText(key, 12, 0xFFFFFF, true);
 
             var w:int = tf.width + 14;
             s.graphics.beginFill(0x261D0E, 0.90);
             s.graphics.lineStyle(1, 0xB98525, 1);
-            s.graphics.drawRect(0, 0, w, 22);
+            s.graphics.drawRect(0, 0, w, 24);
             s.graphics.endFill();
 
             tf.x = 7;
-            tf.y = 3;
+            tf.y = 4;
             s.addChild(tf);
             return s;
         }
