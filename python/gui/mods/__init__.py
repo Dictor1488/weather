@@ -337,8 +337,37 @@ def _register_ui_when_lobby_ready():
 
 
 # ---------------------------------------------------------------------------
-# Battle hooks / hotkey (event-based, no monkey-patching)
+# Battle hooks / hotkey
 # ---------------------------------------------------------------------------
+
+_KEY_HOOK_INSTALLED = False
+
+
+def _install_key_hook():
+    global _KEY_HOOK_INSTALLED
+    if not IN_GAME or _KEY_HOOK_INSTALLED:
+        return
+    try:
+        import AvatarInputHandler as _AIH
+        cls = _AIH.AvatarInputHandler
+        if hasattr(cls, 'handleKeyEvent'):
+            orig = cls.handleKeyEvent
+            if getattr(orig, '_weather_patched', False):
+                _KEY_HOOK_INSTALLED = True
+                return
+            def wrapped(self, *args, **kwargs):
+                try:
+                    if args:
+                        _on_key_event(args[0])
+                except Exception:
+                    _log().exception('AvatarInputHandler hotkey dispatch failed')
+                return orig(self, *args, **kwargs)
+            wrapped._weather_patched = True
+            cls.handleKeyEvent = wrapped
+            _KEY_HOOK_INSTALLED = True
+            _log().info('Key hook: AvatarInputHandler.handleKeyEvent OK')
+    except Exception:
+        _log().exception('Failed to install AvatarInputHandler key hook')
 
 def _extract_space_name_from_arena_type(arena_type):
     if not arena_type:
@@ -460,11 +489,12 @@ def init(*args, **kwargs):
     global _INIT_DONE
     if _INIT_DONE:
         return
+    _install_key_hook()
     _subscribe_player_events()
     _register_weather_view()
     _register_ui_when_lobby_ready()
     _INIT_DONE = True
-    _log().info('weather initialized; UI registration is delayed until lobby is ready')
+    _log().info('weather init done; UI registration is delayed until lobby is ready')
 
 
 def fini(*args, **kwargs):
