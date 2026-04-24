@@ -173,12 +173,12 @@ jobs:
           )
 
           Write-Host "Running: mxmlc $($args -join ' ')"
-          $p = Start-Process $mxmlcPath -ArgumentList $args -NoNewWindow -Wait -PassThru `
-            -RedirectStandardOutput out.txt -RedirectStandardError err.txt
-          Get-Content out.txt,err.txt -EA SilentlyContinue | Write-Host
-          Remove-Item out.txt,err.txt -Force -EA SilentlyContinue
+          # Запускаємо напряму через & щоб бачити ВЕСЬ вивід mxmlc в лозі
+          & $mxmlcPath @args
+          $exitCode = $LASTEXITCODE
+          Write-Host "mxmlc exit: $exitCode"
 
-          if ($p.ExitCode -ne 0) { Write-Error "mxmlc failed (exit $($p.ExitCode))"; exit 1 }
+          if ($exitCode -ne 0) { Write-Error "mxmlc failed (exit $exitCode)"; exit 1 }
           if (-not (Test-Path $outSwf)) { Write-Error "SWF not created"; exit 1 }
 
           $sz = (Get-Item $outSwf).Length
