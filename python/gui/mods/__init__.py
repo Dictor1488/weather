@@ -107,7 +107,6 @@ def _run_when_lobby_ready(func, attempt=0, max_attempts=60):
         _log().exception('lobby readiness check failed')
 
     if attempt < max_attempts:
-        # First registration attempt is delayed enough to avoid LoginSpace.
         BigWorld.callback(1.0, lambda: _run_when_lobby_ready(func, attempt + 1, max_attempts))
     else:
         _log().warning('Skipped delayed UI registration: lobby not ready')
@@ -163,6 +162,14 @@ def open_weather_window(*args, **kwargs):
 
     def _load():
         try:
+            try:
+                from weather_window import show_existing_window
+                if show_existing_window():
+                    _log().info('open_weather_window: reused hidden/existing weatherPanel')
+                    return
+            except Exception:
+                _log().exception('open_weather_window: reuse existing panel failed')
+
             from gui.Scaleform.framework.managers.loaders import SFViewLoadParams
             app = _get_lobby_app()
             if app is None:
@@ -316,8 +323,6 @@ def _register_mods_settings_status_now():
 
 
 def _register_ui_when_lobby_ready():
-    # Start waiting after a grace period. This avoids creating ModsList popovers
-    # while the game is still in LoginSpace.
     try:
         BigWorld.callback(8.0, lambda: _run_when_lobby_ready(_register_mods_list_entry_now))
         BigWorld.callback(9.0, lambda: _run_when_lobby_ready(_register_mods_settings_status_now))
