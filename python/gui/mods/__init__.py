@@ -3,7 +3,8 @@
 Entry point for Weather mod.
 
 Important UI rule:
-- Do NOT touch ModsListAPI / ModsSettingsAPI on the login screen.
+- Do NOT touch ModsListAPI on the login screen.
+- Do NOT register this mod in ModsSettingsAPI for now.
 - Register UI only after the lobby app is really available, otherwise other
   mods' popovers/settings may fail to initialize.
 """
@@ -25,7 +26,6 @@ WEATHER_PANEL_SWF = 'WeatherPanel.swf'
 _VIEW_REGISTERED = False
 _INIT_DONE = False
 _MODSLIST_REGISTERED = False
-_MODSSETTINGS_REGISTERED = False
 _KEY_HOOK_INSTALLED = False
 _BATTLE_HOOK_INSTALLED = False
 
@@ -271,64 +271,11 @@ def _register_mods_list_entry_now():
     _log().warning('modsListApi entry registration failed; available add* methods=%s', methods)
 
 
-def _register_mods_settings_status_now():
-    global _MODSSETTINGS_REGISTERED
-    if _MODSSETTINGS_REGISTERED:
-        return
-    try:
-        from gui.modsSettingsApi import g_modsSettingsApi
-        from gui.modsSettingsApi import templates as t
-    except Exception as e:
-        _log().info('modsSettingsApi not available for status card: %s', e)
-        return
-
-    def _status_callback(linkage, newSettings):
-        try:
-            if g_controller is not None and 'enabled' in newSettings and hasattr(g_controller, 'setEnabled'):
-                g_controller.setEnabled(bool(newSettings.get('enabled')))
-        except Exception:
-            _log().exception('modsSettingsApi status callback failed')
-
-    try:
-        enabled = True
-        try:
-            enabled = bool(g_controller.isEnabled()) if g_controller is not None and hasattr(g_controller, 'isEnabled') else True
-        except Exception:
-            enabled = True
-        status_text = u'Статус: увімкнено' if enabled else u'Статус: вимкнено'
-        template = {
-            'modDisplayName': u'Погода на картах',
-            'enabled': enabled,
-            'column1': [
-                t.createLabel(text=status_text),
-                t.createEmpty(),
-                t.createLabel(text=u'Налаштування відкриваються через:'),
-                t.createLabel(text=u'Список модифікацій → Погода на картах'),
-            ],
-            'column2': [
-                t.createLabel(text=u'Ця сторінка лише показує статус мода.'),
-                t.createEmpty(),
-                t.createLabel(text=u'Слайдери та карти перенесені у власне вікно.'),
-            ],
-        }
-        g_modsSettingsApi.setModTemplate(
-            linkage='com.example.weather.status',
-            template=template,
-            callback=_status_callback,
-        )
-        _MODSSETTINGS_REGISTERED = True
-        _log().info('modsSettingsApi minimal status card registered OK')
-    except Exception:
-        _log().exception('modsSettingsApi minimal status registration failed')
-
-
 def _register_ui_when_lobby_ready():
     try:
         BigWorld.callback(8.0, lambda: _run_when_lobby_ready(_register_mods_list_entry_now))
-        BigWorld.callback(9.0, lambda: _run_when_lobby_ready(_register_mods_settings_status_now))
     except Exception:
         _run_when_lobby_ready(_register_mods_list_entry_now)
-        _run_when_lobby_ready(_register_mods_settings_status_now)
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +417,7 @@ def init(*args, **kwargs):
     _register_weather_view()
     _register_ui_when_lobby_ready()
     _INIT_DONE = True
-    _log().info('weather init done; UI registration is delayed until lobby is ready')
+    _log().info('weather init done; ModsSettingsAPI registration is disabled; ModsListAPI is delayed until lobby is ready')
 
 
 def fini(*args, **kwargs):
