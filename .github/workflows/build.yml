@@ -127,11 +127,8 @@ jobs:
         # Збираємо всі .swc бібліотеки
         $libArgs = @()
         Get-ChildItem -Path "as3/libs" -Filter "*.swc" -Recurse | ForEach-Object {
-            if ($_.Name -eq "playerglobal.swc") {
-                $libArgs += "-library-path+=$($_.FullName)"
-            } else {
-                $libArgs += "-external-library-path+=$($_.FullName)"
-            }
+            # playerglobal завжди external — він вже є у Flash Player runtime
+            $libArgs += "-external-library-path+=$($_.FullName)"
         }
 
         # Читаємо .as3proj щоб дістати точку входу і назву SWF
@@ -198,22 +195,14 @@ jobs:
                 "-optimize=true"
             )
 
-            # Конвертуємо абсолютний шлях файлу в ім'я класу (package.ClassName)
-            # mxmlc з абсолютним шляхом ігнорує source-path і компілює порожній SWF
-            # Правильно: передавати weather.WeatherMediator а не D:\...\weather\WeatherMediator.as
-            $srcRoot = ($mxmlcArgs | Where-Object { $_ -like "-source-path*" } | Select-Object -First 1) -replace "-source-path\+=",""
-            $relPath = $mainClassPath.Substring($srcRoot.Length).TrimStart("/\\")
-            if ($relPath.EndsWith(".as")) { $relPath = $relPath.Substring(0, $relPath.Length - 3) }
-            $className = $relPath -replace "[/\\]","."
-            Write-Host "Class name: $className"
-            $argsStr = ($mxmlcArgs -join " ") + " $className"
-            $cmdLine = "`"$mxmlcPath`" $argsStr"
-            Write-Host "Running: $cmdLine"
-            $process = Start-Process -FilePath "cmd.exe" `
-                -ArgumentList "/c `"$cmdLine`" > out.txt 2>&1" `
-                -NoNewWindow -Wait -PassThru
-            Get-Content "out.txt" -ErrorAction SilentlyContinue | Write-Host
-            Remove-Item "out.txt" -Force -ErrorAction SilentlyContinue
+            $mxmlcArgs += @("--")
+            $mxmlcArgs += $mainClassPath
+            Write-Host "Running: mxmlc $($mxmlcArgs -join ' ')"
+            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs `
+                -NoNewWindow -Wait -PassThru `
+                -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
+            Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
+            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
 
             if ($process.ExitCode -ne 0) {
                 Write-Error "Compilation failed with exit code $($process.ExitCode)"
