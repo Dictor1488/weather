@@ -444,7 +444,7 @@ def _subscribe_player_events():
 
 
 def _unsubscribe_player_events():
-    """Unsubscribe from g_playerEvents on fini."""
+    """Unsubscribe from g_playerEvents on finalized."""
     global _EVENTS_SUBSCRIBED
     if not _EVENTS_SUBSCRIBED:
         return
@@ -462,7 +462,7 @@ def _unsubscribe_player_events():
 # Entry points expected by mod loaders
 # ---------------------------------------------------------------------------
 
-def init(*args, **kwargs):
+def initialized(*args, **kwargs):
     global _INIT_DONE
     if _INIT_DONE:
         return
@@ -470,10 +470,10 @@ def init(*args, **kwargs):
     _register_weather_view()
     _register_ui_when_lobby_ready()
     _INIT_DONE = True
-    _log().info('weather init done; UI registration is delayed until lobby is ready')
+    _log().info('weather initialized; UI registration is delayed until lobby is ready')
 
 
-def fini(*args, **kwargs):
+def finalized(*args, **kwargs):
     global _INIT_DONE
     _unsubscribe_player_events()
     _INIT_DONE = False
@@ -481,19 +481,19 @@ def fini(*args, **kwargs):
 
 def onAccountBecomePlayer(*args, **kwargs):
     if not _INIT_DONE:
-        init()
+        initialized()
     return None
 
 
 def onBecomePlayer(*args, **kwargs):
     if not _INIT_DONE:
-        init()
+        initialized()
     return None
 
 
 def startGUI(*args, **kwargs):
     if not _INIT_DONE:
-        init()
+        initialized()
     return None
 
 
