@@ -1,20 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-Weather controller v8.0
+Weather controller v8.1 multi-environment preload
 
 Механізм (перевірено через дебаг протанків):
   1. Preset wotmod-и (environments_midnight_*.wotmod і т.д.) мають бути в mods/VERSION/
      Вони містять: res/spaces/КАРТА/environments/GUID/environment.xml + текстури
-  2. При виборі пресету — генеруємо бінарний WoT XML файл:
+  2. При виборі пресету — генеруємо environments.xml:
        res_mods/VERSION/spaces/КАРТА/environments/environments.xml
-     з guid обраного пресету. Це говорить WoT який environment активний.
+     з ОДНИМ activeEnvironment, але з УСІМА доступними <environment>.
+     Ідея: BigWorld space loader має зареєструвати всі skybox-и при старті бою,
+     після чого Space.setEnvironment(name) зможе перемикати їх live.
   3. Додатково пишемо space.settings з <environment> та <environmentOverride>
-     (береться з environments_spaces_wg wotmod як шаблон)
-  4. BigWorld.restartGame() — перезапуск щоб WoT перечитав файли
+     (береться з environments_spaces_wg wotmod як шаблон).
+  4. Авто-рестарт клієнта вимкнено: якщо live-switch не застосувався, пресет
+     лишається записаним для наступного завантаження карти.
 
-Формат бінарного environments.xml (124 байти, guid завжди 35 символів):
-  HEADER (54 байти) + GUID (35 байти) + GUID (35 байти)
-  де HEADER містить: magic, назви полів activeEnvironment/environment, offsets
+Примітка:
+  Оригінальний WoT environments.xml у pkg є binary DataSection. Для res_mods
+  тут пишемо plain BigWorld XML (<environments.xml>...), бо ResMgr зазвичай
+  читає як binary processed XML, так і plain XML. Якщо клієнт не прийме plain
+  environments.xml — треба буде окремо збирати binary DataSection з кількома
+  повторюваними <environment>.
 """
 
 import binascii
@@ -62,6 +68,9 @@ PRESET_GUIDS = {
     'sunset':   '6DEE1EBB.44F63FCC.AACF6185.7FBBC34E',
     'midday':   'BF040BCB.4BE1D04F.7D484589.135E881B',
 }
+
+# Тільки кастомні пресети, які мають власні environment-папки у weather_packs.
+CUSTOM_PRESET_IDS = ['midnight', 'overcast', 'sunset', 'midday']
 
 # Live API BigWorld Space.setEnvironment(name) приймає не GUID, а <name>
 # з самого environment.xml. Це перевірено по логах: getEnvironment() повертає
@@ -126,34 +135,77 @@ def _read_default_guid(space_name):
 
 
 # ---------------------------------------------------------------------------
-# Бінарний WoT XML для environments.xml
-# Заголовок незмінний (guid завжди 35 символів у форматі XXXXXXXX.XXXXXXXX.XXXXXXXX.XXXXXXXX)
+# environments.xml generator
 # ---------------------------------------------------------------------------
 
-_ENVIRONMENTS_XML_HEADER = binascii.unhexlify(
-    '454ea162'                          # magic: EN\xa1b
-    '00'                                # null
-    '616374697665456e7669726f6e6d656e74'  # 'activeEnvironment'
-    '00'                                # null
-    '656e7669726f6e6d656e74'            # 'environment'
-    '00'                                # null
-    '0002000000'                        # element count = 2
-    '00100000'                          # descriptor 1
-    '23000010'                          # descriptor 2
-    '01004600'                          # descriptor 3 (0x46 = 70 = 35*2, total data size)
-    '0010'                              # descriptor end
-)
+def _xml_escape(value):
+    """Мінімальний XML escape для GUID/name рядків."""
+    if value is None:
+        return ''
+    value = str(value)
+    return (value.replace('&', '&amp;')
+                 .replace('<', '&lt;')
+                 .replace('>', '&gt;')
+                 .replace('"', '&quot;')
+                 .replace("'", '&apos;'))
+
+
+def _normalize_guid_list(guids):
+    """Прибирає дублікати, None і невалідні GUID-и, зберігаючи порядок."""
+    result = []
+    seen = set()
+    for guid in guids or []:
+        if not guid:
+            continue
+        guid = str(guid).strip()
+        if len(guid) != 35:
+            LOG.warning('_normalize_guid_list: skip invalid guid %r', guid)
+            continue
+        if guid in seen:
+            continue
+        seen.add(guid)
+        result.append(guid)
+    return result
+
+
+def make_environments_xml_multi(active_guid, guid_list):
+    """
+    Генерує plain BigWorld XML для:
+      spaces/<map>/environments/environments.xml
+
+    Важлива зміна v8.1:
+      activeEnvironment = один активний GUID;
+      environment       = список УСІХ доступних GUID-ів для pre-load.
+
+    Очікуваний сенс для BigWorld:
+      при завантаженні space зареєструвати всі environment-и, щоб пізніше
+      space.setEnvironment('02_Sunset') / 'Night_01' міг перемикати live.
+    """
+    if not active_guid or len(active_guid) != 35:
+        raise AssertionError('active_guid має бути 35 символів, отримано: %r' % active_guid)
+
+    guids = _normalize_guid_list(guid_list)
+    if active_guid not in guids:
+        guids.insert(0, active_guid)
+
+    nl = '\r\n'
+    lines = [
+        '<environments.xml>',
+        '  <activeEnvironment>	%s	</activeEnvironment>' % _xml_escape(active_guid),
+    ]
+    for guid in guids:
+        lines.append('  <environment>	%s	</environment>' % _xml_escape(guid))
+    lines.append('</environments.xml>')
+    lines.append('')
+    return nl.join(lines).encode('utf-8')
 
 
 def make_environments_xml(guid_dot):
     """
-    Генерує бінарний WoT XML файл environments.xml для заданого guid.
-    guid_dot — рядок формату XXXXXXXX.XXXXXXXX.XXXXXXXX.XXXXXXXX (35 символів)
+    Зворотна сумісність зі старим API: робить environments.xml з одним GUID.
+    Новий код нижче використовує make_environments_xml_multi().
     """
-    assert len(guid_dot) == 35, \
-        'GUID має бути 35 символів: XXXXXXXX.XXXXXXXX.XXXXXXXX.XXXXXXXX, отримано: %r' % guid_dot
-    b = guid_dot.encode('ascii')
-    return _ENVIRONMENTS_XML_HEADER + b + b
+    return make_environments_xml_multi(guid_dot, [guid_dot])
 
 
 # ---------------------------------------------------------------------------
@@ -286,13 +338,16 @@ def get_available_presets():
 
 def write_environments_xml(space_name, preset_id):
     """
-    Записує бінарний environments.xml в:
+    Записує environments.xml в:
       res_mods/VERSION/spaces/SPACE_NAME/environments/environments.xml
 
-    Це основний механізм — WoT читає цей файл при завантаженні карти
-    і визначає який environment активний.
+    v8.1:
+      файл містить не один <environment>, а весь список доступних GUID-ів.
+      Це тест pre-load під live switching через Space.setEnvironment(name).
 
-    preset_id='standard' → видаляє файл (WoT використає дефолтний)
+    preset_id='standard':
+      activeEnvironment = стандартний GUID карти, якщо ResMgr зміг його прочитати;
+      environment list  = standard + усі кастомні GUID-и.
     """
     resmods_dir = _get_resmods_dir()
     if not resmods_dir:
@@ -302,29 +357,43 @@ def write_environments_xml(space_name, preset_id):
     target = os.path.normpath(
         os.path.join(resmods_dir, 'spaces', space_name, 'environments', 'environments.xml'))
 
-    # standard = видаляємо файл щоб WoT використав дефолтний
-    if not preset_id or preset_id == 'standard':
-        if os.path.isfile(target):
-            try:
-                os.remove(target)
-                LOG.info('write_environments_xml: removed %s', target)
-            except Exception as e:
-                LOG.warning('write_environments_xml: remove failed: %s', e)
-        return True
-
-    guid = PRESET_GUIDS.get(preset_id)
-    if not guid:
-        LOG.warning('write_environments_xml: no guid for preset %s', preset_id)
-        return False
-
     try:
+        if not preset_id:
+            preset_id = 'standard'
+
+        if preset_id == 'standard':
+            active_guid = _read_default_guid(space_name)
+            if not active_guid:
+                # Якщо дефолтний GUID не прочитався, краще прибрати override,
+                # ніж писати невалідний файл.
+                if os.path.isfile(target):
+                    try:
+                        os.remove(target)
+                        LOG.info('write_environments_xml: removed %s because default guid is unknown', target)
+                    except Exception as e:
+                        LOG.warning('write_environments_xml: remove failed: %s', e)
+                return True
+        else:
+            active_guid = PRESET_GUIDS.get(preset_id)
+
+        if not active_guid:
+            LOG.warning('write_environments_xml: no active guid for preset %s', preset_id)
+            return False
+
+        all_guids = _get_environment_guids_for_space(space_name, preset_id)
+        if active_guid not in all_guids:
+            all_guids.insert(0, active_guid)
+
         folder = os.path.dirname(target)
         if not os.path.isdir(folder):
             os.makedirs(folder)
-        data = make_environments_xml(guid)
+
+        data = make_environments_xml_multi(active_guid, all_guids)
         with open(target, 'wb') as f:
             f.write(data)
-        LOG.info('write_environments_xml: %s -> %s (%s)', preset_id, target, guid)
+
+        LOG.info('write_environments_xml: %s -> %s active=%s environments=%s',
+                 preset_id, target, active_guid, all_guids)
         return True
     except Exception:
         LOG.error('write_environments_xml failed\n%s', traceback.format_exc())
@@ -333,37 +402,22 @@ def write_environments_xml(space_name, preset_id):
 
 def write_environments_xml_all_maps(preset_id):
     """
-    Записує environments.xml для ВСІХ карт які є в preset wotmod.
-    Викликати при старті гри / зміні пресету.
+    Записує multi-environment environments.xml для карт.
+
+    Для standard теж пишемо файл, але activeEnvironment ставимо на дефолтний
+    GUID карти. Це потрібно, щоб навіть зі standard як активним пресетом карта
+    могла pre-load-нути кастомні skybox-и для live перемикання.
     """
-    if not preset_id or preset_id == 'standard':
-        # Видаляємо всю папку spaces/ з res_mods (скидаємо до стандарту)
-        resmods_dir = _get_resmods_dir()
-        if resmods_dir:
-            spaces_dir = os.path.join(resmods_dir, 'spaces')
-            if os.path.isdir(spaces_dir):
-                import shutil
-                try:
-                    shutil.rmtree(spaces_dir)
-                    LOG.info('write_all: removed res_mods/spaces/')
-                except Exception as e:
-                    LOG.warning('write_all: rmtree failed: %s', e)
-        return True
+    if not preset_id:
+        preset_id = 'standard'
 
-    preset_wotmod = _find_preset_wotmod(preset_id)
-    if not preset_wotmod:
-        LOG.warning('write_all: no wotmod for preset %s', preset_id)
-        return False
+    if preset_id == 'standard':
+        spaces = _get_all_preset_spaces()
+    else:
+        spaces = _get_spaces_for_preset(preset_id)
 
-    guid = PRESET_GUIDS.get(preset_id)
-    if not guid:
-        LOG.warning('write_all: no guid for preset %s', preset_id)
-        return False
-
-    # Отримуємо список карт з wotmod
-    spaces = _get_spaces_from_wotmod(preset_wotmod)
     if not spaces:
-        LOG.warning('write_all: no spaces in wotmod %s', preset_wotmod)
+        LOG.warning('write_all: no spaces found for preset %s', preset_id)
         return False
 
     count = 0
@@ -371,7 +425,8 @@ def write_environments_xml_all_maps(preset_id):
         if write_environments_xml(space_name, preset_id):
             count += 1
 
-    LOG.info('write_all: preset=%s written %d/%d maps', preset_id, count, len(spaces))
+    LOG.info('write_all: preset=%s written multi-env %d/%d maps',
+             preset_id, count, len(spaces))
     return count > 0
 
 
@@ -388,6 +443,62 @@ def _get_spaces_from_wotmod(wotmod_path):
     except Exception:
         LOG.error('_get_spaces_from_wotmod failed\n%s', traceback.format_exc())
     return list(spaces)
+
+
+_preset_spaces_cache = {}
+
+
+def _get_spaces_for_preset(preset_id):
+    """Кешований список карт, які є у конкретному weather preset wotmod."""
+    if preset_id in _preset_spaces_cache:
+        return list(_preset_spaces_cache[preset_id])
+    if preset_id not in PRESET_WOTMOD_RE:
+        _preset_spaces_cache[preset_id] = []
+        return []
+    wotmod = _find_preset_wotmod(preset_id)
+    spaces = _get_spaces_from_wotmod(wotmod) if wotmod else []
+    _preset_spaces_cache[preset_id] = list(spaces)
+    return list(spaces)
+
+
+def _get_all_preset_spaces():
+    """Усі карти, які є хоча б в одному з кастомних weather packs."""
+    spaces = set()
+    for preset_id in CUSTOM_PRESET_IDS:
+        spaces.update(_get_spaces_for_preset(preset_id))
+    return list(spaces)
+
+
+def _preset_has_space(preset_id, space_name):
+    return bool(space_name and space_name in _get_spaces_for_preset(preset_id))
+
+
+def _get_environment_guids_for_space(space_name, active_preset_id=None):
+    """
+    Формує список GUID-ів, які треба записати як <environment> для pre-load.
+    Порядок:
+      1. стандартний GUID карти, якщо ResMgr зміг його прочитати;
+      2. усі кастомні GUID-и, для яких є resources у weather_packs;
+      3. active GUID, якщо його з якихось причин ще нема у списку.
+    """
+    guids = []
+
+    default_guid = _read_default_guid(space_name) if space_name else None
+    if default_guid:
+        guids.append(default_guid)
+
+    for preset_id in CUSTOM_PRESET_IDS:
+        if _preset_has_space(preset_id, space_name):
+            guid = PRESET_GUIDS.get(preset_id)
+            if guid:
+                guids.append(guid)
+
+    if active_preset_id and active_preset_id != 'standard':
+        active_guid = PRESET_GUIDS.get(active_preset_id)
+        if active_guid:
+            guids.append(active_guid)
+
+    return _normalize_guid_list(guids)
 
 
 # ---------------------------------------------------------------------------
@@ -690,13 +801,8 @@ def _write_environments_json(space_name, active_preset_id):
 def get_presets_for_space(space_name):
     """Повертає список пресетів які мають environment для цієї карти."""
     available = ['standard']  # standard завжди доступний
-    for preset_id, pattern in PRESET_WOTMOD_RE.items():
-        mods_dir = _get_mods_dir()
-        wotmod = _find_wotmod(pattern, mods_dir) if mods_dir else None
-        if not wotmod:
-            continue
-        spaces = _get_spaces_from_wotmod(wotmod)
-        if space_name in spaces:
+    for preset_id in CUSTOM_PRESET_IDS:
+        if _preset_has_space(preset_id, space_name):
             available.append(preset_id)
     return available
 
@@ -716,18 +822,21 @@ def apply_preset(space_name, preset_id):
 
 
 def apply_preset_all_maps(preset_id):
-    """Записує environments.xml для всіх карт пресету. Для ініціалізації."""
+    """Записує multi-environment environments.xml для карт пресету. Для ініціалізації."""
     LOG.info('apply_preset_all_maps: preset=%s', preset_id)
     ok = write_environments_xml_all_maps(preset_id)
 
-    # Також пишемо space.settings для всіх карт
-    preset_wotmod = _find_preset_wotmod(preset_id) if preset_id and preset_id != 'standard' else None
-    spaces = _get_spaces_from_wotmod(preset_wotmod) if preset_wotmod else []
+    # Також пишемо/чистимо space.settings для відповідних карт.
+    # Для standard беремо всі карти з weather packs, щоб прибрати старі overrides.
+    if preset_id and preset_id != 'standard':
+        spaces = _get_spaces_for_preset(preset_id)
+    else:
+        spaces = _get_all_preset_spaces()
+
     for space_name in spaces:
         write_space_settings(space_name, preset_id)
 
-    # environments.json — пишемо один раз (не залежить від карти)
-    # використовуємо першу доступну карту для отримання дефолтного guid
+    # environments.json — залишаємо як додаткову сумісність з існуючим switcher-ом.
     sample_space = spaces[0] if spaces else None
     _write_environments_json(sample_space, preset_id)
 
@@ -784,8 +893,10 @@ def cycle_preset():
     if live_ok:
         msg = u'[Weather] %s' % label
     else:
-        _do_restart()
-        msg = u'[Weather] %s — перезапуск...' % label
+        # Авто-рестарт не робимо. Якщо multi-environment preload ще не був
+        # прочитаний поточним боєм, пресет застосовується при наступному
+        # завантаженні карти.
+        msg = u'[Weather] %s — буде застосовано з наступного бою' % label
 
     try:
         from gui import SystemMessages
@@ -795,13 +906,10 @@ def cycle_preset():
 
 
 def set_preset(preset_id):
-    """Встановлює пресет: спочатку live switch, якщо не вийшло — restart fallback."""
+    """Встановлює пресет: пробує live switch, але НЕ рестартить клієнт автоматично."""
     if preset_id not in PRESET_ORDER:
         return False
-    live_ok = set_preset_live(preset_id)
-    if not live_ok:
-        _do_restart()
-    return True
+    return set_preset_live(preset_id)
 
 
 
@@ -982,37 +1090,48 @@ def _try_live_switch(preset_id):
                 except Exception:
                     pass
 
-                try:
-                    space.environment = guid_dot
-                except Exception:
-                    pass
-
                 LOG.info('_try_live_switch: setEnvironment(%r) OK, getEnvironment: %r -> %r',
                          env_name, before, after)
 
-                # Для реальної назви перевіряємо, що движок справді переключив активний env.
-                # Для GUID fallback не блокуємо, бо старі клієнти можуть не мати getEnvironment().
-                if env_name == env_real_name:
-                    if after == env_real_name or after is None:
-                        return True
-                    LOG.info('_try_live_switch: real name was not accepted visually, continue fallbacks')
-                else:
+                # ВАЖЛИВО: setEnvironment() може повернути OK, але нічого не змінити.
+                # На WoT 2.2.1 це видно по логах: getEnvironment() лишається u'03_midday'
+                # для 02_Sunset / 01_Overcast / Night_01 і навіть для GUID.
+                # Тому успіхом вважаємо тільки реальну зміну getEnvironment().
+                # Якщо getEnvironment недоступний (after is None) — залишаємо старий optimistic fallback.
+                if after is None or after == env_real_name or after == env_name:
+                    try:
+                        space.environment = guid_dot
+                    except Exception:
+                        pass
                     return True
+
+                LOG.info('_try_live_switch: %r was accepted by API but not applied visually; continue fallbacks', env_name)
         except Exception as e:
             LOG.info('_try_live_switch: setEnvironment(%r) ERR: %s', env_name, e)
 
     # Останній fallback — property callback з GeneralSpaceData.
+    # Його теж перевіряємо через getEnvironment(), бо простий запис space.environment
+    # у логах не означав візуального перемикання.
+    try:
+        before = space.getEnvironment() if hasattr(space, 'getEnvironment') else None
+    except Exception:
+        before = None
     try:
         space.environment = guid_dot
         if hasattr(space, 'set_environment'):
             space.set_environment(None)
-            LOG.info('_try_live_switch: set_environment(None) fallback OK')
-            return True
+            try:
+                after = space.getEnvironment() if hasattr(space, 'getEnvironment') else None
+            except Exception:
+                after = None
+            LOG.info('_try_live_switch: set_environment(None) fallback OK, getEnvironment: %r -> %r', before, after)
+            if after is None or after == env_real_name:
+                return True
     except Exception as e:
         LOG.info('_try_live_switch: set_environment fallback ERR: %s', e)
 
+    LOG.info('_try_live_switch: live switch not applied by engine; restart fallback required')
     return False
-
 
 def set_preset_live(preset_id):
     """Встановлює пресет і пробує застосувати його в поточному бою без restartGame()."""
