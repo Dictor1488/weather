@@ -16,8 +16,9 @@ package weather.views
         public static const TAB_GLOBAL:String = "global";
         public static const TAB_MAPS:String   = "maps";
 
-        private static const PANEL_W:int = 430;
-        private static const PANEL_PAD:int = 18;
+        private static const PANEL_W:int = 520;
+        private static const PANEL_H:int = 650;
+        private static const PAD:int = 18;
 
         private var _globalPresets:Vector.<PresetVO>;
         private var _maps:Vector.<MapVO>;
@@ -54,81 +55,76 @@ package weather.views
             showTab(TAB_GLOBAL);
         }
 
-        private function sw():int
-        {
-            return stage ? stage.stageWidth : 1280;
-        }
-
-        private function sh():int
-        {
-            return stage ? stage.stageHeight : 720;
-        }
+        private function sw():int { return stage ? stage.stageWidth : 1280; }
+        private function sh():int { return stage ? stage.stageHeight : 720; }
 
         private function buildChrome():void
         {
             _overlay = new Sprite();
-            _overlay.graphics.beginFill(0x000000, 0.22);
+            _overlay.graphics.beginFill(0x000000, 0.26);
             _overlay.graphics.drawRect(0, 0, 4096, 2304);
             _overlay.graphics.endFill();
             addChild(_overlay);
 
             _panel = new Sprite();
-            _panel.x = Math.max(20, sw() - PANEL_W - 34);
-            _panel.y = 42;
+            _panel.x = Math.max(20, int((sw() - PANEL_W) * 0.5));
+            _panel.y = Math.max(20, int((sh() - PANEL_H) * 0.5));
             addChild(_panel);
 
             drawPanel();
 
-            var title:TextField = makeText("Погода", 24, 0xF5E6C8, true);
-            title.x = PANEL_PAD;
-            title.y = 14;
+            var title:TextField = makeText("Погода", 27, 0xF3E4C8, true);
+            title.x = 22;
+            title.y = 18;
             _panel.addChild(title);
 
-            var sub:TextField = makeText("Налаштування погодних пресетів", 11, 0x8C8C8C, false);
-            sub.x = PANEL_PAD + 2;
-            sub.y = 44;
+            var sub:TextField = makeText("Налаштування погодних пресетів", 12, 0x8E9295, false);
+            sub.x = 23;
+            sub.y = 52;
             _panel.addChild(sub);
 
             _closeBtn = makeCloseButton();
-            _closeBtn.x = PANEL_W - 96;
-            _closeBtn.y = 16;
+            _closeBtn.x = PANEL_W - 116;
+            _closeBtn.y = 18;
             _panel.addChild(_closeBtn);
 
-            _tabGlobal = new TabButton("ЗАГАЛЬНІ", 178);
-            _tabGlobal.x = PANEL_PAD;
-            _tabGlobal.y = 74;
-            _tabGlobal.addEventListener(MouseEvent.CLICK, function(e:MouseEvent):void { showTab(TAB_GLOBAL); });
+            _tabGlobal = new TabButton("ЗАГАЛЬНІ", 214);
+            _tabGlobal.x = 20;
+            _tabGlobal.y = 84;
+            _tabGlobal.addEventListener(MouseEvent.CLICK, onGlobalTabClick);
             _panel.addChild(_tabGlobal);
 
-            _tabMaps = new TabButton("КАРТИ", 178);
-            _tabMaps.x = PANEL_PAD + 184;
-            _tabMaps.y = 74;
-            _tabMaps.addEventListener(MouseEvent.CLICK, function(e:MouseEvent):void { showTab(TAB_MAPS); });
+            _tabMaps = new TabButton("КАРТИ", 214);
+            _tabMaps.x = 238;
+            _tabMaps.y = 84;
+            _tabMaps.addEventListener(MouseEvent.CLICK, onMapsTabClick);
             _panel.addChild(_tabMaps);
 
             _contentHolder = new Sprite();
-            _contentHolder.x = PANEL_PAD;
-            _contentHolder.y = 124;
+            _contentHolder.x = 20;
+            _contentHolder.y = 128;
             _panel.addChild(_contentHolder);
         }
 
+        private function onGlobalTabClick(e:MouseEvent):void { showTab(TAB_GLOBAL); }
+        private function onMapsTabClick(e:MouseEvent):void { showTab(TAB_MAPS); }
+
         private function drawPanel():void
         {
-            var panelH:int = Math.max(580, sh() - 86);
-
             _panel.graphics.clear();
-            _panel.graphics.lineStyle(1, 0xC6882A, 0.45);
-            _panel.graphics.beginFill(0x07090C, 0.90);
-            _panel.graphics.drawRect(0, 0, PANEL_W, panelH);
+
+            _panel.graphics.lineStyle(1, 0xB77A25, 0.85);
+            _panel.graphics.beginFill(0x070A0D, 0.93);
+            _panel.graphics.drawRect(0, 0, PANEL_W, PANEL_H);
             _panel.graphics.endFill();
 
-            _panel.graphics.lineStyle(1, 0x1B222A, 0.95);
-            _panel.graphics.beginFill(0x10161D, 0.50);
-            _panel.graphics.drawRect(8, 8, PANEL_W - 16, panelH - 16);
+            _panel.graphics.lineStyle(1, 0x1A2025, 0.95);
+            _panel.graphics.beginFill(0x0B1015, 0.62);
+            _panel.graphics.drawRect(8, 8, PANEL_W - 16, PANEL_H - 16);
             _panel.graphics.endFill();
 
-            _panel.graphics.beginFill(0xC6882A, 1);
-            _panel.graphics.drawRect(0, 108, PANEL_W, 2);
+            _panel.graphics.beginFill(0xD49325, 1);
+            _panel.graphics.drawRect(0, 122, PANEL_W, 2);
             _panel.graphics.endFill();
         }
 
@@ -149,20 +145,25 @@ package weather.views
             b.useHandCursor = true;
             b.mouseChildren = false;
 
-            b.graphics.lineStyle(1, 0xB47622, 0.9);
-            b.graphics.beginFill(0x1A1108, 0.72);
-            b.graphics.drawRect(0, 0, 78, 26);
+            b.graphics.lineStyle(1, 0xB77A25, 1);
+            b.graphics.beginFill(0x1A1108, 0.78);
+            b.graphics.drawRect(0, 0, 94, 32);
             b.graphics.endFill();
 
-            var tf:TextField = makeText("ЗАКРИТИ ×", 11, 0xFFBA61, true);
-            tf.x = 9;
-            tf.y = 5;
+            var tf:TextField = makeText("ЗАКРИТИ ×", 12, 0xFFB75A, true);
+            tf.x = 12;
+            tf.y = 8;
             b.addChild(tf);
 
-            b.addEventListener(MouseEvent.CLICK, function(e:MouseEvent):void {
-                dispatchEvent(new WeatherEvent(WeatherEvent.CLOSE_REQUESTED));
-            });
+            b.addEventListener(MouseEvent.CLICK, onCloseClick);
             return b;
+        }
+
+        private function onCloseClick(e:MouseEvent):void
+        {
+            dispatchEvent(new WeatherEvent(WeatherEvent.CLOSE_REQUESTED));
+            // Fallback if Python-side close is not called by DAAPI for any reason.
+            visible = false;
         }
 
         public function showTab(tab:String):void
@@ -179,7 +180,6 @@ package weather.views
                     _globalPresets, _hotkeyStr, _hotkeyKeys, _currentPreset
                 );
                 panel.addEventListener(WeatherEvent.HOTKEY_CHANGED, onHotkeyChanged);
-                panel.addEventListener(WeatherEvent.PRESET_SELECTED, onGlobalPresetSelected);
                 panel.addEventListener(WeatherEvent.PRESET_WEIGHT_CHANGED, onWeightChanged);
                 _contentHolder.addChild(panel);
             }
@@ -203,7 +203,6 @@ package weather.views
 
             var detail:MapDetailPanel = new MapDetailPanel(map, _currentPreset);
             detail.addEventListener(WeatherEvent.BACK_TO_MAPS, onBackToMaps);
-            detail.addEventListener(WeatherEvent.PRESET_SELECTED, onMapPresetSelected);
             detail.addEventListener(WeatherEvent.PRESET_WEIGHT_CHANGED, onWeightChanged);
             _contentHolder.addChild(detail);
         }
@@ -211,17 +210,6 @@ package weather.views
         private function onBackToMaps(e:WeatherEvent):void { showTab(TAB_MAPS); }
         private function onHotkeyChanged(e:WeatherEvent):void { dispatchEvent(e.clone()); }
         private function onWeightChanged(e:WeatherEvent):void { dispatchEvent(e.clone()); }
-
-        private function onGlobalPresetSelected(e:WeatherEvent):void
-        {
-            _currentPreset = e.presetId;
-            dispatchEvent(e.clone());
-        }
-
-        private function onMapPresetSelected(e:WeatherEvent):void
-        {
-            dispatchEvent(e.clone());
-        }
 
         private function onMapSelected(e:WeatherEvent):void
         {
@@ -247,7 +235,7 @@ class TabButton extends Sprite
     private var _w:int;
     private var _sel:Boolean = false;
 
-    public function TabButton(text:String, widthHint:int = 170)
+    public function TabButton(text:String, widthHint:int = 214)
     {
         buttonMode = true;
         useHandCursor = true;
@@ -255,13 +243,13 @@ class TabButton extends Sprite
         _w = widthHint;
 
         _tf = new TextField();
-        _tf.defaultTextFormat = new TextFormat("_sans", 12, 0x8D877C, true);
+        _tf.defaultTextFormat = new TextFormat("_sans", 14, 0x807A70, true);
         _tf.selectable = false;
         _tf.width = _w;
-        _tf.height = 26;
+        _tf.height = 34;
         _tf.text = text;
-        _tf.x = 12;
-        _tf.y = 6;
+        _tf.x = 16;
+        _tf.y = 10;
         addChild(_tf);
 
         redraw(false);
@@ -270,19 +258,19 @@ class TabButton extends Sprite
     private function redraw(sel:Boolean):void
     {
         graphics.clear();
-        graphics.lineStyle(1, sel ? 0xB97A28 : 0x2E2E2E, sel ? 1 : 0.75);
-        graphics.beginFill(sel ? 0x191007 : 0x0D0F12, sel ? 0.96 : 0.72);
-        graphics.drawRect(0, 0, _w, 30);
+        graphics.lineStyle(1, sel ? 0xD49325 : 0x292D31, sel ? 1 : 0.85);
+        graphics.beginFill(sel ? 0x191007 : 0x0C0F13, sel ? 0.95 : 0.70);
+        graphics.drawRect(0, 0, _w, 38);
         graphics.endFill();
 
         if (sel)
         {
-            graphics.beginFill(0xE19A24, 1);
-            graphics.drawRect(0, 28, _w, 2);
+            graphics.beginFill(0xD49325, 1);
+            graphics.drawRect(0, 35, _w, 3);
             graphics.endFill();
         }
 
-        _tf.textColor = sel ? 0xF5D7A0 : 0x8D877C;
+        _tf.textColor = sel ? 0xF5D7A0 : 0x807A70;
     }
 
     public function set selected(v:Boolean):void { _sel = v; redraw(v); }
