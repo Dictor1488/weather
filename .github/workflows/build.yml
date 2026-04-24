@@ -93,6 +93,8 @@ jobs:
         if (Test-Path $flexConfig) {
             $content = Get-Content $flexConfig -Raw
             $content = $content -replace '\{playerglobalHome\}', 'C:/flex-sdk/frameworks/libs/player'
+            $content = $content -replace '<local-fonts-snapshot>[^<]*</local-fonts-snapshot>', ''
+            $content = $content -replace '<local-fonts-snapshot/>', ''
             $content | Set-Content $flexConfig -Encoding UTF8
         }
 
