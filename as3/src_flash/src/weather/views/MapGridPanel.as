@@ -3,8 +3,6 @@ package weather.views
     import flash.display.Shape;
     import flash.display.Sprite;
     import flash.events.MouseEvent;
-    import flash.text.TextField;
-    import flash.text.TextFormat;
 
     import weather.components.MapTile;
     import weather.data.MapVO;
@@ -12,8 +10,8 @@ package weather.views
 
     public class MapGridPanel extends Sprite
     {
-        private static const VIEW_W:int = 884;
-        private static const VIEW_H:int = 552;
+        private static const VIEW_W:int = 890;
+        private static const VIEW_H:int = 570;
         private static const GAP:int = 6;
         private static const COLS:int = 4;
 
@@ -65,6 +63,7 @@ package weather.views
             _scrollbar.graphics.beginFill(0x080808, 0.70);
             _scrollbar.graphics.drawRect(0, 0, 9, VIEW_H);
             _scrollbar.graphics.endFill();
+
             _thumb = new Sprite();
             _thumb.graphics.beginFill(0x686460, 0.95);
             _thumb.graphics.drawRect(2, 2, 5, 74);
@@ -83,11 +82,16 @@ package weather.views
         {
             if (_contentHeight <= VIEW_H) return;
             _holder.y += e.delta * 34;
+            clampScroll();
+            updateThumb();
+        }
+
+        private function clampScroll():void
+        {
             var maxY:int = 0;
             var minY:int = VIEW_H - _contentHeight;
             if (_holder.y > maxY) _holder.y = maxY;
             if (_holder.y < minY) _holder.y = minY;
-            updateThumb();
         }
 
         private function updateThumb():void
