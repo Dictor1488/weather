@@ -162,8 +162,6 @@ package weather.views
         private function onCloseClick(e:MouseEvent):void
         {
             dispatchEvent(new WeatherEvent(WeatherEvent.CLOSE_REQUESTED));
-            // Fallback if Python-side close is not called by DAAPI for any reason.
-            visible = false;
         }
 
         public function showTab(tab:String):void
