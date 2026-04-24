@@ -150,7 +150,7 @@ jobs:
                 "-output=$outputSwf",
                 "-target-player=${{ env.FLASH_PLAYER_VERSION }}",
                 "-swf-version=${{ env.SWF_VERSION }}",
-                "-strict=true", "-optimize=true", "--"
+                "-strict=true", "-optimize=false", "--"
             )
             $mxmlcArgs += $mainClassPath
             Write-Host "source-path: $srcDir"
@@ -162,6 +162,8 @@ jobs:
             Write-Host "SUCCESS: $swfName ($([math]::Round($sz/1KB,2)) KB)" -ForegroundColor Green
             Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
         }
+        $builtSwfs = Get-ChildItem -Path $outputPath -Filter "*.swf" -ErrorAction SilentlyContinue
+        if (-not $builtSwfs -or $builtSwfs.Count -eq 0) { Write-Error "No SWF files were built"; exit 1 }
 
     - name: Create build.json
       shell: pwsh
