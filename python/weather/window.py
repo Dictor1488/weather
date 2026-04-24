@@ -50,12 +50,14 @@ PRESET_PREVIEW = {
 
 IMAGE_RE = re.compile(r'\.(png|jpg|jpeg)$', re.I)
 GOOD_IMAGE_HINTS = (
-    'minimap', 'preview', 'loading', 'map', 'maps', 'arena', 'battle_loading',
-    'thumbnail', 'thumb', 'screen', 'screenshot', 'icons',
+    '/gui/', 'gui/', 'minimap', 'preview', 'loading', 'battle_loading',
+    'thumbnail', 'thumb', 'screen', 'screenshot', 'arena_screen', 'map_icons',
 )
 BAD_IMAGE_HINTS = (
     'normal', 'height', 'splat', 'blend', 'mask', 'noise', 'detail', 'terrain',
     'flora', 'water', 'sky', 'shadow', 'lightmap', 'ao', 'color_grading', 'lut',
+    'density', 'alpha', 'specular', 'roughness', 'metallic', 'atlas', 'decal',
+    '/spaces/', 'spaces/', '/maps/', 'lod', 'visibility', 'collision',
 )
 
 
@@ -71,7 +73,8 @@ def _map_icon(map_id):
     path = _runtime_thumb_paths.get(map_id)
     if path and os.path.isfile(path):
         return _file_url(path)
-    return 'img://gui/maps/icons/weather/maps/%s.png' % map_id
+    # Empty string means AS3 keeps the clean fallback tile and does not spam img:// warnings.
+    return ''
 
 
 MAP_REGISTRY = [
@@ -183,23 +186,31 @@ def _score_image_member(name, map_id):
     low = name.lower().replace('\\', '/')
     if not IMAGE_RE.search(low):
         return -9999
+    if '.dds.' in low or low.endswith('.dds'):
+        return -9999
+
     score = 0
     if map_id.lower() in low:
-        score += 50
+        score += 15
+    good_hit = False
     for hint in GOOD_IMAGE_HINTS:
         if hint in low:
-            score += 10
+            good_hit = True
+            score += 25
     for hint in BAD_IMAGE_HINTS:
         if hint in low:
-            score -= 30
-    if '/gui/' in low:
-        score += 30
-    if '/spaces/' in low:
-        score += 5
+            score -= 80
+
+    # Do not pull random space textures: they look like broken masks in UI.
+    if not good_hit:
+        return -9999
+    if ('/spaces/' in low or 'spaces/' in low) and not any(h in low for h in ('minimap', 'preview', 'loading', 'screen', 'screenshot')):
+        return -9999
+
     if low.endswith('.png'):
+        score += 10
+    if low.endswith('.jpg') or low.endswith('.jpeg'):
         score += 5
-    if 'hd' in low:
-        score -= 3
     return score
 
 
@@ -222,11 +233,13 @@ def _find_map_pkg(packages_dir, map_id):
 
 def _extract_one_runtime_thumb(packages_dir, out_dir, map_id):
     out_path = os.path.join(out_dir, map_id + '.png')
-    if os.path.isfile(out_path):
-        _runtime_thumb_paths[map_id] = out_path
-        return True
     pkg = _find_map_pkg(packages_dir, map_id)
     if not pkg:
+        if os.path.isfile(out_path):
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
         return False
     try:
         zf = zipfile.ZipFile(pkg, 'r')
@@ -241,6 +254,11 @@ def _extract_one_runtime_thumb(packages_dir, out_dir, map_id):
                 best_score = s
                 best = name
         if not best or best_score < 0:
+            if os.path.isfile(out_path):
+                try:
+                    os.remove(out_path)
+                except Exception:
+                    pass
             return False
         data = zf.read(best)
         if not data:
