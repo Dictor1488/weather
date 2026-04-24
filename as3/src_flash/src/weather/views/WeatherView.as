@@ -45,7 +45,7 @@ package weather.views
         {
             removeEventListener(Event.ADDED_TO_STAGE, onAdded);
             buildChrome();
-            showTab(TAB_GLOBAL);
+            showTab(TAB_MAPS);
         }
 
         private function sw():int { return stage ? stage.stageWidth : 1280; }
