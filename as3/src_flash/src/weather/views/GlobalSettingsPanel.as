@@ -32,7 +32,7 @@ package weather.views
 
         private function build(presets:Vector.<PresetVO>):void
         {
-            var hdr:TextField = makeText("Загальні налаштування", 18, 0xF2F2F2, true);
+            var hdr:TextField = makeText("Загальні налаштування для всіх карт", 18, 0xF2F2F2, true);
             hdr.x = 2;
             hdr.y = 0;
             addChild(hdr);
@@ -48,7 +48,7 @@ package weather.views
                 y += PresetRow.ROW_HEIGHT + 10;
             }
 
-            var hk:TextField = makeText("Гаряча клавіша в бою", 14, 0xDADADA, false);
+            var hk:TextField = makeText("Зміна погоди в бою", 14, 0xDADADA, false);
             hk.x = 2;
             hk.y = y + 10;
             addChild(hk);

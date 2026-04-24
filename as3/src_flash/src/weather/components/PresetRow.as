@@ -34,7 +34,7 @@ package weather.components
         {
             _vo = vo;
             _mapId = mapId;
-            if (_vo.label == "Пасмурно" || _vo.label == "Хмарно")
+            if (_vo.label == "Пасмурно" || _vo.label == "Хмарно" || _vo.label == "Overcast")
                 _vo.label = "Похмуро";
             buildUI();
         }
@@ -175,6 +175,17 @@ package weather.components
             updateSliderPos();
             updateWeightText();
 
+            // Оновлюємо відсотки у всіх сусідніх рядків
+            var parentSprite:Sprite = parent as Sprite;
+            if (parentSprite)
+            {
+                for (var i:int = 0; i < parentSprite.numChildren; i++)
+                {
+                    var sibling:PresetRow = parentSprite.getChildAt(i) as PresetRow;
+                    if (sibling && sibling != this) sibling.refreshWeightText();
+                }
+            }
+
             var ev:WeatherEvent = new WeatherEvent(WeatherEvent.PRESET_WEIGHT_CHANGED);
             ev.mapId = _mapId;
             ev.presetId = _vo.id;
@@ -194,7 +205,24 @@ package weather.components
 
         private function updateWeightText():void
         {
-            _weightText.text = String(int(_vo.weight)) + "/20";
+            var total:Number = 0;
+            // Збираємо суму всіх ваг з батьківського GlobalSettingsPanel або MapDetailPanel
+            var parentSprite:Sprite = parent as Sprite;
+            if (parentSprite)
+            {
+                for (var i:int = 0; i < parentSprite.numChildren; i++)
+                {
+                    var sibling:PresetRow = parentSprite.getChildAt(i) as PresetRow;
+                    if (sibling) total += sibling.data.weight;
+                }
+            }
+            var pct:int = (total > 0) ? Math.round(_vo.weight / total * 100) : 0;
+            _weightText.text = String(int(_vo.weight)) + " (" + pct + "%)";
+        }
+
+        public function refreshWeightText():void
+        {
+            updateWeightText();
         }
 
         public function get data():PresetVO { return _vo; }

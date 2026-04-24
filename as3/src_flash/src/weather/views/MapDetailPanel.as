@@ -43,7 +43,7 @@ package weather.views
             backBtn.addEventListener(MouseEvent.CLICK, onBackClick);
             addChild(backBtn);
 
-            var header:TextField = makeText("Карта: " + _map.label, 18, 0xF2F2F2, true);
+            var header:TextField = makeText("Налаштування карти: " + _map.label, 18, 0xF2F2F2, true);
             header.x = 0;
             header.y = 28;
             addChild(header);

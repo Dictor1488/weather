@@ -165,11 +165,11 @@ package weather
         private function makeDebugPayload():Object
         {
             var presets:Array = [
-                {id:"standard", label:"Стандарт", guid:"", previewSrc:"gui/maps/icons/pro.environment/default.png", weight:20},
-                {id:"midnight", label:"Ніч", guid:"15755E11.4090266B.594778B6.B233C12C", previewSrc:"gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png", weight:20},
-                {id:"overcast", label:"Похмуро", guid:"56BA3213.40FFB1DF.125FBCAD.173E8347", previewSrc:"gui/maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png", weight:20},
-                {id:"sunset", label:"Захід", guid:"6DEE1EBB.44F63FCC.AACF6185.7FBBC34E", previewSrc:"gui/maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png", weight:20},
-                {id:"midday", label:"Полудень", guid:"BF040BCB.4BE1D04F.7D484589.135E881B", previewSrc:"gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png", weight:20}
+                {id:"standard", label:"Стандарт",  guid:"",                                    previewSrc:"gui/maps/icons/pro.environment/default.png",                              weight:20},
+                {id:"midnight", label:"Ніч",       guid:"15755E11.4090266B.594778B6.B233C12C", previewSrc:"gui/maps/icons/pro.environment/15755E11.4090266B.594778B6.B233C12C.png", weight:20},
+                {id:"overcast", label:"Похмуро",   guid:"56BA3213.40FFB1DF.125FBCAD.173E8347", previewSrc:"gui/maps/icons/pro.environment/56BA3213.40FFB1DF.125FBCAD.173E8347.png", weight:20},
+                {id:"sunset",   label:"Захід",     guid:"6DEE1EBB.44F63FCC.AACF6185.7FBBC34E", previewSrc:"gui/maps/icons/pro.environment/6DEE1EBB.44F63FCC.AACF6185.7FBBC34E.png", weight:20},
+                {id:"midday",   label:"Полудень",  guid:"BF040BCB.4BE1D04F.7D484589.135E881B", previewSrc:"gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png", weight:20}
             ];
             return {
                 presets: presets,
@@ -213,8 +213,11 @@ package weather
 
         private function normalizeLabel(s:String):String
         {
-            if (s == "Пасмурно") return "Похмуро";
-            if (s == "Хмарно") return "Похмуро";
+            if (s == "Пасмурно" || s == "Хмарно" || s == "Overcast") return "Похмуро";
+            if (s == "Закат"    || s == "Sunset")   return "Захід";
+            if (s == "Полдень"  || s == "Midday")   return "Полудень";
+            if (s == "Midnight" || s == "Ночь")     return "Ніч";
+            if (s == "Standard" || s == "Стандарт") return "Стандарт";
             return s;
         }
     }
