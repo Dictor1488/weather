@@ -908,20 +908,36 @@ def _try_live_switch(preset_id):
             LOG.info('_try_live_switch: space not found for id=%s', space_id)
             return False
 
-        # setEnvironment приймає name (string). Для standard — resetEnvironment.
+        # Діагностика методів Space
+        try:
+            space_methods = [m for m in dir(space) if not m.startswith('_')]
+            LOG.info('_try_live_switch: space type=%s methods=%s',
+                     type(space).__name__, space_methods)
+            # Поточне значення environment
+            cur_env = getattr(space, 'environment', None)
+            LOG.info('_try_live_switch: current space.environment=%r', cur_env)
+        except Exception as de:
+            LOG.info('_try_live_switch: diag ERR: %s', de)
+
         if preset_id == 'standard':
             space.resetEnvironment()
-            LOG.info('_try_live_switch: space.resetEnvironment() OK')
+            LOG.info('_try_live_switch: resetEnvironment() OK')
             return True
 
-        # Для пресетів передаємо guid як name (WoT внутрішньо його знайде
-        # серед завантажених environments з environments.xml)
         guid = PRESET_GUIDS.get(preset_id)
         if not guid:
             return False
 
-        space.setEnvironment(guid)
-        LOG.info('_try_live_switch: space.setEnvironment(%s) OK', guid)
+        # Пробуємо різні формати name
+        tries = [guid, guid.lower(), preset_id]
+        for name in tries:
+            try:
+                space.setEnvironment(name)
+                new_env = getattr(space, 'environment', None)
+                LOG.info('_try_live_switch: setEnvironment(%r) -> space.environment=%r', name, new_env)
+            except Exception as se:
+                LOG.info('_try_live_switch: setEnvironment(%r) ERR: %s', name, se)
+
         return True
 
     except Exception as e:
