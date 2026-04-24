@@ -50,7 +50,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: C:\flex-sdk
-        key: flex-sdk-${{ env.FLEX_VERSION }}-v3
+        key: flex-sdk-${{ env.FLEX_VERSION }}-v2
 
     - name: Download and Setup Apache Flex SDK
       if: steps.cache-flex.outputs.cache-hit != 'true'
@@ -89,19 +89,11 @@ jobs:
         New-Item -ItemType Directory -Force -Path $vDir | Out-Null
         Copy-Item $libsPlayerGlobal "$vDir\playerglobal.swc" -Force
         Copy-Item $libsPlayerGlobal "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
-        $cfg = "C:\flex-sdk\frameworks\flex-config.xml"
-        if (Test-Path $cfg) {
-            Write-Host "=== flex-config.xml before patch ==="
-            Select-String -Path $cfg -Pattern "localFonts|playerglobalHome" | ForEach-Object { Write-Host $_.Line }
-            $txt = [System.IO.File]::ReadAllText($cfg)
-            $txt = $txt.Replace('{playerglobalHome}', 'C:/flex-sdk/frameworks/libs/player')
-            $txt = $txt.Replace('<local-fonts-snapshot>./localFonts.ser</local-fonts-snapshot>', '')
-            $txt = $txt.Replace('<local-fonts-snapshot>localFonts.ser</local-fonts-snapshot>', '')
-            $txt = [System.Text.RegularExpressions.Regex]::Replace($txt, '<local-fonts-snapshot>[^<]*</local-fonts-snapshot>', '')
-            [System.IO.File]::WriteAllText($cfg, $txt)
-            Write-Host "=== flex-config.xml after patch ==="
-            Select-String -Path $cfg -Pattern "localFonts" | ForEach-Object { Write-Host $_.Line }
-            Write-Host "flex-config.xml patched OK"
+        $flexConfig = "C:\flex-sdk\frameworks\flex-config.xml"
+        if (Test-Path $flexConfig) {
+            $content = Get-Content $flexConfig -Raw
+            $content = $content -replace '\{playerglobalHome\}', 'C:/flex-sdk/frameworks/libs/player'
+            $content | Set-Content $flexConfig -Encoding UTF8
         }
 
     - name: Install dependencies
@@ -125,33 +117,49 @@ jobs:
     - name: Build SWF files
       shell: pwsh
       run: |
-        $srcDir  = (Resolve-Path "as3\src_flash").Path
-        $swcPath = (Resolve-Path "as3\libs\playerglobal.swc").Path
-        $mainAs  = (Resolve-Path "as3\src_flash\weather\WeatherMediator.as").Path
-        $outDir  = "$PWD\as3\bin"
-        $outSwf  = "$outDir\WeatherPanel.swf"
-        $flexCfg = "C:\flex-sdk\frameworks\flex-config.xml"
-        $jar     = "C:\flex-sdk\lib\mxmlc.jar"
-
-        New-Item -ItemType Directory -Force $outDir | Out-Null
-        Remove-Item "$outDir\*.swf" -Force -EA SilentlyContinue
-
-        Write-Host "source-path : $srcDir"
-        Write-Host "playerglobal: $swcPath"
-        Write-Host "entry point : $mainAs"
-
-        if (-not (Test-Path $jar)) { Write-Error "mxmlc.jar not found"; exit 1 }
-
-        & java "-jar" $jar "-load-config=$flexCfg" "-source-path+=$srcDir" "-library-path+=$swcPath" "-output=$outSwf" "-target-player=${{ env.FLASH_PLAYER_VERSION }}" "-swf-version=${{ env.SWF_VERSION }}" "-strict=true" "-optimize=true" "--" $mainAs
-        $exitCode = $LASTEXITCODE
-        Write-Host "Exit code: $exitCode"
-        if ($exitCode -ne 0) { Write-Error "Compilation failed"; exit 1 }
-
-        if (-not (Test-Path $outSwf)) { Write-Error "SWF not created"; exit 1 }
-        $sz = (Get-Item $outSwf).Length
-        Write-Host "SWF size: $([math]::Round($sz/1KB,2)) KB"
-        if ($sz -lt 10240) { Write-Error "SWF too small ($sz bytes)"; exit 1 }
-        Write-Host "SUCCESS!" -ForegroundColor Green
+        $env:Path = "C:\flex-sdk\bin;$env:Path"
+        $mxmlcPath = "C:\flex-sdk\bin\mxmlc.bat"
+        if (-not (Test-Path $mxmlcPath)) { Write-Error "mxmlc not found"; exit 1 }
+        $outputPath = "as3/bin"
+        New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
+        $libArgs = @()
+        Get-ChildItem -Path "as3/libs" -Filter "*.swc" -Recurse | ForEach-Object {
+            if ($_.Name -eq "playerglobal.swc") {
+                $libArgs += "-library-path+=$($_.FullName)"
+            } else {
+                $libArgs += "-external-library-path+=$($_.FullName)"
+            }
+        }
+        $projects = Get-ChildItem -Path "as3/src_flash" -Filter "*.as3proj" -Recurse
+        foreach ($proj in $projects) {
+            $projDir = $proj.DirectoryName
+            [xml]$projXml = Get-Content $proj.FullName
+            $swfName = ($projXml.project.o.movie | Where-Object { $_.path -and $_.path -ne "" } | Select-Object -First 1).path
+            if (-not $swfName) { $swfName = "WeatherPanel.swf" }
+            $mainClassPath = $null
+            $projXml.project.compileTargets.compile | ForEach-Object {
+                if ($_.path) { $mainClassPath = Join-Path $projDir $_.path }
+            }
+            if (-not $mainClassPath -or -not (Test-Path $mainClassPath)) { Write-Warning "Main class not found"; continue }
+            $outputSwf = Join-Path $outputPath $swfName
+            $mxmlcArgs = @()
+            $srcDir = Join-Path $projDir "."
+            if (Test-Path $srcDir) { $mxmlcArgs += "-source-path+=$srcDir" }
+            $mxmlcArgs += $libArgs
+            $mxmlcArgs += @(
+                "-output=$outputSwf",
+                "-target-player=${{ env.FLASH_PLAYER_VERSION }}",
+                "-swf-version=${{ env.SWF_VERSION }}",
+                "-strict=true", "-optimize=true", "--"
+            )
+            $mxmlcArgs += $mainClassPath
+            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs -NoNewWindow -Wait -PassThru -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
+            Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
+            if ($process.ExitCode -ne 0) { Write-Error "Compilation failed"; exit 1 }
+            $sz = (Get-Item $outputSwf).Length
+            Write-Host "SUCCESS: $swfName ($([math]::Round($sz/1KB,2)) KB)" -ForegroundColor Green
+            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
+        }
 
     - name: Create build.json
       shell: pwsh
