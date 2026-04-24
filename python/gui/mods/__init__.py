@@ -803,54 +803,10 @@ def init(*args, **kwargs):
     _register_weather_view()
     _register_mods_list_entry()
 
-    try:
-        from gui.modsSettingsApi import g_modsSettingsApi
-        from gui.modsSettingsApi import templates as t
-        import Keys as K
-
-        current_codes       = [_HARDCODED_TRIGGER_KEY] if _HARDCODED_TRIGGER_KEY else [K.KEY_F12]
-        general_weights     = _effective_ui_weights(g_controller.getGeneralWeights())
-        default_map_weights = _default_weights()
-
-        def make_sliders(prefix, values):
-            weights = _effective_ui_weights(values)
-            return [
-                t.createSlider(varName=prefix+'standard', text=u'Стандарт', value=weights.get('standard', _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix+'midnight', text=u'Ніч',      value=weights.get('midnight', _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix+'overcast', text=u'Хмарно',   value=weights.get('overcast', _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix+'sunset',   text=u'Захід',    value=weights.get('sunset',   _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
-                t.createSlider(varName=prefix+'midday',   text=u'Полудень', value=weights.get('midday',   _DEFAULT_WEIGHT_VALUE), min=0, max=20, interval=1),
-            ]
-
-        column1 = [t.createLabel(text=u'Загальні налаштування'), t.createEmpty()]
-        column1.extend(make_sliders('global_', general_weights))
-        column1.append(t.createEmpty())
-        column1.append(t.createHotkey(varName='hotkey', text=u'Зміна погоди в бою', value=current_codes))
-
-        column2 = [
-            t.createLabel(text=u'Налаштування по картах'), t.createEmpty(),
-            t.createDropdown(varName='active_map', text=u'Карта', options=MAP_LABELS, value=0),
-        ]
-        column2.extend(make_sliders('map_', default_map_weights))
-
-        template = {
-            'modDisplayName': u'Погода на картах',
-            'enabled':        True,
-            'column1':        column1,
-            'column2':        column2,
-        }
-
-        saved = g_modsSettingsApi.setModTemplate(
-            linkage='com.example.weather',
-            template=template,
-            callback=_on_settings_changed,
-            buttonHandler=open_weather_window,
-        )
-        if saved:
-            _apply_saved_settings(saved)
-
-    except Exception:
-        _log().exception('modsSettingsApi registration failed')
+    # Не реєструємо сторінку в "Налаштування модифікацій".
+    # У мода тепер є власне SWF-вікно, яке відкривається через ModsListAPI.
+    # Старий g_modsSettingsApi.setModTemplate залишав дубльовані слайдери
+    # на екрані налаштувань модифікацій, тому його вимкнено.
 
     _INIT_DONE = True
 
