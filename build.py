@@ -192,11 +192,12 @@ def main():
 
     # SWF — копіюємо в res/gui/flash/weather/
     swf_src = pathlib.Path('as3/bin/WeatherPanel.swf')
-    if swf_src.is_file():
-        swf_dest = temp_dir / 'res' / 'gui' / 'flash' / 'weather'
-        swf_dest.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(swf_src), str(swf_dest / 'WeatherPanel.swf'))
-        logger.info('SWF copied: WeatherPanel.swf -> res/gui/flash/weather/')
+    if not swf_src.is_file():
+        raise FileNotFoundError('SWF not found: as3/bin/WeatherPanel.swf. Build AS3 first with Flex/mxmlc.')
+    swf_dest = temp_dir / 'res' / 'gui' / 'flash' / 'weather'
+    swf_dest.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(swf_src), str(swf_dest / 'WeatherPanel.swf'))
+    logger.info('SWF copied: WeatherPanel.swf (%s bytes) -> res/gui/flash/weather/', swf_src.stat().st_size)
 
     # Створюємо .wotmod
     zip_folder(str(temp_dir), str(build_dir / package_name))
