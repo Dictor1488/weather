@@ -39,7 +39,7 @@ jobs:
     - name: Install Python 2.7 via Chocolatey
       run: choco install python2 -y --no-progress
 
-    - name: Install Java (required for Flex SDK)
+    - name: Install Java
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
@@ -52,59 +52,41 @@ jobs:
         path: C:\flex-sdk
         key: flex-sdk-${{ env.FLEX_VERSION }}-v2
 
-    - name: Download and Setup Apache Flex SDK
+    - name: Download Flex SDK
       if: steps.cache-flex.outputs.cache-hit != 'true'
       shell: pwsh
       run: |
-        $flexUrls = @(
-            "https://archive.apache.org/dist/flex/${{ env.FLEX_VERSION }}/binaries/apache-flex-sdk-${{ env.FLEX_VERSION }}-bin.zip",
-            "https://dlcdn.apache.org/flex/${{ env.FLEX_VERSION }}/binaries/apache-flex-sdk-${{ env.FLEX_VERSION }}-bin.zip"
+        $urls = @(
+          "https://archive.apache.org/dist/flex/${{ env.FLEX_VERSION }}/binaries/apache-flex-sdk-${{ env.FLEX_VERSION }}-bin.zip",
+          "https://dlcdn.apache.org/flex/${{ env.FLEX_VERSION }}/binaries/apache-flex-sdk-${{ env.FLEX_VERSION }}-bin.zip"
         )
-        $downloaded = $false
-        foreach ($url in $flexUrls) {
-            try {
-                Invoke-WebRequest -Uri $url -OutFile "flex-sdk.zip" -UseBasicParsing -TimeoutSec 300
-                $downloaded = $true
-                break
-            } catch { Write-Host "Failed: $_" }
+        $ok = $false
+        foreach ($url in $urls) {
+          try { Invoke-WebRequest -Uri $url -OutFile flex-sdk.zip -UseBasicParsing -TimeoutSec 300; $ok=$true; break }
+          catch { Write-Host "Failed: $_" }
         }
-        if (-not $downloaded) { Write-Error "Could not download Flex SDK"; exit 1 }
-        New-Item -ItemType Directory -Force -Path "C:\flex-sdk"
-        Expand-Archive -Path "flex-sdk.zip" -DestinationPath "C:\flex-sdk-temp" -Force
-        $extractedItems = Get-ChildItem "C:\flex-sdk-temp"
-        if ($extractedItems.Count -eq 1 -and $extractedItems[0].PSIsContainer) {
-            Get-ChildItem "$($extractedItems[0].FullName)" | Move-Item -Destination "C:\flex-sdk" -Force
+        if (-not $ok) { Write-Error "Cannot download Flex SDK"; exit 1 }
+        New-Item -ItemType Directory -Force C:\flex-sdk | Out-Null
+        Expand-Archive flex-sdk.zip C:\flex-sdk-temp -Force
+        $sub = Get-ChildItem C:\flex-sdk-temp
+        if ($sub.Count -eq 1 -and $sub[0].PSIsContainer) {
+          Get-ChildItem $sub[0].FullName | Move-Item -Destination C:\flex-sdk -Force
         } else {
-            Get-ChildItem "C:\flex-sdk-temp" | Move-Item -Destination "C:\flex-sdk" -Force
+          Get-ChildItem C:\flex-sdk-temp | Move-Item -Destination C:\flex-sdk -Force
         }
-        Remove-Item "flex-sdk.zip" -Force -ErrorAction SilentlyContinue
-        Remove-Item "C:\flex-sdk-temp" -Recurse -Force -ErrorAction SilentlyContinue
 
     - name: Setup playerglobal.swc
       shell: pwsh
       run: |
-        $libsPlayerGlobal = "as3\libs\playerglobal.swc"
-        if (-not (Test-Path $libsPlayerGlobal)) { Write-Error "playerglobal.swc not found"; exit 1 }
-        $vDir = "C:\flex-sdk\frameworks\libs\player\32.0"
-        New-Item -ItemType Directory -Force -Path $vDir | Out-Null
-        Copy-Item $libsPlayerGlobal "$vDir\playerglobal.swc" -Force
-        Copy-Item $libsPlayerGlobal "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
-        # Замінюємо flex-config.xml мінімальним — прибираємо всі library-path і target-player
-        # бо оригінальний шукає player/27.0 якого немає і ламає компіляцію
-        $minimalConfig = @"
-<?xml version="1.0" encoding="utf-8"?>
-<flex-config>
-  <compiler>
-    <external-library-path append="true">
-      <path-element>C:/flex-sdk/frameworks/libs/player/32.0/playerglobal.swc</path-element>
-    </external-library-path>
-  </compiler>
-  <target-player>32.0</target-player>
-  <swf-version>39</swf-version>
-</flex-config>
-"@
-        $minimalConfig | Set-Content "C:\flex-sdk\frameworks\flex-config.xml" -Encoding UTF8
-        Write-Host "flex-config.xml replaced with minimal version"
+        $src = "as3\libs\playerglobal.swc"
+        if (-not (Test-Path $src)) { Write-Error "playerglobal.swc not found"; exit 1 }
+        $dir32 = "C:\flex-sdk\frameworks\libs\player\32.0"
+        New-Item -ItemType Directory -Force $dir32 | Out-Null
+        Copy-Item $src "$dir32\playerglobal.swc" -Force
+        Copy-Item $src "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
+        $minCfg = '<?xml version="1.0" encoding="utf-8"?><flex-config><compiler><external-library-path append="true"><path-element>C:/flex-sdk/frameworks/libs/player/32.0/playerglobal.swc</path-element></external-library-path></compiler><target-player>32.0</target-player><swf-version>39</swf-version></flex-config>'
+        Set-Content "C:\flex-sdk\frameworks\flex-config.xml" $minCfg -Encoding UTF8
+        Write-Host "flex-config.xml replaced"
 
     - name: Install dependencies
       run: |
@@ -115,14 +97,14 @@ jobs:
       shell: pwsh
       run: |
         if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $v  = "${{ inputs.version }}"
-            $gv = "${{ inputs.game_version }}"
+          $v  = "${{ inputs.version }}"
+          $gv = "${{ inputs.game_version }}"
         } else {
-            $v  = "${{ github.ref_name }}".TrimStart('v')
-            $gv = "2.2.1.1"
+          $v  = "${{ github.ref_name }}".TrimStart('v')
+          $gv = "2.2.1.1"
         }
-        "PROJECT_VERSION=$v"  >> $env:GITHUB_ENV
-        "GAME_VERSION=$gv"    >> $env:GITHUB_ENV
+        "PROJECT_VERSION=$v" >> $env:GITHUB_ENV
+        "GAME_VERSION=$gv"   >> $env:GITHUB_ENV
 
     - name: Build SWF files
       shell: pwsh
@@ -130,114 +112,90 @@ jobs:
         $env:Path = "C:\flex-sdk\bin;$env:Path"
         $mxmlcPath = "C:\flex-sdk\bin\mxmlc.bat"
         if (-not (Test-Path $mxmlcPath)) { Write-Error "mxmlc not found"; exit 1 }
+        New-Item -ItemType Directory -Force as3\bin | Out-Null
 
-        $outputPath = "as3/bin"
-        New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
-
-        # Збираємо всі .swc бібліотеки
         $libArgs = @()
-        Get-ChildItem -Path "as3/libs" -Filter "*.swc" -Recurse | ForEach-Object {
-            # playerglobal завжди external — він вже є у Flash Player runtime
-            $libArgs += "-external-library-path+=$($_.FullName)"
+        Get-ChildItem as3\libs -Filter *.swc -Recurse | ForEach-Object {
+          $libArgs += "-external-library-path+=$($_.FullName)"
         }
 
-        # Читаємо .as3proj щоб дістати точку входу і назву SWF
-        $projects = Get-ChildItem -Path "as3/src_flash" -Filter "*.as3proj" -Recurse
+        $projects = Get-ChildItem as3\src_flash -Filter *.as3proj -Recurse
         foreach ($proj in $projects) {
-            $projDir = $proj.DirectoryName
-            Write-Host "Project: $($proj.FullName)"
-            [xml]$projXml = Get-Content $proj.FullName
+          $projDir = $proj.DirectoryName
+          Write-Host "Project: $($proj.FullName)"
+          [xml]$xml = Get-Content $proj.FullName
 
-            # Назва вихідного SWF
-            $swfName = $null
-            $projXml.project.o | ForEach-Object {
-                $_.movie | ForEach-Object {
-                    if ($_.path -and $_.path -ne "") { $swfName = $_.path }
-                }
+          $swfName = $null
+          $xml.project.o | ForEach-Object {
+            $_.movie | ForEach-Object {
+              if ($_.path -and $_.path -ne "") { $swfName = $_.path }
             }
-            if (-not $swfName) { $swfName = "WeatherPanel.swf" }
-            Write-Host "Output SWF: $swfName"
+          }
+          if (-not $swfName) { $swfName = "WeatherPanel.swf" }
+          Write-Host "Output SWF: $swfName"
 
-            # Точка входу
-            $mainClassPath = $null
-            $projXml.project.compileTargets.compile | ForEach-Object {
-                if ($_.path) {
-                    $mainClassPath = Join-Path $projDir $_.path
-                }
+          $mainAs = $null
+          $xml.project.compileTargets.compile | ForEach-Object {
+            if ($_.path) { $mainAs = Join-Path $projDir $_.path }
+          }
+          if (-not $mainAs -or -not (Test-Path $mainAs)) {
+            Write-Error "Entry point not found: $mainAs"; exit 1
+          }
+          Write-Host "Entry point: $mainAs"
+
+          $srcArgs = @()
+          $xml.project.classpaths.class | ForEach-Object {
+            if ($_.path) {
+              $srcDir = (Resolve-Path (Join-Path $projDir $_.path)).Path
+              $srcArgs += "-source-path+=$srcDir"
+              Write-Host "Source path: $srcDir"
             }
-            if (-not $mainClassPath -or -not (Test-Path $mainClassPath)) {
-                Write-Error "Main class not found: $mainClassPath"
-                exit 1
+          }
+
+          Write-Host "=== AS3 files ==="
+          $srcArgs | ForEach-Object {
+            $sp = $_ -replace "-source-path\+=",""
+            Get-ChildItem -Recurse $sp -Filter *.as -EA SilentlyContinue | ForEach-Object {
+              Write-Host "  $($_.FullName)"
             }
-            Write-Host "Entry point: $mainClassPath"
+          }
+          Write-Host "================="
 
-            # source-path: читаємо з classpaths в .as3proj
-            $mxmlcArgs = @()
-            $projXml.project.classpaths.class | ForEach-Object {
-                if ($_.path) {
-                    $srcDir = Join-Path $projDir $_.path
-                    # Resolve-Path прибирає зайву крапку: src_flash\. -> src_flash
-                    $srcDir = (Resolve-Path $srcDir).Path
-                    if (Test-Path $srcDir) {
-                        $mxmlcArgs += "-source-path+=$srcDir"
-                        Write-Host "Source path: $srcDir"
-                    }
-                }
-            }
+          $outSwf = Join-Path as3\bin $swfName
+          $args = $srcArgs + $libArgs + @(
+            "-output=$outSwf",
+            "-target-player=${{ env.FLASH_PLAYER_VERSION }}",
+            "-swf-version=${{ env.SWF_VERSION }}",
+            "-strict=true",
+            "-optimize=true",
+            "--",
+            $mainAs
+          )
 
-            # Список усіх .as файлів для діагностики
-            Write-Host "=== AS3 files found ==="
-            $mxmlcArgs | Where-Object { $_ -like "-source-path*" } | ForEach-Object {
-                $sp = $_ -replace "-source-path\+=",""
-                Get-ChildItem -Recurse $sp -Filter "*.as" -EA SilentlyContinue | ForEach-Object {
-                    Write-Host "  $($_.FullName)"
-                }
-            }
-            Write-Host "======================="
+          Write-Host "Running: mxmlc $($args -join ' ')"
+          $p = Start-Process $mxmlcPath -ArgumentList $args -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput out.txt -RedirectStandardError err.txt
+          Get-Content out.txt,err.txt -EA SilentlyContinue | Write-Host
+          Remove-Item out.txt,err.txt -Force -EA SilentlyContinue
 
-            $outputSwf = Join-Path $outputPath $swfName
-            $mxmlcArgs += $libArgs
-            $mxmlcArgs += @(
-                "-output=$outputSwf",
-                "-target-player=${{ env.FLASH_PLAYER_VERSION }}",
-                "-swf-version=${{ env.SWF_VERSION }}",
-                "-strict=true",
-                "-optimize=true"
-            )
+          if ($p.ExitCode -ne 0) { Write-Error "mxmlc failed (exit $($p.ExitCode))"; exit 1 }
+          if (-not (Test-Path $outSwf)) { Write-Error "SWF not created"; exit 1 }
 
-            $mxmlcArgs += @("--")
-            $mxmlcArgs += $mainClassPath
-            Write-Host "Running: mxmlc $($mxmlcArgs -join ' ')"
-            $process = Start-Process -FilePath $mxmlcPath -ArgumentList $mxmlcArgs `
-                -NoNewWindow -Wait -PassThru `
-                -RedirectStandardOutput "out.txt" -RedirectStandardError "err.txt"
-            Get-Content "out.txt","err.txt" -ErrorAction SilentlyContinue | Write-Host
-            Remove-Item "out.txt","err.txt" -Force -ErrorAction SilentlyContinue
-
-            if ($process.ExitCode -ne 0) {
-                Write-Error "Compilation failed with exit code $($process.ExitCode)"
-                exit 1
-            }
-
-            if (-not (Test-Path $outputSwf)) { Write-Error "SWF not created"; exit 1 }
-            $swfSize = (Get-Item $outputSwf).Length
-            Write-Host "SWF size: $([math]::Round($swfSize/1KB,2)) KB"
-            if ($swfSize -lt 10240) {
-                Write-Error "SWF too small ($swfSize bytes) — compilation likely failed silently"
-                exit 1
-            }
-            Write-Host "SUCCESS: $swfName ($([math]::Round($swfSize/1KB,2)) KB)" -ForegroundColor Green
+          $sz = (Get-Item $outSwf).Length
+          Write-Host "SWF: $([math]::Round($sz/1KB,2)) KB"
+          if ($sz -lt 10240) { Write-Error "SWF too small ($sz bytes)"; exit 1 }
+          Write-Host "SUCCESS: $swfName" -ForegroundColor Green
         }
 
     - name: Create build.json
       shell: pwsh
       run: |
         @{
-            version = 5
-            software = @{ animate = " "; python = "C:/Python27/python.exe" }
-            game = @{ force = $false; folder = "World_of_Tanks_EU"; version = "${{ env.GAME_VERSION }}" }
-            info = @{ id = "com.example.weather"; name = "Weather Mod"; description = "Weather preset randomizer"; version = "${{ env.PROJECT_VERSION }}" }
-        } | ConvertTo-Json -Depth 4 | Out-File -FilePath build.json -Encoding UTF8
+          version = 5
+          software = @{ animate = " "; python = "C:/Python27/python.exe" }
+          game = @{ force = $false; folder = "World_of_Tanks_EU"; version = "${{ env.GAME_VERSION }}" }
+          info = @{ id = "com.example.weather"; name = "Weather Mod"; description = "Weather preset randomizer"; version = "${{ env.PROJECT_VERSION }}" }
+        } | ConvertTo-Json -Depth 4 | Out-File build.json -Encoding UTF8
 
     - name: Run Build Script
       run: python build.py --distribute
