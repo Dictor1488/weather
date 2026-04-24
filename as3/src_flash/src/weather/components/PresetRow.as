@@ -28,7 +28,6 @@ package weather.components
         private var _weightText:TextField;
         private var _preview:Loader;
         private var _previewHolder:Sprite;
-        private var _previewMask:Shape;
         private var _dragging:Boolean = false;
 
         public function PresetRow(vo:PresetVO, mapId:String = null)
@@ -77,15 +76,6 @@ package weather.components
             addChild(_previewHolder);
 
             drawPreviewPlaceholder();
-
-            _previewMask = new Shape();
-            _previewMask.x = _previewHolder.x;
-            _previewMask.y = _previewHolder.y;
-            _previewMask.graphics.beginFill(0xFFFFFF, 1);
-            _previewMask.graphics.drawRect(0, 0, 122, 34);
-            _previewMask.graphics.endFill();
-            addChild(_previewMask);
-            _previewHolder.mask = _previewMask;
 
             if (_vo.previewSrc)
             {
@@ -146,17 +136,16 @@ package weather.components
             _previewHolder.graphics.clear();
             _previewHolder.graphics.lineStyle(1, 0x2A3036, 0.85);
             _previewHolder.graphics.beginFill(color, 0.55);
-            _previewHolder.graphics.drawRect(0, 0, 122, 34);
+            _previewHolder.graphics.drawRect(0, 0, 122, 38);
             _previewHolder.graphics.endFill();
         }
 
         private function onPreviewLoaded(e:Event):void
         {
             _preview.width = 122;
-            _preview.height = 34;
+            _preview.height = 38;
             _preview.alpha = 1.0;
-            _preview.scrollRect = new Rectangle(0, 0, 122, 34);
-            _previewHolder.setChildIndex(_preview, _previewHolder.numChildren - 1);
+            _preview.scrollRect = new Rectangle(0, 0, 122, 38);
         }
 
         private function onTrackClick(e:MouseEvent):void { setSliderValue(_sliderTrack.mouseX); }
