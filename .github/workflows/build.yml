@@ -202,8 +202,9 @@ jobs:
             # mxmlc з абсолютним шляхом ігнорує source-path і компілює порожній SWF
             # Правильно: передавати weather.WeatherMediator а не D:\...\weather\WeatherMediator.as
             $srcRoot = ($mxmlcArgs | Where-Object { $_ -like "-source-path*" } | Select-Object -First 1) -replace "-source-path\+=",""
-            $relPath = $mainClassPath.Substring($srcRoot.Length).TrimStart("\\/")
-            $className = $relPath -replace "\\.as$","" -replace "[/\\]","."
+            $relPath = $mainClassPath.Substring($srcRoot.Length).TrimStart("/\\")
+            if ($relPath.EndsWith(".as")) { $relPath = $relPath.Substring(0, $relPath.Length - 3) }
+            $className = $relPath -replace "[/\\]","."
             Write-Host "Class name: $className"
             $argsStr = ($mxmlcArgs -join " ") + " $className"
             $cmdLine = "`"$mxmlcPath`" $argsStr"
