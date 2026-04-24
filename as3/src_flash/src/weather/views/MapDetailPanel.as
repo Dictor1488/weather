@@ -36,19 +36,19 @@ package weather.views
             backBtn.useHandCursor = true;
             backBtn.mouseChildren = false;
 
-            var backTF:TextField = makeText("‹ назад до карт", 12, 0xD5A45A, true);
+            var backTF:TextField = makeText("‹ назад до карт", 13, 0xD5A45A, true);
             backBtn.addChild(backTF);
             backBtn.x = 0;
             backBtn.y = 0;
             backBtn.addEventListener(MouseEvent.CLICK, onBackClick);
             addChild(backBtn);
 
-            var header:TextField = makeText(_map.label, 17, 0xF2F2F2, true);
+            var header:TextField = makeText("Карта: " + _map.label, 18, 0xF2F2F2, true);
             header.x = 0;
-            header.y = 24;
+            header.y = 28;
             addChild(header);
 
-            var y:int = 58;
+            var y:int = 68;
             for (var i:int = 0; i < _map.presets.length; i++)
             {
                 var row:PresetRow = new PresetRow(_map.presets[i], _map.id);
