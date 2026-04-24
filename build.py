@@ -193,12 +193,14 @@ def find_game_folder(config_path: Optional[str]) -> Optional[pathlib.Path]:
     return None
 
 
-def detect_game_version(game_folder: pathlib.Path, configured: Optional[str]) -> str:
+def detect_game_version(game_folder: Optional[pathlib.Path], configured: Optional[str]) -> str:
     env_version = os.environ.get('WOT_VERSION')
     if env_version:
         return env_version
     if configured:
         return configured
+    if game_folder is None:
+        return ''
     mods_dir = game_folder / 'mods'
     if not mods_dir.is_dir():
         return ''
@@ -271,7 +273,10 @@ def extract_one_map_thumb(packages_dir: pathlib.Path, out_dir: pathlib.Path, map
         return False
 
 
-def extract_map_thumbs(game_folder: pathlib.Path, res_root: pathlib.Path) -> None:
+def extract_map_thumbs(game_folder: Optional[pathlib.Path], res_root: pathlib.Path) -> None:
+    if game_folder is None:
+        logger.warning('Map thumbs skipped: game folder not found. CI builds need prepacked resources/in/gui/maps/icons/weather/maps/*.png')
+        return
     packages_dir = game_folder / 'res' / 'packages'
     if not packages_dir.is_dir():
         logger.warning('Map thumbs skipped: packages folder not found: %s', packages_dir)
@@ -320,12 +325,15 @@ def main():
         config = AppConfig(json.load(f))
 
     game_folder = find_game_folder(config.game.folder)
-    if not game_folder:
-        raise ValueError('Game folder not found. Set WOT_FOLDER or build.json game.folder.')
     game_version = detect_game_version(game_folder, config.game.version)
+    if (args.ingame or args.run) and game_folder is None:
+        raise ValueError('Game folder not found. Set WOT_FOLDER or build.json game.folder.')
     if not game_version and (args.ingame or args.distribute):
         raise ValueError('Game version not configured and could not be detected from mods/ folder.')
-    logger.info('Game folder: %s', game_folder)
+    if game_folder:
+        logger.info('Game folder: %s', game_folder)
+    else:
+        logger.warning('Game folder not found; packaging without extracting map thumbnails from res/packages.')
     if game_version:
         logger.info('Game version: %s', game_version)
 
@@ -361,10 +369,6 @@ def main():
 
     extract_map_thumbs(game_folder, temp_dir / 'res')
 
-    # Flash Loader inside WeatherPanel.swf resolves gui/... relative to res/gui/flash/.
-    # Duplicate GUI assets there so both Python/client paths and SWF Loader paths work:
-    #   res/gui/maps/...              normal WoT resource path
-    #   res/gui/flash/gui/maps/...    Scaleform Loader relative path
     gui_src = temp_dir / 'res' / 'gui'
     if gui_src.is_dir():
         copytree(str(gui_src), str(temp_dir / 'res/gui/flash/gui'))
