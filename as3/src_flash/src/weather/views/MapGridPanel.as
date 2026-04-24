@@ -3,6 +3,8 @@ package weather.views
     import flash.display.Shape;
     import flash.display.Sprite;
     import flash.events.MouseEvent;
+    import flash.text.TextField;
+    import flash.text.TextFormat;
 
     import weather.components.MapTile;
     import weather.data.MapVO;
@@ -26,8 +28,8 @@ package weather.views
 
         private function build(maps:Vector.<MapVO>):void
         {
-            var hdr:flash.text.TextField = new flash.text.TextField();
-            hdr.defaultTextFormat = new flash.text.TextFormat("_sans", 16, 0xF2F2F2, true);
+            var hdr:TextField = new TextField();
+            hdr.defaultTextFormat = new TextFormat("_sans", 16, 0xF2F2F2, true);
             hdr.selectable = false;
             hdr.autoSize = "left";
             hdr.text = "Налаштування по картах";
