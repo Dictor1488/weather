@@ -5,6 +5,7 @@ package weather.events
     public class WeatherEvent extends Event
     {
         public static const PRESET_WEIGHT_CHANGED:String = "presetWeightChanged";
+        public static const PRESET_SELECTED:String = "presetSelected";
         public static const MAP_SELECTED:String = "mapSelected";
         public static const TAB_CHANGED:String = "tabChanged";
         public static const CLOSE_REQUESTED:String = "closeRequested";
