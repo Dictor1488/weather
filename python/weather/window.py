@@ -42,11 +42,11 @@ PRESET_PREVIEW = {
     'midday':   'img://gui/maps/icons/pro.environment/BF040BCB.4BE1D04F.7D484589.135E881B.png',
 }
 
-# Як і стандартні WoT іконки досягнень:
-# img://gui/maps/icons/achievement/48x48/markOfMastery1.png
-# Для карт беремо оригінальні ресурси клієнта через img://gui/...
+
 def _map_icon(map_id):
-    return 'img://gui/maps/icons/map/stats/%s.png' % map_id
+    # build.py витягує оригінальні PNG/JPG з res/packages/*.pkg сюди:
+    # res/gui/maps/icons/weather/maps/<map_id>.png
+    return 'img://gui/maps/icons/weather/maps/%s.png' % map_id
 
 
 MAP_REGISTRY = [
