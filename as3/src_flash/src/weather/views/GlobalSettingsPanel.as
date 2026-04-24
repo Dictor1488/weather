@@ -32,12 +32,12 @@ package weather.views
 
         private function build(presets:Vector.<PresetVO>):void
         {
-            var hdr:TextField = makeText("Загальні налаштування для всіх карт", 18, 0xF2F2F2, true);
-            hdr.x = 2;
+            var hdr:TextField = makeText("Загальні налаштування для всіх карт", 18, 0xD8C8A8, true);
+            hdr.x = 0;
             hdr.y = 0;
             addChild(hdr);
 
-            var y:int = 36;
+            var y:int = 38;
             for (var i:int = 0; i < presets.length; i++)
             {
                 var row:PresetRow = new PresetRow(presets[i], null);
@@ -48,20 +48,20 @@ package weather.views
                 y += PresetRow.ROW_HEIGHT + 10;
             }
 
-            var hk:TextField = makeText("Зміна погоди в бою", 14, 0xDADADA, false);
-            hk.x = 2;
-            hk.y = y + 10;
+            var hk:TextField = makeText("Зміна погоди в бою", 14, 0xB8B8B8, false);
+            hk.x = 0;
+            hk.y = y + 15;
             addChild(hk);
 
             _chipContainer = new Sprite();
-            _chipContainer.x = 232;
-            _chipContainer.y = y + 5;
+            _chipContainer.x = 610;
+            _chipContainer.y = y + 10;
             addChild(_chipContainer);
             rebuildChipsFromString(_hotkeyStr);
 
             var editBtn:Sprite = makeEditButton();
-            editBtn.x = 342;
-            editBtn.y = y + 2;
+            editBtn.x = 700;
+            editBtn.y = y + 8;
             addChild(editBtn);
         }
 
@@ -206,16 +206,16 @@ package weather.views
         private function makeKeyChip(key:String):Sprite
         {
             var s:Sprite = new Sprite();
-            var tf:TextField = makeText(key, 12, 0xFFFFFF, true);
+            var tf:TextField = makeText(key, 12, 0xF0E0B8, true);
 
-            var w:int = tf.width + 14;
-            s.graphics.beginFill(0x261D0E, 0.90);
-            s.graphics.lineStyle(1, 0xB98525, 1);
-            s.graphics.drawRect(0, 0, w, 24);
+            var w:int = tf.width + 24;
+            s.graphics.beginFill(0x100C04, 0.95);
+            s.graphics.lineStyle(1, 0xC08820, 1);
+            s.graphics.drawRect(0, 0, w, 26);
             s.graphics.endFill();
 
-            tf.x = 7;
-            tf.y = 4;
+            tf.x = 12;
+            tf.y = 5;
             s.addChild(tf);
             return s;
         }
