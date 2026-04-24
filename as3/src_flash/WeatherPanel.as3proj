@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<project version="2">
+  <o>
+    <movie outputType="Application" />
+    <movie input="" />
+    <movie path="WeatherPanel.swf" />
+    <movie fps="30" />
+    <movie width="1280" />
+    <movie height="720" />
+    <movie version="32" />
+    <movie minorVersion="0" />
+    <movie platform="Flash Player" />
+    <movie background="#000000" />
+  </o>
+  <classpaths>
+    <class path="src" />
+  </classpaths>
+  <build>
+    <option optimize="True" />
+    <option strict="True" />
+    <option useNetwork="False" />
+    <option warnings="True" />
+  </build>
+  <includeLibraries />
+  <libraryPaths>
+    <element path="..\libs\playerglobal.swc" />
+    <element path="..\libs\common-1.0-SNAPSHOT.swc" />
+    <element path="..\libs\common_i18n_library-1.0-SNAPSHOT.swc" />
+    <element path="..\libs\base_app-1.0-SNAPSHOT.swc" />
+    <element path="..\libs\gui_base-1.0-SNAPSHOT.swc" />
+    <element path="..\libs\gui_lobby-1.0-SNAPSHOT.swc" />
+    <element path="..\libs\gui_battle-1.0-SNAPSHOT.swc" />
+    <element path="..\libs\lobby.swc" />
+    <element path="..\libs\battle.swc" />
+  </libraryPaths>
+  <externalLibraryPaths />
+  <compileTargets>
+    <compile path="src\weather\WeatherMediator.as" />
+  </compileTargets>
+  <options>
+    <option showHiddenPaths="False" />
+    <option testMovie="Custom" />
+    <option testMovieCommand="" />
+  </options>
+  <storage />
+</project>
