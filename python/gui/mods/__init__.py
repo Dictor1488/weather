@@ -3,10 +3,13 @@
 Entry point for Weather mod.
 
 Important UI rule:
-- Do NOT touch ModsListAPI on the login screen.
-- Do NOT register this mod in ModsSettingsAPI for now.
+- Do NOT touch ModsListAPI / ModsSettingsAPI on the login screen.
 - Register UI only after the lobby app is really available, otherwise other
   mods' popovers/settings may fail to initialize.
+
+Lifecycle hooks are implemented via g_playerEvents subscriptions instead of
+monkey-patching Avatar/AvatarInputHandler, so this mod does not interfere
+with other mods that use those classes.
 """
 
 try:
@@ -26,8 +29,8 @@ WEATHER_PANEL_SWF = 'WeatherPanel.swf'
 _VIEW_REGISTERED = False
 _INIT_DONE = False
 _MODSLIST_REGISTERED = False
-_KEY_HOOK_INSTALLED = False
-_BATTLE_HOOK_INSTALLED = False
+_MODSSETTINGS_REGISTERED = False
+_EVENTS_SUBSCRIBED = False
 
 _HARDCODED_TRIGGER_KEY = getattr(Keys, 'KEY_F12', 0) if IN_GAME else 0
 
@@ -271,15 +274,68 @@ def _register_mods_list_entry_now():
     _log().warning('modsListApi entry registration failed; available add* methods=%s', methods)
 
 
+def _register_mods_settings_status_now():
+    global _MODSSETTINGS_REGISTERED
+    if _MODSSETTINGS_REGISTERED:
+        return
+    try:
+        from gui.modsSettingsApi import g_modsSettingsApi
+        from gui.modsSettingsApi import templates as t
+    except Exception as e:
+        _log().info('modsSettingsApi not available for status card: %s', e)
+        return
+
+    def _status_callback(linkage, newSettings):
+        try:
+            if g_controller is not None and 'enabled' in newSettings and hasattr(g_controller, 'setEnabled'):
+                g_controller.setEnabled(bool(newSettings.get('enabled')))
+        except Exception:
+            _log().exception('modsSettingsApi status callback failed')
+
+    try:
+        enabled = True
+        try:
+            enabled = bool(g_controller.isEnabled()) if g_controller is not None and hasattr(g_controller, 'isEnabled') else True
+        except Exception:
+            enabled = True
+        status_text = u'Статус: увімкнено' if enabled else u'Статус: вимкнено'
+        template = {
+            'modDisplayName': u'Погода на картах',
+            'enabled': enabled,
+            'column1': [
+                t.createLabel(text=status_text),
+                t.createEmpty(),
+                t.createLabel(text=u'Налаштування відкриваються через:'),
+                t.createLabel(text=u'Список модифікацій → Погода на картах'),
+            ],
+            'column2': [
+                t.createLabel(text=u'Ця сторінка лише показує статус мода.'),
+                t.createEmpty(),
+                t.createLabel(text=u'Слайдери та карти перенесені у власне вікно.'),
+            ],
+        }
+        g_modsSettingsApi.setModTemplate(
+            linkage='com.example.weather.status',
+            template=template,
+            callback=_status_callback,
+        )
+        _MODSSETTINGS_REGISTERED = True
+        _log().info('modsSettingsApi minimal status card registered OK')
+    except Exception:
+        _log().exception('modsSettingsApi minimal status registration failed')
+
+
 def _register_ui_when_lobby_ready():
     try:
         BigWorld.callback(8.0, lambda: _run_when_lobby_ready(_register_mods_list_entry_now))
+        BigWorld.callback(9.0, lambda: _run_when_lobby_ready(_register_mods_settings_status_now))
     except Exception:
         _run_when_lobby_ready(_register_mods_list_entry_now)
+        _run_when_lobby_ready(_register_mods_settings_status_now)
 
 
 # ---------------------------------------------------------------------------
-# Battle hooks / hotkey
+# Battle hooks / hotkey  (event-based, no monkey-patching)
 # ---------------------------------------------------------------------------
 
 def _extract_space_name_from_arena_type(arena_type):
@@ -311,35 +367,23 @@ def _get_space_name_from_avatar(avatar):
     return None
 
 
-def _install_battle_space_hook():
-    global _BATTLE_HOOK_INSTALLED
-    if _BATTLE_HOOK_INSTALLED or g_controller is None:
+def _onAvatarReady():
+    """Called by g_playerEvents.onAvatarReady — player entered battle."""
+    if g_controller is None:
         return
     try:
-        import Avatar
-        if not hasattr(Avatar, 'PlayerAvatar'):
-            return
-        cls = Avatar.PlayerAvatar
-        if hasattr(cls, 'onBecomePlayer'):
-            orig = cls.onBecomePlayer
-            if getattr(orig, '_weather_patched', False):
-                _BATTLE_HOOK_INSTALLED = True
-                return
-            def wrapped(self, *args, **kwargs):
-                try:
-                    space_name = _get_space_name_from_avatar(self)
-                    if space_name:
-                        _log().info('onBecomePlayer hook: space=%s -> writing files', space_name)
-                        g_controller.onSpaceEntered(space_name)
-                except Exception:
-                    _log().exception('onBecomePlayer hook failed')
-                return orig(self, *args, **kwargs)
-            wrapped._weather_patched = True
-            cls.onBecomePlayer = wrapped
-            _BATTLE_HOOK_INSTALLED = True
-            _log().info('Installed battle hook: Avatar.PlayerAvatar.onBecomePlayer')
+        avatar = BigWorld.player()
+        space_name = _get_space_name_from_avatar(avatar)
+        if space_name:
+            _log().info('onAvatarReady: space=%s -> writing files', space_name)
+            g_controller.onSpaceEntered(space_name)
     except Exception:
-        _log().exception('Failed to install battle hook')
+        _log().exception('_onAvatarReady failed')
+
+
+def _onAvatarBecomeNonPlayer():
+    """Called by g_playerEvents.onAvatarBecomeNonPlayer — left battle."""
+    pass
 
 
 def _hotkey_matches(key_code):
@@ -376,32 +420,34 @@ def _on_key_event(event_or_key):
         _log().exception('hotkey handling failed')
 
 
-def _install_key_hook():
-    global _KEY_HOOK_INSTALLED
-    if not IN_GAME or _KEY_HOOK_INSTALLED:
+def _subscribe_player_events():
+    """Subscribe to g_playerEvents instead of monkey-patching Avatar classes."""
+    global _EVENTS_SUBSCRIBED
+    if _EVENTS_SUBSCRIBED:
         return
     try:
-        import AvatarInputHandler as _AIH
-        cls = _AIH.AvatarInputHandler
-        if hasattr(cls, 'handleKeyEvent'):
-            orig = cls.handleKeyEvent
-            if getattr(orig, '_weather_patched', False):
-                _KEY_HOOK_INSTALLED = True
-                return
-            def wrapped(self, *args, **kwargs):
-                try:
-                    if args:
-                        _on_key_event(args[0])
-                except Exception:
-                    _log().exception('AvatarInputHandler hotkey dispatch failed')
-                return orig(self, *args, **kwargs)
-            wrapped._weather_patched = True
-            cls.handleKeyEvent = wrapped
-            _KEY_HOOK_INSTALLED = True
-            _log().info('Key hook: AvatarInputHandler.handleKeyEvent OK')
-            return
+        from PlayerEvents import g_playerEvents
+        g_playerEvents.onAvatarReady += _onAvatarReady
+        g_playerEvents.onAvatarBecomeNonPlayer += _onAvatarBecomeNonPlayer
+        _EVENTS_SUBSCRIBED = True
+        _log().info('Subscribed to g_playerEvents (onAvatarReady, onAvatarBecomeNonPlayer)')
     except Exception:
-        _log().exception('Failed to install AvatarInputHandler key hook')
+        _log().exception('Failed to subscribe to g_playerEvents')
+
+
+def _unsubscribe_player_events():
+    """Unsubscribe from g_playerEvents on fini."""
+    global _EVENTS_SUBSCRIBED
+    if not _EVENTS_SUBSCRIBED:
+        return
+    try:
+        from PlayerEvents import g_playerEvents
+        g_playerEvents.onAvatarReady -= _onAvatarReady
+        g_playerEvents.onAvatarBecomeNonPlayer -= _onAvatarBecomeNonPlayer
+        _EVENTS_SUBSCRIBED = False
+        _log().info('Unsubscribed from g_playerEvents')
+    except Exception:
+        _log().exception('Failed to unsubscribe from g_playerEvents')
 
 
 # ---------------------------------------------------------------------------
@@ -412,16 +458,16 @@ def init(*args, **kwargs):
     global _INIT_DONE
     if _INIT_DONE:
         return
-    _install_battle_space_hook()
-    _install_key_hook()
+    _subscribe_player_events()
     _register_weather_view()
     _register_ui_when_lobby_ready()
     _INIT_DONE = True
-    _log().info('weather init done; ModsSettingsAPI registration is disabled; ModsListAPI is delayed until lobby is ready')
+    _log().info('weather init done; UI registration is delayed until lobby is ready')
 
 
 def fini(*args, **kwargs):
     global _INIT_DONE
+    _unsubscribe_player_events()
     _INIT_DONE = False
 
 
