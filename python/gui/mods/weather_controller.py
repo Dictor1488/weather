@@ -791,8 +791,126 @@ def set_preset(preset_id):
 
 
 
+# Глобальна змінна для збереження екземпляра switcher-а
+_persistent_switcher = None
+
+
+def _create_switcher_on_battle_start(space_id):
+    """
+    Створюємо LSEnvironmentSwitcher при вході в бій і зберігаємо.
+    Протанки теж створюють свій switcher один раз на бій.
+    """
+    global _persistent_switcher
+    try:
+        import LSArenaPhasesComponent as _ls
+        sw_class = getattr(_ls, 'LSEnvironmentSwitcher', None)
+        if sw_class is None:
+            return False
+
+        # Шукаємо як реально створюється LSEnvironmentSwitcher
+        # Дивимось __init__ сигнатуру
+        try:
+            import inspect
+            init_sig = inspect.getargspec(sw_class.__init__)
+            LOG.info('_create_switcher: __init__ args=%s', init_sig)
+        except Exception:
+            pass
+
+        # Спроба через CGF компонентну систему
+        try:
+            import CGF
+            if hasattr(CGF, 'getGame'):
+                game = CGF.getGame(space_id)
+                if game:
+                    LOG.info('_create_switcher: CGF game=%s attrs=%s',
+                             type(game).__name__, [a for a in dir(game) if 'nviron' in a.lower() or 'witch' in a.lower()])
+                    # Шукаємо через компоненти
+                    for attr in dir(game):
+                        if attr.startswith('_') or attr in ('__class__',):
+                            continue
+                        try:
+                            val = getattr(game, attr, None)
+                            if val and isinstance(val, sw_class):
+                                _persistent_switcher = val
+                                LOG.info('_create_switcher: FOUND via CGF.game.%s', attr)
+                                return True
+                        except Exception:
+                            pass
+        except ImportError:
+            LOG.info('_create_switcher: CGF not available')
+        except Exception as e:
+            LOG.info('_create_switcher: CGF ERR: %s', e)
+
+        # Спроба через ComponentSystem WoT 2.x
+        try:
+            import gameplay.GamePlay as _gp
+            gp_attrs = [a for a in dir(_gp) if 'nviron' in a.lower() or 'witch' in a.lower()]
+            LOG.info('_create_switcher: GamePlay environ attrs: %s', gp_attrs)
+        except Exception:
+            pass
+
+        # Спроба: створити власний екземпляр з правильними параметрами
+        try:
+            from helpers.CallbackDelayer import CallbackDelayer
+            # Спробуємо викликати __init__ правильно
+            sw = sw_class(space_id)
+            _persistent_switcher = sw
+            LOG.info('_create_switcher: created with spaceID=%s', space_id)
+            return True
+        except Exception as e:
+            LOG.info('_create_switcher: creation with spaceID failed: %s', e)
+
+        # Якщо нічого не вийшло - створюємо через __new__
+        try:
+            from helpers.CallbackDelayer import CallbackDelayer
+            sw = sw_class.__new__(sw_class)
+            sw._spaceID = space_id
+            sw._callbackDelayer = CallbackDelayer()
+            # Ініціалізуємо необхідні атрибути
+            if hasattr(sw_class, '_switcher'):
+                sw._switcher = None
+            _persistent_switcher = sw
+            LOG.info('_create_switcher: created via __new__ with spaceID=%s', space_id)
+            return True
+        except Exception as e:
+            LOG.info('_create_switcher: __new__ failed: %s', e)
+
+    except Exception as e:
+        LOG.info('_create_switcher: ERR: %s', e)
+    return False
+
+
 def _try_live_switch(preset_id):
-    """Live перемикання недоступне через Python API в WoT."""
+    """Live перемикання через збережений LSEnvironmentSwitcher."""
+    if not IN_GAME:
+        return False
+    if preset_id == 'standard':
+        guid = _read_default_guid(_last_space_name) if _last_space_name else None
+    else:
+        guid = PRESET_GUIDS.get(preset_id)
+    if not guid:
+        return False
+
+    global _persistent_switcher
+    try:
+        player = BigWorld.player()
+        space_id = getattr(player, 'spaceID', None) if player else None
+
+        # Створюємо якщо ще немає
+        if _persistent_switcher is None and space_id is not None:
+            _create_switcher_on_battle_start(space_id)
+
+        if _persistent_switcher is None:
+            LOG.info('_try_live_switch: no switcher available')
+            return False
+
+        # Викликаємо _switchEnvironment на збереженому екземплярі
+        _persistent_switcher._switchEnvironment(guid)
+        LOG.info('_try_live_switch: switched to %s', guid)
+        return True
+
+    except Exception as e:
+        LOG.info('_try_live_switch: ERR: %s', e)
     return False
 
 
