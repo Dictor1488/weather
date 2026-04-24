@@ -238,6 +238,22 @@ def _install_battle_space_hook():
                             else:
                                 _log().info('onEnterWorld: space=%s writing', space_name)
                                 g_controller.onSpaceEntered(space_name)
+
+                        # Створюємо LSEnvironmentSwitcher через 2 секунди після входу
+                        # щоб BigWorld встиг ініціалізувати компоненти простору
+                        try:
+                            space_id = getattr(self, 'spaceID', None)
+                            if space_id and IN_GAME:
+                                from weather_controller import _create_switcher_on_battle_start
+                                def _delayed_create():
+                                    try:
+                                        _create_switcher_on_battle_start(space_id)
+                                    except Exception as e:
+                                        _log().info('delayed switcher create ERR: %s', e)
+                                BigWorld.callback(2.0, _delayed_create)
+                        except Exception as e:
+                            _log().info('switcher scheduling ERR: %s', e)
+
                     except Exception:
                         _log().exception('onEnterWorld hook failed')
                     return orig(self, *args, **kwargs)
@@ -255,6 +271,12 @@ def _install_battle_space_hook():
                         space_name = _get_space_name_from_avatar(self)
                         preset_id  = g_controller.getCurrentPreset()
                         _log().info('onLeaveWorld: space=%s preset=%s -> writing files', space_name, preset_id)
+                        # Скидаємо switcher - він невалідний поза боєм
+                        try:
+                            import weather_controller
+                            weather_controller._persistent_switcher = None
+                        except Exception:
+                            pass
                         # v8: write_environments_xml + environments.json для НАСТУПНОГО бою
                         from weather_controller import (write_environments_xml,
                                                         write_space_settings,
