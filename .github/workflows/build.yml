@@ -91,11 +91,14 @@ jobs:
         Copy-Item $libsPlayerGlobal "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
         $flexConfig = "C:\flex-sdk\frameworks\flex-config.xml"
         if (Test-Path $flexConfig) {
-            $content = Get-Content $flexConfig -Raw
-            $content = $content -replace '\{playerglobalHome\}', 'C:/flex-sdk/frameworks/libs/player'
-            $content = $content -replace '<local-fonts-snapshot>[^<]*</local-fonts-snapshot>', ''
-            $content = $content -replace '<local-fonts-snapshot/>', ''
-            $content | Set-Content $flexConfig -Encoding UTF8
+            # Читаємо рядками щоб надійно видалити localFonts.ser
+            $lines = Get-Content $flexConfig
+            $lines = $lines | Where-Object { $_ -notmatch 'localFonts' -and $_ -notmatch 'local-fonts' }
+            $fixed = $lines -join "`n"
+            $fixed = $fixed -replace '\{playerglobalHome\}', 'C:/flex-sdk/frameworks/libs/player'
+            Set-Content $flexConfig $fixed -Encoding UTF8
+            Write-Host "flex-config.xml patched OK"
+            Select-String "localFonts" $flexConfig | Write-Host
         }
 
     - name: Install dependencies
