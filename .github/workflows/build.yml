@@ -20,8 +20,8 @@ permissions:
 
 env:
   FLEX_VERSION: "4.16.1"
-  FLASH_PLAYER_VERSION: "32.0"
-  SWF_VERSION: "39"
+  FLASH_PLAYER_VERSION: "10.2"
+  SWF_VERSION: "11"
 
 jobs:
   build-and-release:
@@ -85,7 +85,7 @@ jobs:
       run: |
         $libsPlayerGlobal = "as3\libs\playerglobal.swc"
         if (-not (Test-Path $libsPlayerGlobal)) { Write-Error "playerglobal.swc not found"; exit 1 }
-        $vDir = "C:\flex-sdk\frameworks\libs\player\32.0"
+        $vDir = "C:\flex-sdk\frameworks\libs\player\${{ env.FLASH_PLAYER_VERSION }}"
         New-Item -ItemType Directory -Force -Path $vDir | Out-Null
         Copy-Item $libsPlayerGlobal "$vDir\playerglobal.swc" -Force
         Copy-Item $libsPlayerGlobal "C:\flex-sdk\frameworks\libs\player\playerglobal.swc" -Force
