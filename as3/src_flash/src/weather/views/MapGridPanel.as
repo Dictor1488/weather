@@ -3,6 +3,7 @@ package weather.views
     import flash.display.Shape;
     import flash.display.Sprite;
     import flash.events.MouseEvent;
+    import flash.geom.Rectangle;
 
     import weather.components.MapTile;
     import weather.data.MapVO;
@@ -16,10 +17,10 @@ package weather.views
         private static const COLS:int = 4;
 
         private var _holder:Sprite;
-        private var _maskShape:Shape;
         private var _scrollbar:Sprite;
         private var _thumb:Sprite;
         private var _contentHeight:int = 0;
+        private var _scrollY:int = 0;
 
         public function MapGridPanel(maps:Vector.<MapVO>)
         {
@@ -31,14 +32,9 @@ package weather.views
         {
             _holder = new Sprite();
             _holder.y = 0;
+            // scrollRect замість mask — маска блокує mouse events у Scaleform WoT
+            _holder.scrollRect = new flash.geom.Rectangle(0, 0, VIEW_W, VIEW_H);
             addChild(_holder);
-
-            _maskShape = new Shape();
-            _maskShape.graphics.beginFill(0xFFFFFF, 1);
-            _maskShape.graphics.drawRect(0, 0, VIEW_W, VIEW_H);
-            _maskShape.graphics.endFill();
-            addChild(_maskShape);
-            _holder.mask = _maskShape;
 
             for (var i:int = 0; i < maps.length; i++)
             {
@@ -81,24 +77,24 @@ package weather.views
         private function onWheel(e:MouseEvent):void
         {
             if (_contentHeight <= VIEW_H) return;
-            _holder.y += e.delta * 34;
+            _scrollY -= e.delta * 34;
             clampScroll();
             updateThumb();
         }
 
         private function clampScroll():void
         {
-            var maxY:int = 0;
-            var minY:int = VIEW_H - _contentHeight;
-            if (_holder.y > maxY) _holder.y = maxY;
-            if (_holder.y < minY) _holder.y = minY;
+            var maxY:int = _contentHeight - VIEW_H;
+            if (_scrollY < 0) _scrollY = 0;
+            if (_scrollY > maxY) _scrollY = maxY;
+            _holder.scrollRect = new Rectangle(0, _scrollY, VIEW_W, VIEW_H);
         }
 
         private function updateThumb():void
         {
             if (!_thumb || _contentHeight <= VIEW_H) return;
             var maxScroll:int = _contentHeight - VIEW_H;
-            var ratio:Number = (0 - _holder.y) / maxScroll;
+            var ratio:Number = _scrollY / maxScroll;
             var trackH:int = VIEW_H - 78;
             _thumb.y = 2 + ratio * trackH;
         }
