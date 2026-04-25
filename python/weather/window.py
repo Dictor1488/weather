@@ -45,9 +45,9 @@ PRESET_PREVIEW = {
 }
 
 # Картинки карт лежать у res/gui/maps/icons/weather/maps/<map_id>.png
-# Витягуються заздалегідь скриптом extract_map_stats.py (не в рантаймі).
+# Витягуються заздалегідь скриптом extract_map_previews.py (не в рантаймі).
 # img:// — внутрішній протокол Flash GUI, відносний до res/gui/
-_MAP_THUMB_URL_TEMPLATE = 'img://maps/icons/weather/maps/{map_id}.png'
+_MAP_THUMB_URL_TEMPLATE = 'img://gui/maps/icons/weather/maps/{map_id}.png'
 
 
 def _map_icon(map_id):
