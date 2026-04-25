@@ -216,23 +216,41 @@ package weather.components
             px = Math.max(0, Math.min(_sliderW, px));
             _vo.weight = Math.round((px / _sliderW) * MAX_WEIGHT);
             updateSliderPos();
-            updateWeightText();
 
+            // Перераховуємо % для всіх рядків враховуючи нову суму
+            var total:Number = getTotalWeight();
+            updateWeightText(total);
             var parentSprite:Sprite = parent as Sprite;
             if (parentSprite)
             {
                 for (var i:int = 0; i < parentSprite.numChildren; i++)
                 {
                     var sibling:PresetRow = parentSprite.getChildAt(i) as PresetRow;
-                    if (sibling && sibling != this) sibling.refreshWeightText();
+                    if (sibling && sibling != this) sibling.refreshWeightText(total);
                 }
             }
 
             var ev:WeatherEvent = new WeatherEvent(WeatherEvent.PRESET_WEIGHT_CHANGED);
-            ev.mapId = _mapId;
+            ev.mapId    = _mapId;
             ev.presetId = _vo.id;
-            ev.value = _vo.weight;
+            ev.value    = _vo.weight;
             dispatchEvent(ev);
+        }
+
+        // Сума ваг усіх PresetRow у тому ж контейнері
+        private function getTotalWeight():Number
+        {
+            var total:Number = 0;
+            var parentSprite:Sprite = parent as Sprite;
+            if (parentSprite)
+            {
+                for (var i:int = 0; i < parentSprite.numChildren; i++)
+                {
+                    var row:PresetRow = parentSprite.getChildAt(i) as PresetRow;
+                    if (row) total += row.data.weight;
+                }
+            }
+            return total > 0 ? total : 1;
         }
 
         private function updateSliderPos():void
@@ -245,14 +263,17 @@ package weather.components
             _sliderFill.graphics.endFill();
         }
 
-        private function updateWeightText():void
+        // Показує: вага: 15 (16%) — де % це частка від загальної суми
+        private function updateWeightText(total:Number = -1):void
         {
-            _weightText.text = "вага: " + String(int(_vo.weight)) + " (" + MAX_WEIGHT.toFixed(1) + ")";
+            if (total < 0) total = getTotalWeight();
+            var pct:int = int(Math.round(_vo.weight / total * 100));
+            _weightText.text = "вага: " + String(int(_vo.weight)) + " (" + pct + "%)";
         }
 
-        public function refreshWeightText():void
+        public function refreshWeightText(total:Number = -1):void
         {
-            updateWeightText();
+            updateWeightText(total);
         }
 
         public function get data():PresetVO { return _vo; }
